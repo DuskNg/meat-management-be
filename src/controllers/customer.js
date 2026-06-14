@@ -11,14 +11,40 @@ const getCustomers = async (req, res, next) => {
         userId,
         isActive: true, // Chỉ lấy những khách hàng đang hoạt động (chưa bị xóa mềm)
       },
+      include: {
+        transactions: {
+          select: {
+            totalAmount: true,
+          },
+        },
+        payments: {
+          select: {
+            amount: true,
+          },
+        },
+      },
       orderBy: {
         name: 'asc', // Sắp xếp theo thứ tự bảng chữ cái tên khách hàng
       },
     });
 
+    // Tính toán công nợ thực tế cho từng khách hàng
+    const dataWithDebt = customers.map((c) => {
+      const totalPurchase = c.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0);
+      const totalPaid = c.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
+      const debt = totalPurchase - totalPaid;
+
+      // Loại bỏ danh sách giao dịch con để giảm tải dung lượng mạng
+      const { transactions, payments, ...rest } = c;
+      return {
+        ...rest,
+        debt,
+      };
+    });
+
     res.status(200).json({
       success: true,
-      data: customers,
+      data: dataWithDebt,
     });
   } catch (error) {
     next(error);
@@ -37,15 +63,36 @@ const getCustomerById = async (req, res, next) => {
         userId,
         isActive: true,
       },
+      include: {
+        transactions: {
+          select: {
+            totalAmount: true,
+          },
+        },
+        payments: {
+          select: {
+            amount: true,
+          },
+        },
+      },
     });
 
     if (!customer) {
       throw new NotFoundError('Không tìm thấy khách hàng hoặc bạn không có quyền truy cập.');
     }
 
+    const totalPurchase = customer.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0);
+    const totalPaid = customer.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
+    const debt = totalPurchase - totalPaid;
+
+    const { transactions, payments, ...rest } = customer;
+
     res.status(200).json({
       success: true,
-      data: customer,
+      data: {
+        ...rest,
+        debt,
+      },
     });
   } catch (error) {
     next(error);
