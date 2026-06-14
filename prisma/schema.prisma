@@ -4,10 +4,142 @@
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
 generator client {
-  provider = "prisma-client"
+  provider = "prisma-client-js"
   output   = "../generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
+  // url      = env("DATABASE_URL") // --- VẤN ĐỀ 1: Thêm dòng connection string theo yêu cầu (đã comment out để tương thích với Prisma v7) ---
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String   // Tên hiển thị của chủ buôn
+  phone     String   @unique // Số điện thoại dùng làm tài khoản đăng nhập (duy nhất)
+  createdAt DateTime @default(now()) // Thời gian tạo tài khoản
+  updatedAt DateTime @updatedAt // Thời gian tự động cập nhật mỗi khi thay đổi thông tin
+
+  // Các quan hệ liên kết
+  customers    Customer[]    // Một chủ buôn quản lý nhiều khách hàng
+  products     Product[]     // Một chủ buôn quản lý danh mục sản phẩm/thịt riêng
+  transactions Transaction[] // Các giao dịch được ghi nhận bởi chủ buôn này
+
+  @@map("users") // Đặt tên bảng trong PostgreSQL là "users"
+}
+
+model OTP {
+  id        String    @id @default(uuid())
+  phone     String    // Số điện thoại nhận mã xác thực OTP
+  code      String    // Mã xác thực OTP (thường là 4 hoặc 6 chữ số)
+  expiresAt DateTime  // Thời điểm mã OTP hết hiệu lực (5 phút từ khi tạo)
+  usedAt    DateTime? // Thời điểm mã OTP được kích hoạt thành công
+  createdAt DateTime  @default(now()) // Thời điểm gửi mã OTP
+
+  @@index([phone]) // Đánh chỉ mục số điện thoại để tối ưu tốc độ tìm kiếm mã OTP gần nhất
+  @@map("otps") // Đặt tên bảng trong PostgreSQL là "otps"
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  userId    String   // ID của chủ buôn quản lý khách hàng này
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String   // Tên khách hàng (ví dụ: Chị Lan bán phở, Anh Hùng nhà hàng)
+  phone     String?  // Số điện thoại liên hệ (có thể để trống)
+  address   String?  // Địa chỉ giao hàng/cửa hàng của khách
+  note      String?  // Ghi chú chi tiết (ví dụ: chỉ lấy sườn non buổi sáng, thanh toán cuối tuần)
+  
+  // --- VẤN ĐỀ 2: Thêm isActive để phục vụ Soft Delete ---
+  isActive  Boolean  @default(true) // Trạng thái hoạt động. Chức năng "xóa khách hàng" ở app sẽ set isActive = false (soft delete), KHÔNG gọi DELETE thật trên Customer để bảo toàn lịch sử nợ.
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Các quan hệ liên kết
+  transactions Transaction[] // Một khách hàng có nhiều giao dịch mua hàng theo thời gian
+  
+  // --- VẤN ĐỀ 3: Di chuyển quan hệ Payment từ Transaction sang Customer ---
+  payments     Payment[]     // Danh sách các đợt thanh toán nợ của khách hàng này
+
+  @@index([userId]) // Tối ưu hóa truy vấn tìm kiếm danh sách khách hàng của từng chủ buôn
+  @@map("customers") // Đặt tên bảng trong PostgreSQL là "customers"
+}
+
+model Product {
+  id           String            @id @default(uuid())
+  userId       String            // ID của chủ buôn sở hữu sản phẩm này
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String            // Tên sản phẩm thịt (ví dụ: Ba chỉ, Sườn non, Móng giò)
+  defaultPrice Decimal           @db.Decimal(12, 2) // Giá bán mặc định trên một đơn vị (VND)
+  unit         String            @default("kg") // Đơn vị tính (mặc định là kg, có thể là "bộ", "cái")
+  isActive     Boolean           @default(true) // Trạng thái kích hoạt (cho phép ẩn khi không còn bán nữa)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  // Các quan hệ liên kết
+  transactionItems TransactionItem[] // Danh sách các chi tiết dòng đơn hàng sử dụng sản phẩm này
+
+  @@index([userId]) // Tối ưu hóa truy vấn danh mục sản phẩm theo chủ buôn
+  @@map("products") // Đặt tên bảng trong PostgreSQL là "products"
+}
+
+model Transaction {
+  id          String   @id @default(uuid())
+  userId      String   // ID của chủ buôn tạo giao dịch
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerId  String   // ID của khách hàng mua sản phẩm
+  
+  // --- VẤN ĐỀ 2: Đổi onDelete: Cascade sang Restrict để chặn xóa cứng Customer khi còn đơn nợ ---
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Restrict) 
+  
+  date        DateTime @default(now()) // Ngày thực hiện giao dịch mua bán
+  note        String?  // Ghi chú riêng cho đơn hàng này
+  totalAmount Decimal  @db.Decimal(12, 2) // Tổng giá trị đơn hàng sau khi tính tổng các dòng
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Các quan hệ liên kết
+  items    TransactionItem[] // Danh sách chi tiết các loại thịt được bán trong giao dịch này
+  
+  // --- VẤN ĐỀ 3: Đã bỏ quan hệ trực tiếp "payments" tại đây ---
+
+  @@index([userId])
+  @@index([customerId])
+  @@index([date]) // Tối ưu hóa lọc lịch sử giao dịch theo ngày
+  @@map("transactions") // Đặt tên bảng trong PostgreSQL là "transactions"
+}
+
+model TransactionItem {
+  id            String      @id @default(uuid())
+  transactionId String      // ID của giao dịch chứa dòng sản phẩm này
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  productId     String      // ID của sản phẩm thịt
+  product       Product     @relation(fields: [productId], references: [id], onDelete: Restrict) // Không cho phép xoá cứng Product nếu đã có giao dịch sử dụng để bảo toàn dữ liệu lịch sử nợ
+  quantity      Decimal     @db.Decimal(10, 3) // Khối lượng hoặc số lượng bán (ví dụ: 1.255 kg)
+  price         Decimal     @db.Decimal(12, 2) // Giá bán thực tế lúc đó (có thể thương lượng khác giá mặc định)
+  amount        Decimal     @db.Decimal(12, 2) // Thành tiền cho dòng này (= quantity * price)
+
+  @@index([transactionId])
+  @@index([productId])
+  @@map("transaction_items") // Đặt tên bảng trong PostgreSQL là "transaction_items"
+}
+
+model Payment {
+  id            String      @id @default(uuid())
+  
+  // --- VẤN ĐỀ 3: Chuyển quan hệ thanh toán từ liên kết Transaction sang Customer ---
+  customerId    String      // ID của khách hàng thanh toán tiền
+  customer      Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  amount        Decimal     @db.Decimal(12, 2) // Số tiền trả trong đợt này (VND)
+  paidAt        DateTime    @default(now()) // Thời điểm thanh toán tiền
+  note          String?     // Ghi chú thanh toán (ví dụ: trả tiền mặt tại sạp, chuyển khoản Vietcombank)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  // --- VẤN ĐỀ 3: Ghi chú cách tính công nợ ---
+  // Công nợ của 1 khách = tổng totalAmount của tất cả Transaction của khách trừ tổng amount của tất cả Payment của khách, KHÔNG phân bổ theo từng đơn cụ thể.
+
+  @@index([customerId])
+  @@map("payments") // Đặt tên bảng trong PostgreSQL là "payments"
 }
