@@ -51,8 +51,15 @@ app.use(globalLimiter);
 // Kết nối các Route đường dẫn API
 const authRoutes = require('./routes/auth');
 const customerRoutes = require('./routes/customer');
+const productRoutes = require('./routes/product');
+const transactionRoutes = require('./routes/transaction');
+const paymentRoutes = require('./routes/payment');
+
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
+app.use('/api/v1/products', productRoutes);
+app.use('/api/v1/transactions', transactionRoutes);
+app.use('/api/v1/payments', paymentRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {
