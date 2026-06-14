@@ -13,6 +13,12 @@ const requestOtp = async (req, res, next) => {
       throw new BadRequestError('Số điện thoại là bắt buộc.');
     }
 
+    // Kiểm tra định dạng số điện thoại di động Việt Nam hợp lệ
+    const phoneRegex = /^(0|84|\+84)[35789][0-9]{8}$/;
+    if (!phoneRegex.test(phone.trim())) {
+      throw new BadRequestError('Số điện thoại không đúng định dạng Việt Nam.');
+    }
+
     // Kiểm tra giới hạn: tối đa 3 lần gửi OTP trong vòng 10 phút
     const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
     const otpCount = await prisma.oTP.count({
