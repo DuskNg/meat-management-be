@@ -1,0 +1,16 @@
+[2026-06-13 13:04:23] [ERROR]: POST /api/v1/auth/request-otp - Lỗi hệ thống: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+[2026-06-13 13:04:27] [ERROR]: POST /api/v1/auth/request-otp - Lỗi hệ thống: fetch failed
+[2026-06-14 08:49:20] [ERROR]: POST /api/v1/auth/request-otp - Lỗi hệ thống: 
+Invalid `prisma.oTP.count()` invocation in
+D:\meat-management\meat-management-be\src\controllers\auth.js:18:39
+
+  15 
+  16 // Kiểm tra giới hạn: tối đa 3 lần gửi OTP trong vòng 10 phút
+  17 const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+→ 18 const otpCount = await prisma.oTP.count(
+Error validating `accelerateUrl`: the URL must start with the protocol `prisma://` or `prisma+postgres://`
+[2026-06-14 10:53:34] [ERROR]: GET /api/v1/customers - Lỗi hệ thống: Yêu cầu phải có Access Token để truy cập.
+[2026-06-14 10:55:22] [ERROR]: POST /api/v1/auth/verify-otp - Lỗi hệ thống: Mã OTP không chính xác hoặc đã hết hạn.
+[2026-06-14 10:56:59] [ERROR]: POST /api/v1/auth/verify-otp - Lỗi hệ thống: Mã OTP không chính xác hoặc đã hết hạn.
+[2026-06-14 10:58:23] [ERROR]: POST /api/v1/auth/verify-otp - Lỗi hệ thống: Mã OTP không chính xác hoặc đã hết hạn.
+[2026-06-14 10:59:27] [ERROR]: GET /api/v1/customers - Lỗi hệ thống: Yêu cầu phải có Access Token để truy cập.

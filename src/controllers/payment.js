@@ -92,7 +92,46 @@ const getPayments = async (req, res, next) => {
   }
 };
 
+// 3. Cập nhật lượt thu tiền (số tiền, ngày, ghi chú)
+const updatePayment = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    const { amount, paidAt, note } = req.body;
+
+    // Kiểm tra payment tồn tại và thuộc khach hàng của chủ buôn này
+    const existing = await prisma.payment.findFirst({
+      where: { id, customer: { userId } },
+    });
+    if (!existing) {
+      throw new NotFoundError('Lượt thu tiền không tồn tại hoặc không thuộc quyền quản lý.');
+    }
+
+    // Xác thực số tiền nếu có cung cấp
+    let payAmount = existing.amount;
+    if (amount !== undefined) {
+      payAmount = parseFloat(amount);
+      if (payAmount <= 0) throw new BadRequestError('Số tiền phải lớn hơn 0.');
+    }
+
+    const updated = await prisma.payment.update({
+      where: { id },
+      data: {
+        amount: payAmount,
+        paidAt: paidAt ? new Date(paidAt) : existing.paidAt,
+        note: note !== undefined ? (note || null) : existing.note,
+      },
+      include: { customer: { select: { name: true, phone: true } } },
+    });
+
+    res.status(200).json({ success: true, data: updated });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createPayment,
   getPayments,
+  updatePayment,
 };

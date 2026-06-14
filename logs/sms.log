@@ -1,0 +1,9 @@
+[2026-06-13 14:15:06] [INFO]: [MOCK MODE] Mã OTP dành cho số điện thoại [0909123456] là [1234]
+[2026-06-13 14:15:14] [ERROR]: [ESMS REAL ERROR] Gửi tin thất bại tới SĐT [0909123456]. Chi tiết: This operation was aborted
+[2026-06-13 14:15:14] [WARN]: [AUTO FALLBACK] Đã kích hoạt chế độ dự phòng. Mã OTP của [0909123456] là [5678]
+[2026-06-14 08:56:57] [INFO]: [MOCK MODE] Mã OTP dành cho số điện thoại [0988888888] là [3408]
+[2026-06-14 10:55:14] [INFO]: [MOCK MODE] Mã OTP dành cho số điện thoại [091234567] là [8603]
+[2026-06-14 10:56:25] [INFO]: [MOCK MODE] Mã OTP dành cho số điện thoại [0912345678] là [8708]
+[2026-06-14 10:58:06] [INFO]: [MOCK MODE] Mã OTP dành cho số điện thoại [0912345678] là [5777]
+[2026-06-14 11:13:16] [INFO]: [MOCK MODE] Mã OTP dành cho số điện thoại [0984738919] là [3757]
+[2026-06-14 11:14:03] [INFO]: [MOCK MODE] Mã OTP dành cho số điện thoại [0984738919] là [3483]

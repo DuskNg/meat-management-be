@@ -13,4 +13,7 @@ router.post('/', transactionController.createTransaction);
 // Lấy lịch sử giao dịch mua hàng ghi nợ (có hỗ trợ lọc theo customerId)
 router.get('/', transactionController.getTransactions);
 
+// Cập nhật đơn ghi nợ theo ID (thay thế toàn bộ items, ngày, ghi chú)
+router.put('/:id', transactionController.updateTransaction);
+
 module.exports = router;

@@ -13,4 +13,7 @@ router.post('/', paymentController.createPayment);
 // Lấy lịch sử trả nợ (có hỗ trợ lọc theo customerId)
 router.get('/', paymentController.getPayments);
 
+// Cập nhật lượt trả nợ theo ID
+router.put('/:id', paymentController.updatePayment);
+
 module.exports = router;

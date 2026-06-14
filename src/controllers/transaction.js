@@ -141,7 +141,85 @@ const getTransactions = async (req, res, next) => {
   }
 };
 
+// 3. Cập nhật thông tin đơn ghi nợ (thay toàn bộ items, ngày, ghi chú)
+const updateTransaction = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    const { date, note, items } = req.body;
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      throw new BadRequestError('Danh sách mặt hàng thịt là bắt buộc.');
+    }
+
+    // Kiểm tra giao dịch có tồn tại và thuộc chủ buôn này không
+    const existing = await prisma.transaction.findFirst({
+      where: { id, userId },
+    });
+    if (!existing) {
+      throw new NotFoundError('Giao dịch không tồn tại hoặc không thuộc quyền quản lý của bạn.');
+    }
+
+    // Xác thực và tính lại tổng tiền
+    const productIds = items.map((i) => i.productId);
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds }, userId, isActive: true },
+    });
+    const productMap = new Map(products.map((p) => [p.id, p]));
+
+    let calculatedTotal = 0;
+    const formattedItems = [];
+
+    for (const item of items) {
+      if (!item.productId || item.quantity === undefined || item.price === undefined) {
+        throw new BadRequestError('Mỗi dòng mặt hàng phải có sản phẩm, số lượng và giá bán.');
+      }
+      const product = productMap.get(item.productId);
+      if (!product) {
+        throw new NotFoundError(`Sản phẩm ID ${item.productId} không tồn tại hoặc đã bị ẩn.`);
+      }
+      const quantity = parseFloat(item.quantity);
+      const price = parseFloat(item.price);
+      if (quantity <= 0 || price < 0) {
+        throw new BadRequestError('Số lượng phải > 0 và đơn giá không được âm.');
+      }
+      const amount = quantity * price;
+      calculatedTotal += amount;
+      formattedItems.push({ productId: item.productId, quantity, price, amount });
+    }
+
+    // Cập nhật trong Prisma Transaction: xoá items cũ, tạo items mới
+    const updated = await prisma.$transaction(async (tx) => {
+      // Xóa toàn bộ items cũ của đơn hàng này
+      await tx.transactionItem.deleteMany({ where: { transactionId: id } });
+
+      // Cập nhật transaction và tạo items mới
+      return tx.transaction.update({
+        where: { id },
+        data: {
+          date: date ? new Date(date) : existing.date,
+          note: note !== undefined ? (note || null) : existing.note,
+          totalAmount: calculatedTotal,
+          items: { create: formattedItems },
+        },
+        include: {
+          items: {
+            include: {
+              product: { select: { name: true, unit: true } },
+            },
+          },
+        },
+      });
+    });
+
+    res.status(200).json({ success: true, data: updated });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createTransaction,
   getTransactions,
+  updateTransaction,
 };
