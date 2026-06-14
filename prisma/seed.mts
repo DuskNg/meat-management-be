@@ -1,6 +1,18 @@
 import 'dotenv/config';
+import pg from 'pg';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/index.js';
-const prisma = new PrismaClient();
+
+// Khởi tạo kết nối PostgreSQL thông qua pg Pool
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+
+// Khởi tạo Driver Adapter của Prisma cho PostgreSQL (bắt buộc từ Prisma v7)
+const adapter = new PrismaPg(pool);
+
+// Tạo instance PrismaClient sử dụng adapter
+const prisma = new PrismaClient({ adapter });
 
 async function main() {
   console.log('🔄 Bắt đầu dọn dẹp dữ liệu cũ...');
