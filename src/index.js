@@ -72,11 +72,25 @@ app.get('/health', (req, res) => {
 
 // Trình xử lý lỗi tập trung (Error Handler Middleware)
 app.use((err, req, res, next) => {
-  logger.error(`${req.method} ${req.originalUrl} - Lỗi hệ thống: ${err.message}`);
-  res.status(err.status || 500).json({
+  const { AppError } = require('./utils/errors');
+  
+  // Ghi nhận lỗi chi tiết kèm stack trace vào log server
+  logger.error(`${req.method} ${req.originalUrl} - Lỗi hệ thống: ${err.stack || err.message}`);
+  
+  // Nếu là lỗi đã được định nghĩa từ trước (AppError - như sai OTP, thiếu tham số...)
+  if (err instanceof AppError) {
+    return res.status(err.status).json({
+      success: false,
+      code: err.code,
+      message: err.message,
+    });
+  }
+
+  // Nếu là lỗi hệ thống không lường trước (lỗi database, lỗi kết nối, Prisma, lỗi cú pháp...)
+  res.status(500).json({
     success: false,
-    code: err.code || 'INTERNAL_SERVER_ERROR',
-    message: err.message || 'Đã có lỗi xảy ra trên máy chủ.',
+    code: 'INTERNAL_SERVER_ERROR',
+    message: 'Đã có lỗi xảy ra trên máy chủ. Vui lòng thử lại sau.',
   });
 });
 

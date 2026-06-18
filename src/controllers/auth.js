@@ -1,8 +1,12 @@
 // meat-management-be/src/controllers/auth.js
 const jwt = require('jsonwebtoken');
 const prisma = require('../utils/db');
-const { BadRequestError, UnauthorizedError } = require('../utils/errors');
+const { BadRequestError, UnauthorizedError, NotFoundError, ConflictError } = require('../utils/errors');
 const esmsService = require('../services/esms.service');
+
+// Giữ nguyên các hàm requestOtp, verifyOtp, refreshToken, logout ở phía trên...
+// (sẽ chỉ sửa phần từ dòng 200 trở đi và phần import ở đầu)
+
 
 // 1. Yêu cầu gửi mã OTP
 const requestOtp = async (req, res, next) => {
@@ -216,9 +220,117 @@ const logout = async (req, res, next) => {
   }
 };
 
+// 5. Lấy thông tin hồ sơ chủ buôn
+const getProfile = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản chủ buôn.');
+    }
+
+    res.status(200).json({
+      success: true,
+      user,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 6. Cập nhật thông tin hồ sơ và số điện thoại chủ buôn
+const updateProfile = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { name, phone } = req.body;
+
+    if (!name || name.trim() === '') {
+      throw new BadRequestError('Tên chủ buôn không được để trống.');
+    }
+
+    if (!phone || phone.trim() === '') {
+      throw new BadRequestError('Số điện thoại không được để trống.');
+    }
+
+    // Kiểm tra định dạng số điện thoại di động Việt Nam hợp lệ
+    const phoneRegex = /^(0|84|\+84)[35789][0-9]{8}$/;
+    if (!phoneRegex.test(phone.trim())) {
+      throw new BadRequestError('Số điện thoại không đúng định dạng Việt Nam.');
+    }
+
+    const trimmedPhone = phone.trim();
+
+    // Kiểm tra xem số điện thoại mới đã được đăng ký bởi người khác chưa
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        phone: trimmedPhone,
+        id: { not: userId },
+      },
+    });
+
+    if (existingUser) {
+      throw new ConflictError('Số điện thoại này đã được sử dụng bởi một tài khoản khác.');
+    }
+
+    // Tiến hành cập nhật thông tin
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        name: name.trim(),
+        phone: trimmedPhone,
+      },
+    });
+
+    // Tạo lại tokens mới với thông tin số điện thoại đã được cập nhật
+    const accessSecret = process.env.JWT_ACCESS_SECRET || 'default_access_secret';
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || 'default_refresh_secret';
+
+    const accessToken = jwt.sign(
+      { id: updatedUser.id, phone: updatedUser.phone },
+      accessSecret,
+      { expiresIn: '7d' }
+    );
+
+    const refreshToken = jwt.sign(
+      { id: updatedUser.id },
+      refreshSecret,
+      { expiresIn: '30d' }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Cập nhật thông tin hồ sơ thành công.',
+      user: {
+        id: updatedUser.id,
+        name: updatedUser.name,
+        phone: updatedUser.phone,
+        createdAt: updatedUser.createdAt,
+      },
+      tokens: {
+        accessToken,
+        refreshToken,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   requestOtp,
   verifyOtp,
   refreshToken,
   logout,
+  getProfile,
+  updateProfile,
 };

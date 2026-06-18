@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/auth');
+const { authenticateToken } = require('../middlewares/auth');
 
 // Yêu cầu gửi mã OTP (Không cần đăng nhập)
 router.post('/request-otp', authController.requestOtp);
@@ -14,5 +15,11 @@ router.post('/refresh-token', authController.refreshToken);
 
 // Đăng xuất và vô hiệu hóa token (Yêu cầu gửi refresh token)
 router.post('/logout', authController.logout);
+
+// Lấy thông tin hồ sơ chủ buôn (Yêu cầu đăng nhập)
+router.get('/profile', authenticateToken, authController.getProfile);
+
+// Cập nhật thông tin hồ sơ chủ buôn (Yêu cầu đăng nhập)
+router.put('/profile', authenticateToken, authController.updateProfile);
 
 module.exports = router;

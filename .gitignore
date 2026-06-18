@@ -3,3 +3,7 @@ node_modules
 .env
 
 /generated/prisma
+
+# Bỏ qua log files
+logs/
+*.log
