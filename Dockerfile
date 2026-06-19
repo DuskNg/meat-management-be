@@ -48,5 +48,5 @@ COPY src ./src
 # Expose cổng kết nối
 EXPOSE 3000
 
-# Chạy ứng dụng bằng lệnh node trực tiếp
-CMD ["node", "src/index.js"]
+# Chạy ứng dụng (Tự động đồng bộ các bảng dữ liệu lên database trước khi khởi chạy server)
+CMD npx prisma db push && node src/index.js
