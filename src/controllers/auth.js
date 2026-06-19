@@ -8,7 +8,7 @@ const esmsService = require('../services/esms.service');
 // (sẽ chỉ sửa phần từ dòng 200 trở đi và phần import ở đầu)
 
 
-// 1. Yêu cầu gửi mã OTP
+// 1. Đăng nhập trực tiếp bằng SĐT (Tạm thời bỏ qua xác thực OTP)
 const requestOtp = async (req, res, next) => {
   try {
     const { phone } = req.body;
@@ -19,44 +19,57 @@ const requestOtp = async (req, res, next) => {
 
     // Kiểm tra định dạng số điện thoại di động Việt Nam hợp lệ
     const phoneRegex = /^(0|84|\+84)[35789][0-9]{8}$/;
-    if (!phoneRegex.test(phone.trim())) {
+    const trimmedPhone = phone.trim();
+    if (!phoneRegex.test(trimmedPhone)) {
       throw new BadRequestError('Số điện thoại không đúng định dạng Việt Nam.');
     }
 
-    // Kiểm tra giới hạn: tối đa 3 lần gửi OTP trong vòng 10 phút
-    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
-    const otpCount = await prisma.oTP.count({
-      where: {
-        phone,
-        createdAt: { gte: tenMinutesAgo },
-      },
+    // Tìm xem số điện thoại đã có tài khoản chủ buôn chưa
+    let user = await prisma.user.findUnique({
+      where: { phone: trimmedPhone },
     });
 
-    if (otpCount >= 3) {
-      throw new BadRequestError('Bạn đã gửi OTP quá 3 lần. Vui lòng thử lại sau 10 phút.', 'LIMIT_EXCEEDED');
+    // Nếu chưa có, tiến hành tự động đăng ký mới tài khoản chủ buôn
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          phone: trimmedPhone,
+          name: 'Chủ buôn mới',
+        },
+      });
+      console.log(`[AUTH] Tự động tạo tài khoản chủ buôn mới qua luồng SĐT trực tiếp: ${trimmedPhone}`);
     }
 
-    // Sinh mã OTP ngẫu nhiên gồm 4 chữ số
-    const code = Math.floor(1000 + Math.random() * 9000).toString();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // Hết hạn sau 5 phút
+    // Định nghĩa các Secret Key cho Tokens
+    const accessSecret = process.env.JWT_ACCESS_SECRET || 'default_access_secret';
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || 'default_refresh_secret';
 
-    // Lưu mã OTP vào cơ sở dữ liệu
-    await prisma.oTP.create({
-      data: {
-        phone,
-        code,
-        expiresAt,
-      },
-    });
+    // Tạo Access Token (Hạn dùng 7 ngày)
+    const accessToken = jwt.sign(
+      { id: user.id, phone: user.phone },
+      accessSecret,
+      { expiresIn: '7d' }
+    );
 
-    // Gửi OTP qua dịch vụ tin nhắn (Hỗ trợ Mock và Auto Fallback)
-    const smsResult = await esmsService.sendOtp(phone, code);
- 
+    // Tạo Refresh Token (Hạn dùng 30 ngày)
+    const refreshToken = jwt.sign(
+      { id: user.id },
+      refreshSecret,
+      { expiresIn: '30d' }
+    );
+
+    // Trả về trực tiếp thông tin đăng nhập thành công cho client
     res.status(200).json({
       success: true,
-      message: 'Mã OTP đã được gửi thành công.',
-      debug: {
-        mode: smsResult.mode,
+      message: 'Đăng nhập thành công bằng số điện thoại.',
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+      },
+      tokens: {
+        accessToken,
+        refreshToken,
       },
     });
   } catch (error) {
