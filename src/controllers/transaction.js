@@ -486,9 +486,31 @@ Lưu ý quan trọng:
     });
   } catch (error) {
     console.error('[GEMINI ERROR]', error);
+    let errMsg = error.message;
+    if (error.message.includes('Lỗi Gemini API:')) {
+      const statusMatch = error.message.match(/Lỗi Gemini API: (\d+)/);
+      if (statusMatch) {
+        const statusCode = parseInt(statusMatch[1], 10);
+        if (statusCode === 503) {
+          errMsg = 'Hệ thống nhận diện của Google đang quá tải tạm thời (Lỗi 503). Vui lòng thử lại sau vài giây.';
+        } else if (statusCode === 429) {
+          errMsg = 'Số lượt sử dụng của bạn đã vượt quá giới hạn cho phép trong ngày (Lỗi 429). Vui lòng thử lại sau.';
+        } else {
+          try {
+            const jsonPart = error.message.substring(error.message.indexOf('{'));
+            const errObj = JSON.parse(jsonPart);
+            if (errObj && errObj.error && errObj.error.message) {
+              errMsg = `Lỗi từ Google (${statusCode}): ${errObj.error.message}`;
+            }
+          } catch (e) {
+            // Không parse được thì giữ nguyên errMsg ban đầu
+          }
+        }
+      }
+    }
     res.status(500).json({
       success: false,
-      message: 'Không thể nhận diện hình ảnh tích kê: ' + error.message
+      message: 'Không thể nhận diện hình ảnh tích kê: ' + errMsg
     });
   }
 };
@@ -672,9 +694,31 @@ Ví dụ kết quả:
     });
   } catch (error) {
     console.error('[GEMINI VOICE ERROR]', error);
+    let errMsg = error.message;
+    if (error.message.includes('Lỗi Gemini API:')) {
+      const statusMatch = error.message.match(/Lỗi Gemini API: (\d+)/);
+      if (statusMatch) {
+        const statusCode = parseInt(statusMatch[1], 10);
+        if (statusCode === 503) {
+          errMsg = 'Hệ thống nhận diện của Google đang quá tải tạm thời (Lỗi 503). Vui lòng thử lại sau vài giây.';
+        } else if (statusCode === 429) {
+          errMsg = 'Số lượt sử dụng của bạn đã vượt quá giới hạn cho phép trong ngày (Lỗi 429). Vui lòng thử lại sau.';
+        } else {
+          try {
+            const jsonPart = error.message.substring(error.message.indexOf('{'));
+            const errObj = JSON.parse(jsonPart);
+            if (errObj && errObj.error && errObj.error.message) {
+              errMsg = `Lỗi từ Google (${statusCode}): ${errObj.error.message}`;
+            }
+          } catch (e) {
+            // Không parse được thì giữ nguyên errMsg ban đầu
+          }
+        }
+      }
+    }
     res.status(500).json({
       success: false,
-      message: 'Không thể phân tích ghi âm giọng nói: ' + error.message
+      message: 'Không thể phân tích ghi âm giọng nói: ' + errMsg
     });
   }
 };
