@@ -105,17 +105,48 @@ const createCustomer = async (req, res, next) => {
     const { name, phone, address, note } = req.body;
     const userId = req.user.id;
 
-    if (!name) {
+    if (!name || name.trim() === '') {
       throw new BadRequestError('Tên khách hàng là thông tin bắt buộc.');
+    }
+
+    const trimmedName = name.trim();
+
+    // Kiểm tra trùng tên khách hàng (chỉ tính những khách hàng đang hoạt động)
+    const existingName = await prisma.customer.findFirst({
+      where: {
+        userId,
+        name: trimmedName,
+        isActive: true,
+      },
+    });
+
+    if (existingName) {
+      throw new BadRequestError('Tên khách hàng này đã tồn tại trong danh sách của bạn.');
+    }
+
+    // Kiểm tra trùng số điện thoại khách hàng (nếu có nhập)
+    if (phone && phone.trim() !== '') {
+      const trimmedPhone = phone.trim();
+      const existingPhone = await prisma.customer.findFirst({
+        where: {
+          userId,
+          phone: trimmedPhone,
+          isActive: true,
+        },
+      });
+
+      if (existingPhone) {
+        throw new BadRequestError('Số điện thoại này đã được sử dụng cho một khách hàng khác của bạn.');
+      }
     }
 
     const customer = await prisma.customer.create({
       data: {
         userId,
-        name,
-        phone: phone || null,
-        address: address || null,
-        note: note || null,
+        name: trimmedName,
+        phone: phone ? phone.trim() : null,
+        address: address ? address.trim() : null,
+        note: note ? note.trim() : null,
       },
     });
 
@@ -148,13 +179,52 @@ const updateCustomer = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy khách hàng hoặc bạn không có quyền chỉnh sửa.');
     }
 
+    // Kiểm tra trùng tên khách hàng mới nếu có thay đổi tên
+    if (name !== undefined) {
+      if (!name || name.trim() === '') {
+        throw new BadRequestError('Tên khách hàng là thông tin bắt buộc.');
+      }
+      const trimmedName = name.trim();
+      const existingName = await prisma.customer.findFirst({
+        where: {
+          userId,
+          name: trimmedName,
+          isActive: true,
+          NOT: { id },
+        },
+      });
+
+      if (existingName) {
+        throw new BadRequestError('Tên khách hàng này đã tồn tại trong danh sách của bạn.');
+      }
+    }
+
+    // Kiểm tra trùng số điện thoại mới nếu có thay đổi số điện thoại
+    if (phone !== undefined) {
+      const trimmedPhone = phone ? phone.trim() : '';
+      if (trimmedPhone !== '') {
+        const existingPhone = await prisma.customer.findFirst({
+          where: {
+            userId,
+            phone: trimmedPhone,
+            isActive: true,
+            NOT: { id },
+          },
+        });
+
+        if (existingPhone) {
+          throw new BadRequestError('Số điện thoại này đã được sử dụng cho một khách hàng khác của bạn.');
+        }
+      }
+    }
+
     const updatedCustomer = await prisma.customer.update({
       where: { id },
       data: {
-        name: name !== undefined ? name : undefined,
-        phone: phone !== undefined ? phone : undefined,
-        address: address !== undefined ? address : undefined,
-        note: note !== undefined ? note : undefined,
+        name: name !== undefined ? name.trim() : undefined,
+        phone: phone !== undefined ? (phone ? phone.trim() : null) : undefined,
+        address: address !== undefined ? (address ? address.trim() : null) : undefined,
+        note: note !== undefined ? (note ? note.trim() : null) : undefined,
       },
     });
 
