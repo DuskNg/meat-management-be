@@ -37,7 +37,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 // Cấu hình Rate Limiter chung cho toàn bộ ứng dụng (chặn Spam)
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 phút
-  max: 100, // Tối đa 100 request trên mỗi IP trong 15 phút
+  max: 1000, // Tối đa 1000 request trên mỗi IP trong 15 phút
   message: {
     success: false,
     code: 'TOO_MANY_REQUESTS',
