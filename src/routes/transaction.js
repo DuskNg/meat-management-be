@@ -16,4 +16,10 @@ router.get('/', transactionController.getTransactions);
 // Cập nhật đơn ghi nợ theo ID (thay thế toàn bộ items, ngày, ghi chú)
 router.put('/:id', transactionController.updateTransaction);
 
+// Nhận diện tích kê bán thịt từ hình ảnh qua Gemini API
+router.post('/scan-ticket', transactionController.scanTicket);
+
+// Nhận diện ghi nợ thịt từ ghi âm giọng nói qua Gemini API
+router.post('/voice-to-text', transactionController.voiceToText);
+
 module.exports = router;

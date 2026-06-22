@@ -30,9 +30,9 @@ app.use(helmet());
 // Middleware CORS - cho phép Mobile và Web Client gọi API
 app.use(cors());
 
-// Middleware đọc JSON Body
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Middleware đọc JSON Body (Tăng giới hạn lên 10mb để nhận diện ảnh tích kê base64 lớn)
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Cấu hình Rate Limiter chung cho toàn bộ ứng dụng (chặn Spam)
 const globalLimiter = rateLimit({
@@ -94,7 +94,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Bắt đầu lắng nghe cổng mạng
+// Bắt đầu lắng nghe cổng mạng (Tải lại máy chủ khi lưu cấu hình và prompt mới)
 app.listen(PORT, () => {
   logger.info(`Máy chủ Express đang chạy thành công tại cổng ${PORT}`);
 });
