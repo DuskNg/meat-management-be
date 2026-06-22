@@ -21,28 +21,90 @@ const createTransaction = async (req, res, next) => {
     }
 
     // Lấy toàn bộ sản phẩm thịt liên quan để xác thực
-    const productIds = items.map((i) => i.productId);
+    const productIds = items.filter((i) => i.productId).map((i) => i.productId);
     const products = await prisma.product.findMany({
       where: { id: { in: productIds }, userId, isActive: true },
     });
     const productMap = new Map(products.map((p) => [p.id, p]));
+
+    // Lấy danh mục sản phẩm đầy đủ của chủ buôn này để so khớp khi sửa tên
+    const allUserProducts = await prisma.product.findMany({
+      where: { userId, isActive: true },
+    });
 
     // Kiểm tra tính hợp lệ và tính tổng tiền của từng dòng mặt hàng
     let calculatedTotal = 0;
     const formattedItems = [];
 
     for (const item of items) {
-      if (!item.productId || item.quantity === undefined || item.price === undefined) {
-        throw new BadRequestError('Mỗi dòng mặt hàng phải chứa thông tin sản phẩm, số lượng và giá bán.');
+      const { productId, productName, quantity: reqQuantity, price: reqPrice } = item;
+
+      if (reqQuantity === undefined || reqPrice === undefined) {
+        throw new BadRequestError('Mỗi dòng mặt hàng phải chứa thông tin số lượng và giá bán.');
       }
 
-      const product = productMap.get(item.productId);
+      let finalProductId = productId;
+
+      // Nếu có tên sản phẩm được cung cấp (cho phép sửa hoặc tạo mới trên giao diện)
+      if (productName && productName.trim()) {
+        const trimmedName = productName.trim();
+        const normScanned = trimmedName.toLowerCase().replace(/\s+/g, '');
+
+        // Kiểm tra xem tên mới có trùng khớp với sản phẩm hiện tại của productId hay không
+        const currentProd = productId ? productMap.get(productId) : null;
+        const currentProdNameNorm = currentProd ? currentProd.name.toLowerCase().replace(/\s+/g, '') : '';
+
+        if (currentProdNameNorm !== normScanned) {
+          // Người dùng đã sửa tên sản phẩm! Tìm sản phẩm tương ứng trong danh sách của chủ buôn
+          let matchedProduct = allUserProducts.find(
+            (p) => p.name.toLowerCase().replace(/\s+/g, '') === normScanned
+          );
+
+          if (!matchedProduct) {
+            // Tìm kiểu so khớp bán phần
+            matchedProduct = allUserProducts.find((p) => {
+              const normPName = p.name.toLowerCase().replace(/\s+/g, '');
+              return normScanned.includes(normPName) || normPName.includes(normScanned);
+            });
+          }
+
+          if (matchedProduct) {
+            finalProductId = matchedProduct.id;
+          } else {
+            // Tự động tạo sản phẩm mới do không khớp tên nào trong DB
+            const newProduct = await prisma.product.create({
+              data: {
+                userId,
+                name: trimmedName,
+                defaultPrice: reqPrice, // lấy đơn giá hiện tại làm giá mặc định
+                unit: 'kg',
+              },
+            });
+            console.log(`[TRANSACTION] Tự động tạo sản phẩm mới khi lưu nợ: ${trimmedName}`);
+            // Thêm vào danh mục của chủ buôn để tránh tạo lặp nếu có dòng tiếp theo cùng tên
+            allUserProducts.push(newProduct);
+            finalProductId = newProduct.id;
+          }
+        }
+      }
+
+      if (!finalProductId) {
+        throw new BadRequestError('Không thể xác định hoặc tạo mới sản phẩm cho dòng mặt hàng này.');
+      }
+
+      // Xác thực lại sản phẩm
+      let product = productMap.get(finalProductId);
       if (!product) {
-        throw new NotFoundError(`Sản phẩm thịt với ID ${item.productId} không tồn tại hoặc đã bị ẩn.`);
+        // Tìm trong danh mục đầy đủ (đã bao gồm các sản phẩm mới được tạo trong vòng lặp này)
+        product = allUserProducts.find((p) => p.id === finalProductId);
       }
 
-      const quantity = parseFloat(item.quantity);
-      const price = parseFloat(item.price);
+      if (!product) {
+        throw new NotFoundError(`Sản phẩm thịt không tồn tại hoặc đã bị ẩn.`);
+      }
+
+      const quantity = parseFloat(reqQuantity);
+      const price = parseFloat(reqPrice);
       if (quantity <= 0 || price < 0) {
         throw new BadRequestError('Số lượng thịt phải lớn hơn 0 và đơn giá không được âm.');
       }
@@ -51,7 +113,7 @@ const createTransaction = async (req, res, next) => {
       calculatedTotal += amount;
 
       formattedItems.push({
-        productId: item.productId,
+        productId: finalProductId,
         quantity,
         price,
         amount,
