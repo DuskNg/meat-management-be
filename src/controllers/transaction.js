@@ -563,6 +563,9 @@ Ví dụ kết quả:
       throw new Error('Gemini không phản hồi dữ liệu.');
     }
 
+    // In log ra terminal của Backend để xem kết quả AI nghe và dịch được gì
+    console.log('[GEMINI VOICE RESPONSE]', textResponse);
+
     // Giải mã kết quả JSON trả về từ AI và so khớp sản phẩm
     const parsedData = JSON.parse(textResponse.trim());
 
