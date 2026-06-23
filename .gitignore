@@ -1,6 +1,7 @@
 node_modules
-# Keep environment variables out of version control
+# Bỏ qua tất cả file chứa biến môi trường (API key, database...)
 .env
+.env.*
 
 /generated/prisma
 
