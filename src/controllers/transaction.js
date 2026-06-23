@@ -385,7 +385,7 @@ const scanTicket = async (req, res, next) => {
       });
     }
 
-    // Gọi API của Google Gemini 2.5 Flash để nhận diện hình ảnh
+    // Gọi API của Google Gemini 2.0 Flash để nhận diện hình ảnh
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
@@ -588,7 +588,7 @@ const voiceToText = async (req, res, next) => {
       const cleanSearchName = normalizeName(mockResult.customerName);
       let matchedCustomer = customers.find(c => normalizeName(c.name) === cleanSearchName);
       if (!matchedCustomer) {
-        matchedCustomer = customers.find(c => 
+        matchedCustomer = customers.find(c =>
           normalizeName(c.name).includes(cleanSearchName) || cleanSearchName.includes(normalizeName(c.name))
         );
       }
@@ -606,8 +606,8 @@ const voiceToText = async (req, res, next) => {
       });
     }
 
-    // Gọi API của Google Gemini 2.5 Flash để nhận diện âm thanh
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    // Gọi API của Google Gemini 2.0 Flash để nhận diện âm thanh
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -728,11 +728,11 @@ Ví dụ kết quả:
         where: { userId, isActive: true }
       });
       const cleanSearchName = normalizeName(parsedData.customerName);
-      
+
       matchedCustomer = customers.find(c => normalizeName(c.name) === cleanSearchName);
       if (!matchedCustomer) {
         // So khớp chứa bán phần
-        matchedCustomer = customers.find(c => 
+        matchedCustomer = customers.find(c =>
           normalizeName(c.name).includes(cleanSearchName) || cleanSearchName.includes(normalizeName(c.name))
         );
       }
