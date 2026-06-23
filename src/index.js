@@ -1,5 +1,8 @@
 // meat-management-be/src/index.js
-require('dotenv').config();
+// Tải cấu hình môi trường động dựa trên biến NODE_ENV
+const path = require('path');
+const nodeEnv = process.env.NODE_ENV || 'development';
+require('dotenv').config({ path: path.resolve(process.cwd(), `.env.${nodeEnv}`) });
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');

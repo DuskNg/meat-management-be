@@ -5,8 +5,14 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon src/index.js",
-    "seed": "tsx prisma/seed.mts"
+    "dev": "cross-env NODE_ENV=development nodemon src/index.js",
+    "dev:prod": "cross-env NODE_ENV=production nodemon src/index.js",
+    "dev:local": "cross-env NODE_ENV=development nodemon src/index.js",
+    "seed": "tsx prisma/seed.mts",
+    "prisma:studio:prod": "cross-env NODE_ENV=production npx prisma studio",
+    "prisma:studio:local": "cross-env NODE_ENV=development npx prisma studio",
+    "prisma:migrate:prod": "cross-env NODE_ENV=production npx prisma migrate dev",
+    "prisma:migrate:local": "cross-env NODE_ENV=development npx prisma migrate dev"
   },
   "keywords": [],
   "author": "",
@@ -32,6 +38,7 @@
   "devDependencies": {
     "@types/node": "^25.9.3",
     "@types/pg": "^8.20.0",
+    "cross-env": "^10.1.0",
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
     "tsx": "^4.22.4",

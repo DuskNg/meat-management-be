@@ -2,6 +2,18 @@
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError } = require('../utils/errors');
 
+// Hàm chuẩn hóa tên tiếng Việt phục vụ so khớp giọng nói
+const normalizeName = (str) => {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Loại bỏ dấu tiếng Việt
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'd')
+    .replace(/\s+/g, ''); // Loại bỏ khoảng trắng
+};
+
 // 1. Tạo đơn hàng ghi nợ mới (Transaction)
 const createTransaction = async (req, res, next) => {
   try {
@@ -537,16 +549,22 @@ const voiceToText = async (req, res, next) => {
 
     const apiKey = process.env.GEMINI_API_KEY;
 
+    // Định dạng ngày hiện tại của hệ thống để chuyển vào prompt của AI
+    const currentDate = new Date();
+    const formattedCurrentDate = `${currentDate.getDate().toString().padStart(2, '0')}/${(currentDate.getMonth() + 1).toString().padStart(2, '0')}/${currentDate.getFullYear()}`;
+
     // Nếu không có API Key, chạy chế độ giả lập để thử nghiệm
     if (!apiKey || apiKey === 'your_gemini_api_key_here') {
       console.log('[GEMINI] Chạy chế độ giả lập Voice-to-Text vì chưa cấu hình GEMINI_API_KEY.');
-      // Trích xuất giả lập: "ngày 26/6 1 cân bắp bò giá 29"
+      // Giả lập trích xuất: "anh khải ngày 23/6 1 cân bắp bò giá 28. 1.5 cân vai bò giá 23"
       const mockResult = {
-        date: new Date(2026, 5, 26).toISOString(), // 26/06/2026
+        customerName: 'Anh khải',
+        date: new Date(2026, 5, 23).toISOString(), // 23/06/2026
         items: [
-          { name: 'bắp bò', quantity: 1.0, price: 290000 }
+          { name: 'bắp bò', quantity: 1.0, price: 280000 },
+          { name: 'vai bò', quantity: 1.5, price: 230000 }
         ],
-        note: 'Lời dịch giọng nói giả lập: ngày 26/6 1 cân bắp bò giá 29'
+        note: 'Lời dịch giọng nói giả lập: anh khải ngày 23/6 1 cân bắp bò giá 28. 1.5 cân vai bò giá 23'
       };
 
       const matchedMockItems = await matchOrCreateProducts(userId, mockResult.items);
@@ -563,9 +581,23 @@ const voiceToText = async (req, res, next) => {
         return matchedItem;
       });
 
+      // Tự tìm kiếm khách hàng trong DB xem có khớp tên không
+      const customers = await prisma.customer.findMany({
+        where: { userId, isActive: true }
+      });
+      const cleanSearchName = normalizeName(mockResult.customerName);
+      let matchedCustomer = customers.find(c => normalizeName(c.name) === cleanSearchName);
+      if (!matchedCustomer) {
+        matchedCustomer = customers.find(c => 
+          normalizeName(c.name).includes(cleanSearchName) || cleanSearchName.includes(normalizeName(c.name))
+        );
+      }
+
       return res.status(200).json({
         success: true,
         isMock: true,
+        customerId: matchedCustomer ? matchedCustomer.id : null,
+        customerName: matchedCustomer ? matchedCustomer.name : mockResult.customerName,
         data: {
           date: mockResult.date,
           items: finalMockItems,
@@ -590,34 +622,39 @@ const voiceToText = async (req, res, next) => {
 Nhiệm vụ của bạn là nghe file âm thanh ghi âm giọng nói của chủ cửa hàng (tiếng Việt), chuyển thành văn bản và trích xuất thông tin giao dịch ghi nợ thịt.
 
 HƯỚNG DẪN HIỂU CÁC KÝ HIỆU / THUẬT NGỮ ĐỊA PHƯƠNG:
-1. Về Ngày Ghi Nợ:
-- Nếu người dùng nói ngày cụ thể (ví dụ: "ngày 26/6", "hôm qua", "20 tháng 5"), trích xuất ngày đó và đưa về định dạng ISO Date (năm mặc định là 2026, ví dụ: "26/6" -> "2026-06-26").
-- Nếu không nói ngày, mặc định ngày là hôm nay (22/06/2026).
+1. Về Khách Hàng:
+- Trích xuất tên của khách hàng được nhắc tới trong câu nói (ví dụ: "anh khải", "chị lan", "bà bé", "bếp trung kính").
+- Trả về tên khách hàng này trong trường "customerName". Nếu không có tên khách hàng nào được nhắc tới, trả về null.
 
-2. Về Số Lượng & Đơn Vị (Quy đổi tất cả sang kg):
+2. Về Ngày Ghi Nợ:
+- Nếu người dùng nói ngày cụ thể (ví dụ: "ngày 23/6", "ngày 23 tháng 6", "hôm qua"), trích xuất ngày đó và đưa về định dạng ISO Date (năm mặc định là 2026, ví dụ: "23/6" -> "2026-06-23T00:00:00.000Z").
+- Nếu không nói ngày, mặc định ngày là hôm nay (${formattedCurrentDate}).
+
+3. Về Số Lượng & Đơn Vị (Quy đổi tất cả sang kg):
 - "1 cân", "1 ký", "1 kg" = 1.0
 - "1 lạng", "1 chỉ" (đối với lòng/thịt lẻ) = 0.1
 - "nửa cân", "nửa ký" = 0.5
 - "2 lạng rưỡi" = 0.25
 
-3. Về Đơn Giá (Quy đổi đơn giá về đơn vị VND/kg):
+4. Về Đơn Giá (Quy đổi đơn giá về đơn vị VND/kg):
 - Quy tắc ngầm định của chủ buôn thịt Việt Nam:
-  - Nếu đơn giá được nói dưới 100 và không kèm từ "nghìn/kg" (ví dụ: "giá 29", "giá 32", "giá 25"), tự hiểu đó là giá tính theo "lạng" (100g) bằng nghìn đồng. Bạn phải nhân 10 để quy ra giá trên 1 kg. Ví dụ: "giá 29" = 29k/lạng = 290.000 VND/kg; "giá 32" = 320.000 VND/kg.
+  - Nếu đơn giá được nói dưới 100 và không kèm từ "nghìn/kg" (ví dụ: "giá 28", "giá 32", "giá 25"), tự hiểu đó là giá tính theo "lạng" (100g) bằng nghìn đồng. Bạn phải nhân 10 để quy ra giá trên 1 kg. Ví dụ: "giá 28" = 28k/lạng = 280.000 VND/kg; "giá 32" = 320.000 VND/kg.
   - Nếu đơn giá từ 100 trở lên (ví dụ: "giá 120", "giá 280"), tự hiểu đó là giá tính theo "kg" bằng nghìn đồng. Bạn phải nhân 1.000 để quy ra giá VND/kg. Ví dụ: "giá 120" = 120.000 VND/kg; "giá 250" = 250.000 VND/kg.
   - Nếu người dùng nói rõ ràng đầy đủ đơn giá (ví dụ: "trăm hai", "hai trăm chín chục nghìn", "hai mươi chín nghìn một lạng"), hãy tính đơn giá tương ứng trên mỗi kg.
 
 TRẢ VỀ KẾT QUẢ duy nhất là JSON hợp lệ theo cấu trúc sau, không kèm định dạng markdown hay ký tự bao ngoài.
 Ví dụ kết quả:
 {
-  "date": "2026-06-26T00:00:00.000Z",
+  "customerName": "anh khải",
+  "date": "2026-06-23T00:00:00.000Z",
   "items": [
     {
       "name": "bắp bò",
       "quantity": 1.0,
-      "price": 290000
+      "price": 280000
     }
   ],
-  "note": "Lời dịch giọng nói: ngày 26 tháng 6 một cân bắp bò giá hai mươi chín"
+  "note": "Lời dịch giọng nói: anh khải ngày 23 tháng 6 một cân bắp bò giá hai mươi tám"
 }`
               },
               {
@@ -684,8 +721,32 @@ Ví dụ kết quả:
       return matchedItem;
     });
 
+    // So khớp khách hàng
+    let matchedCustomer = null;
+    if (parsedData.customerName) {
+      const customers = await prisma.customer.findMany({
+        where: { userId, isActive: true }
+      });
+      const cleanSearchName = normalizeName(parsedData.customerName);
+      
+      matchedCustomer = customers.find(c => normalizeName(c.name) === cleanSearchName);
+      if (!matchedCustomer) {
+        // So khớp chứa bán phần
+        matchedCustomer = customers.find(c => 
+          normalizeName(c.name).includes(cleanSearchName) || cleanSearchName.includes(normalizeName(c.name))
+        );
+      }
+    }
+
+    // Kiểm tra nếu không nhận diện được mặt hàng nào (AI không nghe được thông tin cần thiết)
+    if (finalItems.length === 0) {
+      throw new BadRequestError('AI không nghe được thông tin đơn hàng. Vui lòng nói rõ ràng hơn (ví dụ: Anh Khải ngày 23/6 1 cân bắp bò giá 28...)');
+    }
+
     res.status(200).json({
       success: true,
+      customerId: matchedCustomer ? matchedCustomer.id : null,
+      customerName: matchedCustomer ? matchedCustomer.name : (parsedData.customerName || null),
       data: {
         date: transactionDate,
         items: finalItems,
