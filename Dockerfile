@@ -37,7 +37,7 @@ CMD ["npm", "run", "dev"]
 FROM base AS production
 
 # Chỉ cài đặt các packages phục vụ chạy production (bỏ qua devDependencies)
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 # Sinh mã nguồn Prisma Client
 RUN npx prisma generate
