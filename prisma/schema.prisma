@@ -24,6 +24,8 @@ model User {
   customers    Customer[]    // Một chủ buôn quản lý nhiều khách hàng
   products     Product[]     // Một chủ buôn quản lý danh mục sản phẩm/thịt riêng
   transactions Transaction[] // Các giao dịch được ghi nhận bởi chủ buôn này
+  suppliers    Supplier[]    // Một chủ buôn quản lý nhiều nhà cung cấp tiền hàng
+  employees    Employee[]    // Một chủ buôn quản lý nhiều nhân viên sạp hàng
 
   @@map("users") // Đặt tên bảng trong PostgreSQL là "users"
 }
@@ -50,7 +52,9 @@ model Customer {
   note      String?  // Ghi chú chi tiết (ví dụ: chỉ lấy sườn non buổi sáng, thanh toán cuối tuần)
   
   // --- VẤN ĐỀ 2: Thêm isActive để phục vụ Soft Delete ---
-  isActive  Boolean  @default(true) // Trạng thái hoạt động. Chức năng "xóa khách hàng" ở app sẽ set isActive = false (soft delete), KHÔNG gọi DELETE thật trên Customer để bảo toàn lịch sử nợ.
+  isActive    Boolean  @default(true) // Trạng thái hoạt động. Chức năng "xóa khách hàng" ở app sẽ set isActive = false (soft delete), KHÔNG gọi DELETE thật trên Customer để bảo toàn lịch sử nợ.
+  isBadDebt   Boolean  @default(false) // Trạng thái nợ xấu (khoanh vùng lưu trữ)
+  manualDebt  Decimal  @default(0) @db.Decimal(12, 2) // Số tiền nợ ban đầu được nhập thủ công (dành cho khách nợ xấu không có lịch sử giao dịch)
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -60,6 +64,7 @@ model Customer {
   
   // --- VẤN ĐỀ 3: Di chuyển quan hệ Payment từ Transaction sang Customer ---
   payments     Payment[]     // Danh sách các đợt thanh toán nợ của khách hàng này
+  customPrices CustomerProductPrice[] // Danh sách giá bán riêng của khách hàng này cho từng loại thịt
 
   @@index([userId]) // Tối ưu hóa truy vấn tìm kiếm danh sách khách hàng của từng chủ buôn
   @@map("customers") // Đặt tên bảng trong PostgreSQL là "customers"
@@ -78,6 +83,7 @@ model Product {
 
   // Các quan hệ liên kết
   transactionItems TransactionItem[] // Danh sách các chi tiết dòng đơn hàng sử dụng sản phẩm này
+  customPrices     CustomerProductPrice[] // Danh sách giá bán riêng của sản phẩm này cho từng khách hàng
 
   @@index([userId]) // Tối ưu hóa truy vấn danh mục sản phẩm theo chủ buôn
   @@map("products") // Đặt tên bảng trong PostgreSQL là "products"
@@ -142,4 +148,140 @@ model Payment {
 
   @@index([customerId])
   @@map("payments") // Đặt tên bảng trong PostgreSQL là "payments"
+}
+
+model CustomerProductPrice {
+  id          String   @id @default(uuid())
+  customerId  String   // ID của khách hàng
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  productId   String   // ID của sản phẩm thịt
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  price       Decimal  @db.Decimal(12, 2) // Giá bán thực tế được cập nhật gần nhất cho khách hàng này
+  createdAt   DateTime @default(now()) // Thời điểm tạo bản ghi
+  updatedAt   DateTime @updatedAt // Thời điểm cập nhật giá lần gần nhất
+
+  @@unique([customerId, productId]) // Mỗi khách hàng chỉ có duy nhất một giá bán riêng cho mỗi sản phẩm
+  @@index([customerId])
+  @@index([productId])
+  @@map("customer_product_prices") // Tên bảng trong PostgreSQL
+}
+
+model Supplier {
+  id        String   @id @default(uuid())
+  userId    String   // ID của chủ buôn quản lý nhà cung cấp này
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String   // Tên nhà cung cấp thịt (ví dụ: Lò mổ Hùng Vương, Cơ sở sỉ Anh Ba)
+  phone     String?  // Số điện thoại liên hệ (có thể để trống)
+  address   String?  // Địa chỉ của nhà cung cấp
+  note      String?  // Ghi chú thêm
+  isActive  Boolean  @default(true) // Trạng thái hoạt động (cho phép xóa mềm)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions SupplierTransaction[] // Các giao dịch nhập hàng nợ phát sinh
+  payments     SupplierPayment[]     // Các giao dịch thanh toán trả nợ
+
+  @@index([userId])
+  @@map("suppliers")
+}
+
+model SupplierTransaction {
+  id          String   @id @default(uuid())
+  supplierId  String   // ID của nhà cung cấp
+  supplier    Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  date        DateTime @default(now()) // Ngày nhập hàng / ghi nợ
+  totalAmount Decimal  @db.Decimal(12, 2) // Số tiền hàng nhập (nợ phát sinh)
+  note        String?  // Ghi chú chi tiết (ví dụ: nhập 200kg thịt ba chỉ)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([supplierId])
+  @@map("supplier_transactions")
+}
+
+model SupplierPayment {
+  id          String   @id @default(uuid())
+  supplierId  String   // ID của nhà cung cấp được trả nợ
+  supplier    Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  amount      Decimal  @db.Decimal(12, 2) // Số tiền trả nợ (VND)
+  paidAt      DateTime @default(now()) // Ngày thanh toán tiền
+  note        String?  // Ghi chú thanh toán (ví dụ: chuyển khoản Vietcombank)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([supplierId])
+  @@map("supplier_payments")
+}
+
+model Employee {
+  id          String   @id @default(uuid())
+  userId      String   // ID của chủ buôn quản lý nhân viên này
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String   // Tên nhân viên
+  phone       String?  // Số điện thoại
+  address     String?  // Địa chỉ
+  role        String?  // Vị trí công việc (ví dụ: Giao hàng, Lọc thịt, Bán sạp)
+  baseSalary  Decimal  @db.Decimal(12, 2) // Lương cơ bản tháng (VND)
+  isActive    Boolean  @default(true) // Trạng thái hoạt động (cho phép xóa mềm)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  attendances Attendance[] // Danh sách chấm công của nhân viên
+  advances    SalaryAdvance[] // Các đợt tạm ứng lương
+  payments    SalaryPayment[] // Bảng lương tháng chốt thực nhận
+
+  @@index([userId])
+  @@map("employees")
+}
+
+model Attendance {
+  id          String   @id @default(uuid())
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  date        DateTime // Ngày chấm công (chỉ lấy phần ngày, bỏ giờ)
+  status      String   // PRESENT (Đi làm), ABSENT (Nghỉ không phép)
+  shift       String   @default("FULL") // FULL (Cả ngày = 1 công), HALF (Nửa ngày = 0.5 công)
+  note        String?  // Ghi chú chấm công
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([employeeId, date]) // Mỗi nhân viên chỉ chấm công 1 lần trong ngày
+  @@index([employeeId])
+  @@map("employee_attendances")
+}
+
+model SalaryAdvance {
+  id          String   @id @default(uuid())
+  employeeId  String
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  amount      Decimal  @db.Decimal(12, 2) // Số tiền tạm ứng (VND)
+  date        DateTime @default(now()) // Ngày ứng lương
+  note        String?  // Lý do ứng lương
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([employeeId])
+  @@map("employee_salary_advances")
+}
+
+model SalaryPayment {
+  id               String    @id @default(uuid())
+  employeeId       String
+  employee         Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  monthKey         String    // Tháng tính lương (ví dụ: "07/2026")
+  baseSalary       Decimal   @db.Decimal(12, 2) // Mức lương gốc áp dụng
+  workingDays      Decimal   @db.Decimal(5, 2)  // Tổng ngày công đi làm thực tế trong tháng
+  advancesDeducted Decimal   @db.Decimal(12, 2) // Tiền tạm ứng khấu trừ
+  bonus            Decimal   @db.Decimal(12, 2) @default(0) // Tiền thưởng thêm
+  deductions       Decimal   @db.Decimal(12, 2) @default(0) // Khoản phạt/trừ đi
+  finalAmount      Decimal   @db.Decimal(12, 2) // Thực lĩnh
+  status           String    @default("PAID") // PAID (Đã chi trả), PENDING (Chưa thanh toán)
+  paidAt           DateTime? // Ngày chi trả thực tế
+  note             String?   // Ghi chú
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([employeeId, monthKey]) // Mỗi nhân viên chỉ chốt lương 1 lần duy nhất trong tháng
+  @@index([employeeId])
+  @@map("employee_salary_payments")
 }

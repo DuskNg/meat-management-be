@@ -158,6 +158,27 @@ const createTransaction = async (req, res, next) => {
           },
         },
       });
+
+      // Cập nhật hoặc lưu mới đơn giá thịt của loại thịt này cho khách hàng này
+      for (const item of formattedItems) {
+        await tx.customerProductPrice.upsert({
+          where: {
+            customerId_productId: {
+              customerId,
+              productId: item.productId,
+            },
+          },
+          update: {
+            price: item.price,
+          },
+          create: {
+            customerId,
+            productId: item.productId,
+            price: item.price,
+          },
+        });
+      }
+
       return transaction;
     });
 
@@ -268,7 +289,7 @@ const updateTransaction = async (req, res, next) => {
       await tx.transactionItem.deleteMany({ where: { transactionId: id } });
 
       // Cập nhật transaction và tạo items mới
-      return tx.transaction.update({
+      const transaction = await tx.transaction.update({
         where: { id },
         data: {
           date: date ? new Date(date) : existing.date,
@@ -284,6 +305,29 @@ const updateTransaction = async (req, res, next) => {
           },
         },
       });
+
+      // Cập nhật hoặc lưu mới đơn giá bán thực tế của loại thịt cho khách hàng này
+      const customerId = existing.customerId;
+      for (const item of formattedItems) {
+        await tx.customerProductPrice.upsert({
+          where: {
+            customerId_productId: {
+              customerId,
+              productId: item.productId,
+            },
+          },
+          update: {
+            price: item.price,
+          },
+          create: {
+            customerId,
+            productId: item.productId,
+            price: item.price,
+          },
+        });
+      }
+
+      return transaction;
     });
 
     res.status(200).json({ success: true, data: updated });

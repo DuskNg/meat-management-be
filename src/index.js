@@ -1,4 +1,11 @@
 // meat-management-be/src/index.js
+// Polyfill Object.hasOwn để hỗ trợ các phiên bản Node.js cũ (như v14.21.3)
+if (!Object.hasOwn) {
+  Object.hasOwn = function(object, property) {
+    return Object.prototype.hasOwnProperty.call(object, property);
+  };
+}
+
 // Tải cấu hình môi trường động dựa trên biến NODE_ENV
 const path = require('path');
 const nodeEnv = process.env.NODE_ENV || 'development';
@@ -57,12 +64,16 @@ const customerRoutes = require('./routes/customer');
 const productRoutes = require('./routes/product');
 const transactionRoutes = require('./routes/transaction');
 const paymentRoutes = require('./routes/payment');
+const supplierRoutes = require('./routes/supplier');
+const employeeRoutes = require('./routes/employee');
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
 app.use('/api/v1/products', productRoutes);
 app.use('/api/v1/transactions', transactionRoutes);
 app.use('/api/v1/payments', paymentRoutes);
+app.use('/api/v1/suppliers', supplierRoutes);
+app.use('/api/v1/employees', employeeRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {

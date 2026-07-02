@@ -2,10 +2,12 @@
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError } = require('../utils/errors');
 
-// 1. Lấy danh sách sản phẩm hoạt động của chủ buôn đang đăng nhập
+// 1. Lấy danh sách sản phẩm hoạt động của chủ buôn đang đăng nhập (hỗ trợ lấy giá riêng theo khách hàng)
 const getProducts = async (req, res, next) => {
   try {
     const userId = req.user.id;
+    const { customerId } = req.query;
+
     const products = await prisma.product.findMany({
       where: {
         userId,
@@ -15,6 +17,34 @@ const getProducts = async (req, res, next) => {
         name: 'asc', // Sắp xếp theo tên sản phẩm A-Z
       },
     });
+
+    // Nếu có customerId, lấy giá bán riêng của khách hàng này để ghi đè lên giá chung mặc định
+    if (customerId) {
+      const customPrices = await prisma.customerProductPrice.findMany({
+        where: {
+          customerId,
+        },
+      });
+
+      const priceMap = new Map(
+        customPrices.map((cp) => [cp.productId, cp.price])
+      );
+
+      const customProducts = products.map((p) => {
+        if (priceMap.has(p.id)) {
+          return {
+            ...p,
+            defaultPrice: priceMap.get(p.id),
+          };
+        }
+        return p;
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: customProducts,
+      });
+    }
 
     res.status(200).json({
       success: true,
