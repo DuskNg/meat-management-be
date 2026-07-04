@@ -2,6 +2,7 @@ import 'dotenv/config';
 import pg from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/index.js';
+import bcrypt from 'bcryptjs';
 
 // Khởi tạo kết nối PostgreSQL thông qua pg Pool
 const pool = new pg.Pool({
@@ -17,6 +18,7 @@ const prisma = new PrismaClient({ adapter });
 async function main() {
   console.log('🔄 Bắt đầu dọn dẹp dữ liệu cũ...');
   // Xóa bảng theo thứ tự để tránh xung đột khóa ngoại
+  await prisma.activityLog.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.transactionItem.deleteMany();
   await prisma.transaction.deleteMany();
@@ -26,7 +28,7 @@ async function main() {
   await prisma.user.deleteMany();
   console.log('✅ Đã dọn dẹp dữ liệu cũ xong.');
 
-  console.log('👤 Đang tạo chủ buôn...');
+  console.log('👤 Đang tạo chủ buôn và tài khoản Admin...');
   const user = await prisma.user.create({
     data: {
       name: 'Cô Hoa',
@@ -34,6 +36,17 @@ async function main() {
     },
   });
   console.log(`✅ Đã tạo chủ buôn: ${user.name} - SĐT: ${user.phone}`);
+
+  const adminPasswordHash = await bcrypt.hash('admin123', 10);
+  const admin = await prisma.user.create({
+    data: {
+      name: 'Hệ thống Quản trị',
+      phone: '0000000000',
+      password: adminPasswordHash,
+      isAdmin: true,
+    },
+  });
+  console.log(`✅ Đã tạo tài khoản Admin: ${admin.name} - SĐT: ${admin.phone}`);
 
   console.log('📦 Đang tạo danh mục sản phẩm (thịt)...');
   const products = await Promise.all([

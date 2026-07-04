@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../utils/db');
 const { BadRequestError, UnauthorizedError, NotFoundError, ConflictError } = require('../utils/errors');
 const esmsService = require('../services/esms.service');
+const bcrypt = require('bcryptjs');
 
 // Giữ nguyên các hàm requestOtp, verifyOtp, refreshToken, logout ở phía trên...
 // (sẽ chỉ sửa phần từ dòng 200 trở đi và phần import ở đầu)
@@ -66,6 +67,14 @@ const requestOtp = async (req, res, next) => {
         id: user.id,
         name: user.name,
         phone: user.phone,
+        hasPin: !!user.pin,
+        isAdmin: user.isAdmin,
+        permissions: {
+          canManageCustomers: user.canManageCustomers,
+          canManageDebt: user.canManageDebt,
+          canManageBadDebt: user.canManageBadDebt,
+          canManageEmployees: user.canManageEmployees,
+        },
       },
       tokens: {
         accessToken,
@@ -149,6 +158,14 @@ const verifyOtp = async (req, res, next) => {
         id: user.id,
         name: user.name,
         phone: user.phone,
+        hasPin: !!user.pin,
+        isAdmin: user.isAdmin,
+        permissions: {
+          canManageCustomers: user.canManageCustomers,
+          canManageDebt: user.canManageDebt,
+          canManageBadDebt: user.canManageBadDebt,
+          canManageEmployees: user.canManageEmployees,
+        },
       },
       tokens: {
         accessToken,
@@ -243,6 +260,12 @@ const getProfile = async (req, res, next) => {
         id: true,
         name: true,
         phone: true,
+        pin: true,
+        isAdmin: true,
+        canManageCustomers: true,
+        canManageDebt: true,
+        canManageBadDebt: true,
+        canManageEmployees: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -254,7 +277,21 @@ const getProfile = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      user,
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        hasPin: !!user.pin,
+        isAdmin: user.isAdmin,
+        permissions: {
+          canManageCustomers: user.canManageCustomers,
+          canManageDebt: user.canManageDebt,
+          canManageBadDebt: user.canManageBadDebt,
+          canManageEmployees: user.canManageEmployees,
+        },
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
     });
   } catch (error) {
     next(error);
@@ -327,7 +364,165 @@ const updateProfile = async (req, res, next) => {
         id: updatedUser.id,
         name: updatedUser.name,
         phone: updatedUser.phone,
+        hasPin: !!updatedUser.pin,
         createdAt: updatedUser.createdAt,
+      },
+      tokens: {
+        accessToken,
+        refreshToken,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 7. Thiết lập hoặc thay đổi mã PIN mới
+const setupPin = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { pin } = req.body;
+
+    if (!pin) {
+      throw new BadRequestError('Mã PIN là bắt buộc.');
+    }
+
+    // Kiểm tra định dạng mã PIN (phải là 4 chữ số)
+    const pinRegex = /^[0-9]{4}$/;
+    if (!pinRegex.test(pin)) {
+      throw new BadRequestError('Mã PIN phải bao gồm đúng 4 chữ số.');
+    }
+
+    // Băm mã PIN bằng bcryptjs
+    const bcrypt = require('bcryptjs');
+    const hashedPin = await bcrypt.hash(pin, 10);
+
+    // Cập nhật mã PIN cho người dùng
+    await prisma.user.update({
+      where: { id: userId },
+      data: { pin: hashedPin },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Thiết lập mã PIN thành công.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 8. Xác minh mã PIN của người dùng
+const verifyPin = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { pin } = req.body;
+
+    if (!pin) {
+      throw new BadRequestError('Mã PIN là bắt buộc.');
+    }
+
+    // Tìm người dùng trong cơ sở dữ liệu
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
+    }
+
+    if (!user.pin) {
+      throw new BadRequestError('Tài khoản chưa thiết lập mã PIN.');
+    }
+
+    // So sánh mã PIN bằng bcryptjs
+    const bcrypt = require('bcryptjs');
+    const isMatch = await bcrypt.compare(pin, user.pin);
+
+    if (!isMatch) {
+      return res.status(200).json({
+        success: false,
+        message: 'Mã PIN không chính xác.',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Xác minh mã PIN thành công.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 9. Xóa mã PIN của người dùng
+const clearPin = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    // Cập nhật trường pin về null trong cơ sở dữ liệu
+    await prisma.user.update({
+      where: { id: userId },
+      data: { pin: null },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Xóa mã PIN thành công.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 10. Đăng nhập Admin bằng SĐT & Mật khẩu
+const adminLogin = async (req, res, next) => {
+  try {
+    const { phone, password } = req.body;
+
+    if (!phone || !password) {
+      throw new BadRequestError('Tài khoản (SĐT) và mật khẩu là bắt buộc.');
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { phone: phone.trim() },
+    });
+
+    if (!user || !user.isAdmin) {
+      throw new UnauthorizedError('Tài khoản Admin không tồn tại hoặc không có quyền.');
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password || '');
+    if (!isMatch) {
+      throw new UnauthorizedError('Mật khẩu không chính xác.');
+    }
+
+    // Định nghĩa Secrets cho JWT
+    const accessSecret = process.env.JWT_ACCESS_SECRET || 'default_access_secret';
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || 'default_refresh_secret';
+
+    // Tạo Access Token
+    const accessToken = jwt.sign(
+      { id: user.id, phone: user.phone, isAdmin: true },
+      accessSecret,
+      { expiresIn: '7d' }
+    );
+
+    // Tạo Refresh Token
+    const refreshToken = jwt.sign(
+      { id: user.id },
+      refreshSecret,
+      { expiresIn: '30d' }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Đăng nhập Admin thành công.',
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        isAdmin: true,
       },
       tokens: {
         accessToken,
@@ -346,4 +541,10 @@ module.exports = {
   logout,
   getProfile,
   updateProfile,
+  setupPin,
+  verifyPin,
+  clearPin,
+  adminLogin,
 };
+
+// Cập nhật cấu hình để nodemon tự động khởi động lại và nhận Prisma Client mới

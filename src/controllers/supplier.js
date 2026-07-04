@@ -1,6 +1,6 @@
-// meat-management-be/src/controllers/supplier.js
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { logActivity } = require('../utils/activityLogger');
 
 // 1. Lấy toàn bộ danh sách nhà cung cấp kèm theo dư nợ (Tiền nợ)
 // Dư nợ = Tổng số tiền transactions (nhập hàng) - Tổng số tiền payments (đã trả)
@@ -89,6 +89,12 @@ const createSupplier = async (req, res, next) => {
       },
     });
 
+    await logActivity(
+      userId,
+      'CREATE_SUPPLIER',
+      `Thêm nhà cung cấp mới: ${trimmedName}`
+    );
+
     res.status(201).json({
       success: true,
       data: supplier,
@@ -147,6 +153,12 @@ const updateSupplier = async (req, res, next) => {
       },
     });
 
+    await logActivity(
+      userId,
+      'UPDATE_SUPPLIER',
+      `Cập nhật thông tin nhà cung cấp: ${updated.name}`
+    );
+
     res.status(200).json({
       success: true,
       data: updated,
@@ -180,6 +192,12 @@ const deleteSupplier = async (req, res, next) => {
         isActive: false,
       },
     });
+
+    await logActivity(
+      userId,
+      'DELETE_SUPPLIER',
+      `Xóa nhà cung cấp: ${supplierExists.name}`
+    );
 
     res.status(200).json({
       success: true,
@@ -225,6 +243,13 @@ const createSupplierTransaction = async (req, res, next) => {
       },
     });
 
+    const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
+    await logActivity(
+      userId,
+      'CREATE_SUPPLIER_TRANSACTION',
+      `Nhập hàng từ nhà cung cấp ${supplier.name}: +${formatCurrency(totalAmount)} (Nợ phát sinh)`
+    );
+
     res.status(201).json({
       success: true,
       data: transaction,
@@ -268,6 +293,13 @@ const createSupplierPayment = async (req, res, next) => {
         paidAt: paidAt ? new Date(paidAt) : new Date(),
       },
     });
+
+    const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
+    await logActivity(
+      userId,
+      'CREATE_SUPPLIER_PAYMENT',
+      `Thanh toán tiền hàng cho nhà cung cấp ${supplier.name}: -${formatCurrency(amount)}`
+    );
 
     res.status(201).json({
       success: true,

@@ -66,6 +66,7 @@ const transactionRoutes = require('./routes/transaction');
 const paymentRoutes = require('./routes/payment');
 const supplierRoutes = require('./routes/supplier');
 const employeeRoutes = require('./routes/employee');
+const adminRoutes = require('./routes/admin');
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
@@ -74,6 +75,7 @@ app.use('/api/v1/transactions', transactionRoutes);
 app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/suppliers', supplierRoutes);
 app.use('/api/v1/employees', employeeRoutes);
+app.use('/api/v1/admin', adminRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {

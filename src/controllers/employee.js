@@ -1,6 +1,7 @@
 // meat-management-be/src/controllers/employee.js
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { logActivity } = require('../utils/activityLogger');
 
 // Helper lấy tổng số ngày của một tháng bất kỳ
 const getDaysInMonth = (year, month) => {
@@ -64,6 +65,12 @@ const createEmployee = async (req, res, next) => {
       },
     });
 
+    await logActivity(
+      userId,
+      'CREATE_EMPLOYEE',
+      `Thêm nhân viên mới: ${employee.name} (Chức vụ: ${employee.role || 'Không'}, Lương: ${employee.baseSalary.toLocaleString('vi-VN')}đ)`
+    );
+
     res.status(201).json({
       success: true,
       data: employee,
@@ -99,6 +106,12 @@ const updateEmployee = async (req, res, next) => {
       },
     });
 
+    await logActivity(
+      userId,
+      'UPDATE_EMPLOYEE',
+      `Cập nhật nhân viên ${employee.name} -> ${updated.name} (Chức vụ: ${updated.role || 'Không'}, Lương: ${updated.baseSalary.toLocaleString('vi-VN')}đ)`
+    );
+
     res.status(200).json({
       success: true,
       data: updated,
@@ -126,6 +139,12 @@ const deleteEmployee = async (req, res, next) => {
       where: { id },
       data: { isActive: false },
     });
+
+    await logActivity(
+      userId,
+      'DELETE_EMPLOYEE',
+      `Xóa nhân viên: ${employee.name}`
+    );
 
     res.status(200).json({
       success: true,
@@ -253,6 +272,12 @@ const saveAttendance = async (req, res, next) => {
       }
     }
 
+    await logActivity(
+      userId,
+      'SAVE_ATTENDANCE',
+      `Cập nhật chấm công nhân viên ngày ${date}`
+    );
+
     res.status(200).json({
       success: true,
       message: 'Lưu chấm công thành công.',
@@ -319,6 +344,12 @@ const createSalaryAdvance = async (req, res, next) => {
         date: targetDate,
       },
     });
+
+    await logActivity(
+      userId,
+      'CREATE_SALARY_ADVANCE',
+      `Tạm ứng lương cho nhân viên ${employee.name}: Số tiền ${newAmount.toLocaleString('vi-VN')}đ`
+    );
 
     res.status(201).json({
       success: true,
@@ -525,6 +556,12 @@ const paySalary = async (req, res, next) => {
         note: note ? note.trim() : null,
       },
     });
+
+    await logActivity(
+      userId,
+      'PAY_SALARY',
+      `Thanh toán chốt lương tháng ${monthKey} cho nhân viên ${employee.name}: Thực lĩnh ${finalAmount.toLocaleString('vi-VN')}đ`
+    );
 
     res.status(201).json({
       success: true,

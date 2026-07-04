@@ -1,6 +1,7 @@
 // meat-management-be/src/middlewares/auth.js
 const jwt = require('jsonwebtoken');
-const { UnauthorizedError } = require('../utils/errors');
+const { UnauthorizedError, ForbiddenError } = require('../utils/errors');
+const prisma = require('../utils/db');
 
 // Middleware xác thực Access Token từ Header
 const authenticateToken = (req, res, next) => {
@@ -32,6 +33,60 @@ const authenticateToken = (req, res, next) => {
   }
 };
 
+// Middleware yêu cầu quyền Admin
+const requireAdmin = async (req, res, next) => {
+  try {
+    if (!req.user || !req.user.id) {
+      throw new UnauthorizedError('Yêu cầu phải xác thực tài khoản.');
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+    });
+
+    if (!user || !user.isAdmin) {
+      throw new ForbiddenError('Bạn không có quyền quản trị viên.');
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Middleware yêu cầu phân quyền cụ thể
+const requirePermission = (permissionField) => async (req, res, next) => {
+  try {
+    if (!req.user || !req.user.id) {
+      throw new UnauthorizedError('Yêu cầu phải xác thực tài khoản.');
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+    });
+
+    if (!user) {
+      throw new UnauthorizedError('Tài khoản không tồn tại.');
+    }
+
+    // Admin có toàn bộ quyền
+    if (user.isAdmin) {
+      return next();
+    }
+
+    // Kiểm tra quyền cụ thể
+    if (!user[permissionField]) {
+      throw new ForbiddenError('Tài khoản của bạn không được cấp quyền thực hiện chức năng này.');
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   authenticateToken,
+  requireAdmin,
+  requirePermission,
 };

@@ -17,6 +17,16 @@ model User {
   id        String   @id @default(uuid())
   name      String   // Tên hiển thị của chủ buôn
   phone     String   @unique // Số điện thoại dùng làm tài khoản đăng nhập (duy nhất)
+  pin       String?  // Mã PIN bảo mật đã được băm (4 số)
+  
+  // Các trường phục vụ Admin và Phân quyền
+  isAdmin            Boolean  @default(false)
+  password           String?  // Mật khẩu mã hóa cho tài khoản Admin
+  canManageCustomers Boolean  @default(true)
+  canManageDebt      Boolean  @default(true)
+  canManageBadDebt   Boolean  @default(true)
+  canManageEmployees Boolean  @default(true)
+
   createdAt DateTime @default(now()) // Thời gian tạo tài khoản
   updatedAt DateTime @updatedAt // Thời gian tự động cập nhật mỗi khi thay đổi thông tin
 
@@ -26,6 +36,7 @@ model User {
   transactions Transaction[] // Các giao dịch được ghi nhận bởi chủ buôn này
   suppliers    Supplier[]    // Một chủ buôn quản lý nhiều nhà cung cấp tiền hàng
   employees    Employee[]    // Một chủ buôn quản lý nhiều nhân viên sạp hàng
+  activityLogs ActivityLog[] // Nhật ký hoạt động của chủ buôn này
 
   @@map("users") // Đặt tên bảng trong PostgreSQL là "users"
 }
@@ -284,4 +295,17 @@ model SalaryPayment {
   @@unique([employeeId, monthKey]) // Mỗi nhân viên chỉ chốt lương 1 lần duy nhất trong tháng
   @@index([employeeId])
   @@map("employee_salary_payments")
+}
+
+model ActivityLog {
+  id        String   @id @default(uuid())
+  userId    String   // ID của tài khoản thực hiện hành động
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String   // Loại hành động (ví dụ: 'CREATE_TRANSACTION', 'DELETE_PAYMENT')
+  details   String   // Chi tiết mô tả hành động
+  createdAt DateTime @default(now()) // Thời gian thực hiện hành động
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("activity_logs")
 }

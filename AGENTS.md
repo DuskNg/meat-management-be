@@ -19,6 +19,9 @@ This project is indexed by GitNexus as **meat-management-be** (196 symbols, 345 
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
 - NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
 - NEVER commit changes without running `detect_changes()` to check affected scope.
+- **TUYỆT ĐỐI KHÔNG** chạy các lệnh xóa hoặc đồng bộ lại có tính phá hủy (destructive commands) trên môi trường online/production:
+  - **KHÔNG** chạy lại lệnh `npm run seed` (chứa lệnh xóa toàn bộ bảng dữ liệu).
+  - **KHÔNG** chạy `prisma migrate reset` hoặc bất kỳ script/kịch bản nào có lệnh `.deleteMany()` hoặc `.drop()` trên kết nối cơ sở dữ liệu thực tế.
 
 ## Resources
 

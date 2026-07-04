@@ -1,6 +1,7 @@
 // meat-management-be/src/controllers/transaction.js
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { logActivity } = require('../utils/activityLogger');
 
 // Hàm chuẩn hóa tên tiếng Việt phục vụ so khớp giọng nói
 const normalizeName = (str) => {
@@ -182,6 +183,12 @@ const createTransaction = async (req, res, next) => {
       return transaction;
     });
 
+    await logActivity(
+      userId,
+      'CREATE_TRANSACTION',
+      `Ghi nợ đơn hàng mới cho khách ${customer.name}: Tổng tiền ${calculatedTotal.toLocaleString('vi-VN')}đ`
+    );
+
     res.status(201).json({
       success: true,
       data: newTransaction,
@@ -329,6 +336,16 @@ const updateTransaction = async (req, res, next) => {
 
       return transaction;
     });
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: existing.customerId }
+    });
+
+    await logActivity(
+      userId,
+      'UPDATE_TRANSACTION',
+      `Cập nhật đơn nợ của khách hàng ${customer?.name || 'ẩn'}: Tổng tiền mới ${calculatedTotal.toLocaleString('vi-VN')}đ`
+    );
 
     res.status(200).json({ success: true, data: updated });
   } catch (error) {
@@ -828,10 +845,49 @@ Ví dụ kết quả:
   }
 };
 
+// 6. Xóa giao dịch ghi nợ thịt (Transaction) theo ID
+const deleteTransaction = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    // Kiểm tra giao dịch có tồn tại và thuộc chủ buôn này không
+    const existing = await prisma.transaction.findFirst({
+      where: { id, userId },
+    });
+    if (!existing) {
+      throw new NotFoundError('Giao dịch không tồn tại hoặc không thuộc quyền quản lý của bạn.');
+    }
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: existing.customerId }
+    });
+
+    // Thực hiện xóa giao dịch (bảng transaction_items tự động xóa theo cascade)
+    await prisma.transaction.delete({
+      where: { id },
+    });
+
+    await logActivity(
+      userId,
+      'DELETE_TRANSACTION',
+      `Xóa đơn nợ của khách hàng ${customer?.name || 'ẩn'}: Số tiền ${existing.totalAmount.toLocaleString('vi-VN')}đ`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Xóa giao dịch thành công.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createTransaction,
   getTransactions,
   updateTransaction,
   scanTicket,
   voiceToText,
+  deleteTransaction,
 };

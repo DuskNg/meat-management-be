@@ -1,6 +1,7 @@
 // meat-management-be/src/controllers/product.js
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { logActivity } = require('../utils/activityLogger');
 
 // 1. Lấy danh sách sản phẩm hoạt động của chủ buôn đang đăng nhập (hỗ trợ lấy giá riêng theo khách hàng)
 const getProducts = async (req, res, next) => {
@@ -74,6 +75,13 @@ const createProduct = async (req, res, next) => {
       },
     });
 
+    // Ghi log hoạt động
+    await logActivity(
+      userId,
+      'CREATE_PRODUCT',
+      `Tạo sản phẩm mới: ${product.name} (Giá mặc định: ${Number(product.defaultPrice).toLocaleString('vi-VN')}đ/${product.unit})`
+    );
+
     res.status(201).json({
       success: true,
       data: product,
@@ -112,6 +120,13 @@ const updateProduct = async (req, res, next) => {
       },
     });
 
+    // Ghi log hoạt động
+    await logActivity(
+      userId,
+      'UPDATE_PRODUCT',
+      `Cập nhật sản phẩm: ${productExists.name} (${Number(productExists.defaultPrice).toLocaleString('vi-VN')}đ/${productExists.unit}) -> ${updatedProduct.name} (${Number(updatedProduct.defaultPrice).toLocaleString('vi-VN')}đ/${updatedProduct.unit})`
+    );
+
     res.status(200).json({
       success: true,
       data: updatedProduct,
@@ -147,6 +162,13 @@ const deleteProduct = async (req, res, next) => {
         isActive: false,
       },
     });
+
+    // Ghi log hoạt động
+    await logActivity(
+      userId,
+      'DELETE_PRODUCT',
+      `Ẩn sản phẩm: ${productExists.name} (Giá mặc định: ${Number(productExists.defaultPrice).toLocaleString('vi-VN')}đ/${productExists.unit})`
+    );
 
     res.status(200).json({
       success: true,

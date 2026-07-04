@@ -13,6 +13,9 @@ router.post('/verify-otp', authController.verifyOtp);
 // Làm mới Access Token bằng Refresh Token (Không cần đăng nhập)
 router.post('/refresh-token', authController.refreshToken);
 
+// Đăng nhập quản trị viên Admin (Không cần đăng nhập trước)
+router.post('/admin/login', authController.adminLogin);
+
 // Đăng xuất và vô hiệu hóa token (Yêu cầu gửi refresh token)
 router.post('/logout', authController.logout);
 
@@ -21,5 +24,14 @@ router.get('/profile', authenticateToken, authController.getProfile);
 
 // Cập nhật thông tin hồ sơ chủ buôn (Yêu cầu đăng nhập)
 router.put('/profile', authenticateToken, authController.updateProfile);
+
+// Thiết lập hoặc thay đổi mã PIN (Yêu cầu đăng nhập)
+router.post('/pin/setup', authenticateToken, authController.setupPin);
+
+// Xác minh mã PIN (Yêu cầu đăng nhập)
+router.post('/pin/verify', authenticateToken, authController.verifyPin);
+
+// Xóa mã PIN (Yêu cầu đăng nhập)
+router.post('/pin/clear', authenticateToken, authController.clearPin);
 
 module.exports = router;

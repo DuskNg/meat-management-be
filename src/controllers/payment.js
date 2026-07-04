@@ -1,6 +1,7 @@
 // meat-management-be/src/controllers/payment.js
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { logActivity } = require('../utils/activityLogger');
 
 // 1. Tạo nhật ký thu tiền trả nợ mới (Payment)
 const createPayment = async (req, res, next) => {
@@ -42,6 +43,12 @@ const createPayment = async (req, res, next) => {
         },
       },
     });
+
+    await logActivity(
+      userId,
+      'CREATE_PAYMENT',
+      `Thu tiền trả nợ từ khách hàng ${customer.name}: Số tiền ${payAmount.toLocaleString('vi-VN')}đ`
+    );
 
     res.status(201).json({
       success: true,
@@ -124,7 +131,51 @@ const updatePayment = async (req, res, next) => {
       include: { customer: { select: { name: true, phone: true } } },
     });
 
+    await logActivity(
+      userId,
+      'UPDATE_PAYMENT',
+      `Cập nhật lượt thu tiền của khách hàng ${updated.customer.name}: Số tiền mới ${payAmount.toLocaleString('vi-VN')}đ`
+    );
+
     res.status(200).json({ success: true, data: updated });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 4. Xóa lượt thu tiền trả nợ (Payment) theo ID
+const deletePayment = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    // Kiểm tra payment tồn tại và thuộc khách hàng của chủ buôn này
+    const existing = await prisma.payment.findFirst({
+      where: { id, customer: { userId } },
+    });
+    if (!existing) {
+      throw new NotFoundError('Lượt thu tiền không tồn tại hoặc không thuộc quyền quản lý của bạn.');
+    }
+
+    // Thực hiện xóa lượt trả nợ
+    await prisma.payment.delete({
+      where: { id },
+    });
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: existing.customerId }
+    });
+
+    await logActivity(
+      userId,
+      'DELETE_PAYMENT',
+      `Xóa lượt thu tiền của khách hàng ${customer?.name || 'ẩn'}: Số tiền ${existing.amount.toLocaleString('vi-VN')}đ`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Xóa lượt thu tiền thành công.',
+    });
   } catch (error) {
     next(error);
   }
@@ -134,4 +185,5 @@ module.exports = {
   createPayment,
   getPayments,
   updatePayment,
+  deletePayment,
 };

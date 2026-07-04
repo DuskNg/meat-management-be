@@ -1,12 +1,31 @@
 // meat-management-be/src/controllers/customer.js
 const prisma = require('../utils/db');
-const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
+const { logActivity } = require('../utils/activityLogger');
 
 // 1. Lấy toàn bộ danh sách khách hàng của chủ buôn đang đăng nhập
 const getCustomers = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const { isBadDebt } = req.query;
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
+    }
+
+    // Kiểm tra quyền
+    if (!user.isAdmin) {
+      if (isBadDebt === 'true') {
+        if (!user.canManageBadDebt) {
+          throw new ForbiddenError('Tài khoản của bạn không được cấp quyền quản lý nợ xấu.');
+        }
+      } else {
+        if (!user.canManageCustomers) {
+          throw new ForbiddenError('Tài khoản của bạn không được cấp quyền quản lý khách hàng.');
+        }
+      }
+    }
 
     const whereFilter = {
       userId,
@@ -68,6 +87,11 @@ const getCustomerById = async (req, res, next) => {
     const { id } = req.params;
     const userId = req.user.id;
 
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
+    }
+
     const customer = await prisma.customer.findFirst({
       where: {
         id,
@@ -90,6 +114,19 @@ const getCustomerById = async (req, res, next) => {
 
     if (!customer) {
       throw new NotFoundError('Không tìm thấy khách hàng hoặc bạn không có quyền truy cập.');
+    }
+
+    // Kiểm tra quyền
+    if (!user.isAdmin) {
+      if (customer.isBadDebt) {
+        if (!user.canManageBadDebt) {
+          throw new ForbiddenError('Tài khoản của bạn không được cấp quyền quản lý nợ xấu.');
+        }
+      } else {
+        if (!user.canManageCustomers) {
+          throw new ForbiddenError('Tài khoản của bạn không được cấp quyền quản lý khách hàng.');
+        }
+      }
     }
 
     const totalPurchase = customer.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0);
@@ -119,6 +156,26 @@ const createCustomer = async (req, res, next) => {
 
     if (!name || name.trim() === '') {
       throw new BadRequestError('Tên khách hàng là thông tin bắt buộc.');
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
+    }
+
+    const isBadDebtBool = isBadDebt === true || isBadDebt === 'true';
+
+    // Kiểm tra quyền
+    if (!user.isAdmin) {
+      if (isBadDebtBool) {
+        if (!user.canManageBadDebt) {
+          throw new ForbiddenError('Tài khoản của bạn không được cấp quyền quản lý nợ xấu.');
+        }
+      } else {
+        if (!user.canManageCustomers) {
+          throw new ForbiddenError('Tài khoản của bạn không được cấp quyền quản lý khách hàng.');
+        }
+      }
     }
 
     // Validate số tiền nợ ban đầu (nếu có)
@@ -167,11 +224,17 @@ const createCustomer = async (req, res, next) => {
         phone: phone ? phone.trim() : null,
         address: address ? address.trim() : null,
         note: note ? note.trim() : null,
-        // Hỗ trợ tạo khách hàng trực tiếp vào kho nợ xấu với số tiền nợ ban đầu
-        isBadDebt: isBadDebt === true || isBadDebt === 'true',
+        isBadDebt: isBadDebtBool,
         manualDebt: manualDebt ? parseFloat(manualDebt) : 0,
       },
     });
+
+    // Ghi log hoạt động
+    await logActivity(
+      userId,
+      isBadDebtBool ? 'CREATE_BAD_DEBT_CUSTOMER' : 'CREATE_CUSTOMER',
+      `Tạo khách hàng mới: ${customer.name} (SĐT: ${customer.phone || 'Không'}, Nợ xấu: ${customer.isBadDebt})`
+    );
 
     res.status(201).json({
       success: true,
@@ -200,6 +263,24 @@ const updateCustomer = async (req, res, next) => {
 
     if (!customerExists) {
       throw new NotFoundError('Không tìm thấy khách hàng hoặc bạn không có quyền chỉnh sửa.');
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
+    }
+
+    // Kiểm tra quyền
+    if (!user.isAdmin) {
+      if (customerExists.isBadDebt || isBadDebt === true || isBadDebt === 'true') {
+        if (!user.canManageBadDebt) {
+          throw new ForbiddenError('Tài khoản của bạn không được cấp quyền quản lý nợ xấu.');
+        }
+      } else {
+        if (!user.canManageCustomers) {
+          throw new ForbiddenError('Tài khoản của bạn không được cấp quyền quản lý khách hàng.');
+        }
+      }
     }
 
     // Kiểm tra trùng tên khách hàng mới nếu có thay đổi tên
@@ -248,9 +329,16 @@ const updateCustomer = async (req, res, next) => {
         phone: phone !== undefined ? (phone ? phone.trim() : null) : undefined,
         address: address !== undefined ? (address ? address.trim() : null) : undefined,
         note: note !== undefined ? (note ? note.trim() : null) : undefined,
-        isBadDebt: isBadDebt !== undefined ? isBadDebt : undefined,
+        isBadDebt: isBadDebt !== undefined ? (isBadDebt === true || isBadDebt === 'true') : undefined,
       },
     });
+
+    // Ghi log hoạt động
+    await logActivity(
+      userId,
+      'UPDATE_CUSTOMER',
+      `Cập nhật khách hàng: ${customerExists.name} (${customerExists.phone || 'Không'}) -> ${updatedCustomer.name} (${updatedCustomer.phone || 'Không'}), Nợ xấu: ${updatedCustomer.isBadDebt}`
+    );
 
     res.status(200).json({
       success: true,
@@ -280,6 +368,24 @@ const deleteCustomer = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy khách hàng hoặc bạn không có quyền xóa.');
     }
 
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
+    }
+
+    // Kiểm tra quyền
+    if (!user.isAdmin) {
+      if (customerExists.isBadDebt) {
+        if (!user.canManageBadDebt) {
+          throw new ForbiddenError('Tài khoản của bạn không được cấp quyền quản lý nợ xấu.');
+        }
+      } else {
+        if (!user.canManageCustomers) {
+          throw new ForbiddenError('Tài khoản của bạn không được cấp quyền quản lý khách hàng.');
+        }
+      }
+    }
+
     // Thực hiện xóa mềm bằng cách cập nhật isActive = false
     await prisma.customer.update({
       where: { id },
@@ -287,6 +393,13 @@ const deleteCustomer = async (req, res, next) => {
         isActive: false,
       },
     });
+
+    // Ghi log hoạt động
+    await logActivity(
+      userId,
+      'DELETE_CUSTOMER',
+      `Xóa mềm khách hàng: ${customerExists.name} (SĐT: ${customerExists.phone || 'Không'}, Nợ xấu: ${customerExists.isBadDebt})`
+    );
 
     res.status(200).json({
       success: true,

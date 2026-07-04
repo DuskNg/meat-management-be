@@ -2,10 +2,11 @@
 const express = require('express');
 const router = express.Router();
 const supplierController = require('../controllers/supplier');
-const { authenticateToken } = require('../middlewares/auth');
+const { authenticateToken, requirePermission } = require('../middlewares/auth');
 
-// Bảo vệ tất cả các tuyến đường bằng middleware xác thực token
+// Bảo vệ tất cả các tuyến đường bằng middleware xác thực token và quyền
 router.use(authenticateToken);
+router.use(requirePermission('canManageDebt'));
 
 // Lấy danh sách toàn bộ nhà cung cấp kèm công nợ
 router.get('/', supplierController.getSuppliers);

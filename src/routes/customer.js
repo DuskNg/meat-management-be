@@ -2,10 +2,11 @@
 const express = require('express');
 const router = express.Router();
 const customerController = require('../controllers/customer');
-const { authenticateToken } = require('../middlewares/auth');
+const { authenticateToken, requirePermission } = require('../middlewares/auth');
 
-// Bảo vệ tất cả các tuyến đường quản lý khách hàng bằng middleware xác thực token
+// Bảo vệ tất cả các tuyến đường quản lý khách hàng bằng middleware xác thực token và quyền
 router.use(authenticateToken);
+router.use(requirePermission('canManageCustomers'));
 
 // Lấy danh sách toàn bộ khách hàng
 router.get('/', customerController.getCustomers);

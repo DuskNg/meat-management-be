@@ -2,10 +2,11 @@
 const express = require('express');
 const router = express.Router();
 const productController = require('../controllers/product');
-const { authenticateToken } = require('../middlewares/auth');
+const { authenticateToken, requirePermission } = require('../middlewares/auth');
 
-// Bảo vệ tất cả các API quản lý sản phẩm bằng middleware xác thực token
+// Bảo vệ tất cả các API quản lý sản phẩm bằng middleware xác thực token và quyền
 router.use(authenticateToken);
+router.use(requirePermission('canManageCustomers'));
 
 // Lấy danh sách sản phẩm hoạt động
 router.get('/', productController.getProducts);
