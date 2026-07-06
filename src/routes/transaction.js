@@ -26,4 +26,7 @@ router.post('/scan-ticket', transactionController.scanTicket);
 // Nhận diện ghi nợ thịt từ ghi âm giọng nói qua Gemini API
 router.post('/voice-to-text', transactionController.voiceToText);
 
+// Phân tích câu thoại/transcript sang dữ liệu cấu trúc
+router.post('/parse-transcript', transactionController.parseTranscript);
+
 module.exports = router;

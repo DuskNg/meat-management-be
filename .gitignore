@@ -8,3 +8,7 @@ node_modules
 # Bỏ qua log files
 logs/
 *.log
+
+# Bỏ qua thư mục sao lưu dữ liệu
+backups/
+

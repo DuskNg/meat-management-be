@@ -588,145 +588,126 @@ Lưu ý quan trọng:
   }
 };
 
-// 5. Nhận diện ghi nợ bằng giọng nói tiếng Việt qua Google Gemini API
+// 5. Nhận diện ghi nợ bằng giọng nói hoặc văn bản qua Google Gemini API
 const voiceToText = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { audio, mimeType: reqMimeType } = req.body;
+    const { audio, mimeType: reqMimeType, transcript } = req.body;
 
-    if (!audio) {
-      throw new BadRequestError('Dữ liệu ghi âm giọng nói là bắt buộc dưới dạng base64.');
-    }
-
-    // Tách thông tin MIME type và dữ liệu base64 nguyên bản
-    let mimeType = reqMimeType || 'audio/webm';
-    let base64Data = audio;
-
-    if (audio.startsWith('data:')) {
-      const parts = audio.split(';base64,');
-      mimeType = parts[0].split(':')[1];
-      base64Data = parts[1];
+    if (!audio && !transcript) {
+      throw new BadRequestError('Dữ liệu ghi âm hoặc văn bản transcript là bắt buộc.');
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
 
     // Định dạng ngày hiện tại của hệ thống để chuyển vào prompt của AI
     const currentDate = new Date();
-    const formattedCurrentDate = `${currentDate.getDate().toString().padStart(2, '0')}/${(currentDate.getMonth() + 1).toString().padStart(2, '0')}/${currentDate.getFullYear()}`;
+    const formattedCurrentDate = `${currentDate.getFullYear()}-${(currentDate.getMonth() + 1).toString().padStart(2, '0')}-${currentDate.getDate().toString().padStart(2, '0')}`;
 
-    // Nếu không có API Key, chạy chế độ giả lập để thử nghiệm
+    // 1. Nếu không có API Key, chạy chế độ giả lập để thử nghiệm
     if (!apiKey || apiKey === 'your_gemini_api_key_here') {
-      console.log('[GEMINI] Chạy chế độ giả lập Voice-to-Text vì chưa cấu hình GEMINI_API_KEY.');
-      // Giả lập trích xuất: "anh khải ngày 23/6 1 cân bắp bò giá 28. 1.5 cân vai bò giá 23"
-      const mockResult = {
-        customerName: 'Anh khải',
-        date: new Date(2026, 5, 23).toISOString(), // 23/06/2026
-        items: [
-          { name: 'bắp bò', quantity: 1.0, price: 280000 },
-          { name: 'vai bò', quantity: 1.5, price: 230000 }
-        ],
-        note: 'Lời dịch giọng nói giả lập: anh khải ngày 23/6 1 cân bắp bò giá 28. 1.5 cân vai bò giá 23'
-      };
-
-      const matchedMockItems = await matchOrCreateProducts(userId, mockResult.items);
-      const finalMockItems = matchedMockItems.map((matchedItem) => {
-        const aiItem = mockResult.items.find(
-          (ai) => ai.name.toLowerCase().trim() === matchedItem.product.name.toLowerCase().trim()
-        );
-        if (aiItem && aiItem.price && parseFloat(aiItem.price) > 0) {
-          return {
-            ...matchedItem,
-            price: parseFloat(aiItem.price),
-          };
-        }
-        return matchedItem;
-      });
-
-      // Tự tìm kiếm khách hàng trong DB xem có khớp tên không
-      const customers = await prisma.customer.findMany({
-        where: { userId, isActive: true }
-      });
-      const cleanSearchName = normalizeName(mockResult.customerName);
-      let matchedCustomer = customers.find(c => normalizeName(c.name) === cleanSearchName);
-      if (!matchedCustomer) {
-        matchedCustomer = customers.find(c =>
-          normalizeName(c.name).includes(cleanSearchName) || cleanSearchName.includes(normalizeName(c.name))
-        );
-      }
-
+      console.log('[GEMINI] Chạy chế độ giả lập voiceToText vì chưa cấu hình GEMINI_API_KEY.');
+      const mockText = transcript || "Ngày 5 tháng 7, chị Lan, 2 cân ba chỉ, 150 nghìn";
       return res.status(200).json({
         success: true,
         isMock: true,
-        customerId: matchedCustomer ? matchedCustomer.id : null,
-        customerName: matchedCustomer ? matchedCustomer.name : mockResult.customerName,
+        customerId: null,
+        customerName: "chị Lan",
         data: {
-          date: mockResult.date,
-          items: finalMockItems,
-          note: mockResult.note
+          transaction_type: mockText.includes('trả') ? "tra_tien" : "ghi_no_thu_cong",
+          date: formattedCurrentDate,
+          date_inferred: true,
+          customer_name: "chị Lan",
+          weight_kg: mockText.includes('trả') ? null : 2,
+          meat_type: mockText.includes('trả') ? null : "ba chỉ",
+          amount: mockText.includes('trả') ? 100000 : 150000,
+          paid_full: false,
+          status: "complete",
+          missing_fields: [],
+          raw_transcript: mockText
         }
       });
     }
 
-    // Gọi API của Google Gemini 2.0 Flash để nhận diện âm thanh
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    // 2. Định nghĩa System Prompt chung cho cả âm thanh và văn bản
+    const systemPrompt = `Bạn là hệ thống trích xuất dữ liệu cho ứng dụng quản lý sổ nợ bán thịt. Nhiệm vụ của bạn là phân tích câu nói (đã được chuyển từ giọng nói sang văn bản hoặc trực tiếp qua âm thanh) và trả về dữ liệu có cấu trúc dưới dạng JSON.
+
+## PHÂN LOẠI GIAO DỊCH
+Có 3 loại giao dịch, xác định dựa trên các dấu hiệu sau:
+1. ghi_no_nhanh (Ghi nợ nhanh): Câu nói có ngày + tên khách + số tiền, KHÔNG đề cập số kg thịt hoặc loại thịt.
+   Ví dụ: "Ngày 5 tháng 7, chị Lan, nợ 200 nghìn"
+2. ghi_no_thu_cong (Ghi nợ thủ công): Câu nói có đầy đủ ngày + tên khách + số kg thịt + số tiền.
+   Ví dụ: "Ngày 5 tháng 7, chị Lan, 2 cân ba chỉ, 150 nghìn"
+3. tra_tien (Trả tiền): Câu nói có ngày + tên khách + số tiền, và mang ý nghĩa thanh toán/trả nợ (không phải phát sinh nợ mới).
+   - Nếu người nói dùng các từ "trả đủ", "đã trả đủ", "đã trả" (không kèm số tiền cụ thể, hoặc có ý nghĩa thanh toán toàn bộ) → đánh dấu paid_full = true, amount = null (hệ thống sẽ tự tính số dư nợ hiện tại).
+   - Nếu có số tiền cụ thể đi kèm (ví dụ "trả 100 nghìn") → paid_full = false, amount = 100000.
+
+## QUY TẮC NHẬN DIỆN
+- Ngày (date): Nhận diện định dạng ngày tháng nói bằng lời (VD: "ngày 5 tháng 7", "hôm nay", "hôm qua", "mùng 5"). Nếu không đọc ngày, mặc định là ngày hiện tại (${formattedCurrentDate}) và ghi rõ trong trường "date_inferred": true.
+- Tên khách (customer_name): Trích xuất chính xác tên/danh xưng được nói (VD: "chị Lan", "anh Tuấn", "cô Ba"). Giữ nguyên danh xưng nếu có.
+- Số kg thịt (weight_kg): Chuyển đổi các cách nói như "2 cân", "2 ký", "2kg" thành số (2). Nếu không đọc → null.
+- Loại thịt (meat_type): Trích xuất tên loại thịt nếu có (VD: "ba chỉ", "nạc vai", "sườn"). Nếu không đọc → null.
+- Số tiền (amount): Chuyển đổi cách nói tiền tệ Việt Nam sang số nguyên (VNĐ):
+  - "150 nghìn" / "150k" → 150000
+  - "1 triệu 2" → 1200000
+  - "hai trăm nghìn" → 200000
+- Nếu câu nói không đủ thông tin bắt buộc (thiếu tên khách hoặc thiếu số tiền khi không phải trường hợp trả đủ), đặt "status": "incomplete" và liệt kê trường còn thiếu trong "missing_fields".
+
+## ĐỊNH DẠNG OUTPUT
+Chỉ trả về JSON, không thêm giải thích, không thêm markdown code fence. Cấu trúc:
+{
+  "transaction_type": "ghi_no_nhanh" | "ghi_no_thu_cong" | "tra_tien",
+  "date": "YYYY-MM-DD",
+  "date_inferred": boolean,
+  "customer_name": string,
+  "weight_kg": number | null,
+  "meat_type": string | null,
+  "amount": number | null,
+  "paid_full": boolean,
+  "status": "complete" | "incomplete",
+  "missing_fields": string[],
+  "raw_transcript": string
+}`;
+    // 3. Chuẩn bị nội dung gửi cho Gemini tùy thuộc vào đầu vào là âm thanh hay văn bản
+    let modelName = 'gemini-2.0-flash'; // Dùng gemini-2.0-flash cho cả âm thanh và văn bản vì hỗ trợ multimodal tốt
+    const contents = [
+      {
+        parts: []
+      }
+    ];
+
+    if (audio) {
+      let mimeType = reqMimeType || 'audio/webm';
+      let base64Data = audio;
+
+      if (audio.startsWith('data:')) {
+        const parts = audio.split(';base64,');
+        mimeType = parts[0].split(':')[1];
+        base64Data = parts[1];
+      }
+
+      contents[0].parts.push({ text: systemPrompt + '\nHãy nghe file âm thanh dưới đây và trích xuất dữ liệu thành cấu trúc JSON trên. Đọc lời thoại trích xuất được điền vào trường "raw_transcript".' });
+      contents[0].parts.push({
+        inlineData: {
+          mimeType,
+          data: base64Data
+        }
+      });
+    } else {
+      // Đầu vào là văn bản
+      modelName = 'gemini-2.5-flash'; // Dùng gemini-2.5-flash tối ưu hơn cho văn bản chữ
+      contents[0].parts.push({ text: systemPrompt + `\nBây giờ hãy phân tích transcript sau đây và trả về JSON:\n"${transcript}"` });
+    }
+
+    // 4. Gọi API của Google Gemini
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `Bạn là trợ lý ảo chuyên ghi chép đơn hàng thịt bằng giọng nói tại Việt Nam.
-Nhiệm vụ của bạn là nghe file âm thanh ghi âm giọng nói của chủ cửa hàng (tiếng Việt), chuyển thành văn bản và trích xuất thông tin giao dịch ghi nợ thịt.
-
-HƯỚNG DẪN HIỂU CÁC KÝ HIỆU / THUẬT NGỮ ĐỊA PHƯƠNG:
-1. Về Khách Hàng:
-- Trích xuất tên của khách hàng được nhắc tới trong câu nói (ví dụ: "anh khải", "chị lan", "bà bé", "bếp trung kính").
-- Trả về tên khách hàng này trong trường "customerName". Nếu không có tên khách hàng nào được nhắc tới, trả về null.
-
-2. Về Ngày Ghi Nợ:
-- Nếu người dùng nói ngày cụ thể (ví dụ: "ngày 23/6", "ngày 23 tháng 6", "hôm qua"), trích xuất ngày đó và đưa về định dạng ISO Date (năm mặc định là 2026, ví dụ: "23/6" -> "2026-06-23T00:00:00.000Z").
-- Nếu không nói ngày, mặc định ngày là hôm nay (${formattedCurrentDate}).
-
-3. Về Số Lượng & Đơn Vị (Quy đổi tất cả sang kg):
-- "1 cân", "1 ký", "1 kg" = 1.0
-- "1 lạng", "1 chỉ" (đối với lòng/thịt lẻ) = 0.1
-- "nửa cân", "nửa ký" = 0.5
-- "2 lạng rưỡi" = 0.25
-
-4. Về Đơn Giá (Quy đổi đơn giá về đơn vị VND/kg):
-- Quy tắc ngầm định của chủ buôn thịt Việt Nam:
-  - Nếu đơn giá được nói dưới 100 và không kèm từ "nghìn/kg" (ví dụ: "giá 28", "giá 32", "giá 25"), tự hiểu đó là giá tính theo "lạng" (100g) bằng nghìn đồng. Bạn phải nhân 10 để quy ra giá trên 1 kg. Ví dụ: "giá 28" = 28k/lạng = 280.000 VND/kg; "giá 32" = 320.000 VND/kg.
-  - Nếu đơn giá từ 100 trở lên (ví dụ: "giá 120", "giá 280"), tự hiểu đó là giá tính theo "kg" bằng nghìn đồng. Bạn phải nhân 1.000 để quy ra giá VND/kg. Ví dụ: "giá 120" = 120.000 VND/kg; "giá 250" = 250.000 VND/kg.
-  - Nếu người dùng nói rõ ràng đầy đủ đơn giá (ví dụ: "trăm hai", "hai trăm chín chục nghìn", "hai mươi chín nghìn một lạng"), hãy tính đơn giá tương ứng trên mỗi kg.
-
-TRẢ VỀ KẾT QUẢ duy nhất là JSON hợp lệ theo cấu trúc sau, không kèm định dạng markdown hay ký tự bao ngoài.
-Ví dụ kết quả:
-{
-  "customerName": "anh khải",
-  "date": "2026-06-23T00:00:00.000Z",
-  "items": [
-    {
-      "name": "bắp bò",
-      "quantity": 1.0,
-      "price": 280000
-    }
-  ],
-  "note": "Lời dịch giọng nói: anh khải ngày 23 tháng 6 một cân bắp bò giá hai mươi tám"
-}`
-              },
-              {
-                inlineData: {
-                  mimeType,
-                  data: base64Data
-                }
-              }
-            ]
-          }
-        ],
+        contents,
         generationConfig: {
           responseMimeType: "application/json"
         }
@@ -745,77 +726,33 @@ Ví dụ kết quả:
       throw new Error('Gemini không phản hồi dữ liệu.');
     }
 
-    // In log ra terminal của Backend để xem kết quả AI nghe và dịch được gì
-    console.log('[GEMINI VOICE RESPONSE]', textResponse);
-
-    // Giải mã kết quả JSON trả về từ AI và so khớp sản phẩm
     const parsedData = JSON.parse(textResponse.trim());
 
-    let parsedItems = [];
-    let transactionDate = new Date().toISOString();
-    let textNote = 'Đơn ghi nợ tạo từ ghi âm giọng nói';
-
-    if (parsedData) {
-      if (parsedData.date) {
-        transactionDate = parsedData.date;
-      }
-      if (parsedData.note) {
-        textNote = parsedData.note;
-      }
-      if (Array.isArray(parsedData.items)) {
-        parsedItems = parsedData.items;
-      }
-    }
-
-    // So khớp sản phẩm và đè đơn giá đặc thù từ giọng nói
-    const matchedItems = await matchOrCreateProducts(userId, parsedItems);
-    const finalItems = matchedItems.map((matchedItem) => {
-      const aiItem = parsedItems.find(
-        (ai) => ai.name.toLowerCase().trim() === matchedItem.product.name.toLowerCase().trim()
-      );
-      if (aiItem && aiItem.price && parseFloat(aiItem.price) > 0) {
-        return {
-          ...matchedItem,
-          price: parseFloat(aiItem.price),
-        };
-      }
-      return matchedItem;
-    });
-
-    // So khớp khách hàng
+    // So khớp khách hàng trong DB dựa trên customer_name trích xuất từ Gemini
     let matchedCustomer = null;
-    if (parsedData.customerName) {
+    if (parsedData && parsedData.customer_name) {
       const customers = await prisma.customer.findMany({
         where: { userId, isActive: true }
       });
-      const cleanSearchName = normalizeName(parsedData.customerName);
+      const cleanSearchName = normalizeName(parsedData.customer_name);
 
       matchedCustomer = customers.find(c => normalizeName(c.name) === cleanSearchName);
       if (!matchedCustomer) {
-        // So khớp chứa bán phần
+        // Tìm kiếm so khớp chứa bán phần
         matchedCustomer = customers.find(c =>
           normalizeName(c.name).includes(cleanSearchName) || cleanSearchName.includes(normalizeName(c.name))
         );
       }
     }
 
-    // Kiểm tra nếu không nhận diện được mặt hàng nào (AI không nghe được thông tin cần thiết)
-    if (finalItems.length === 0) {
-      throw new BadRequestError('AI không nghe được thông tin đơn hàng. Vui lòng nói rõ ràng hơn (ví dụ: Anh Khải ngày 23/6 1 cân bắp bò giá 28...)');
-    }
-
     res.status(200).json({
       success: true,
       customerId: matchedCustomer ? matchedCustomer.id : null,
-      customerName: matchedCustomer ? matchedCustomer.name : (parsedData.customerName || null),
-      data: {
-        date: transactionDate,
-        items: finalItems,
-        note: textNote
-      }
+      customerName: matchedCustomer ? matchedCustomer.name : (parsedData ? parsedData.customer_name : null),
+      data: parsedData
     });
   } catch (error) {
-    console.error('[GEMINI VOICE ERROR]', error);
+    console.error('[GEMINI PARSE ERROR]', error);
     let errMsg = error.message;
     if (error.message.includes('Lỗi Gemini API:')) {
       const statusMatch = error.message.match(/Lỗi Gemini API: (\d+)/);
@@ -833,14 +770,14 @@ Ví dụ kết quả:
               errMsg = `Lỗi từ Google (${statusCode}): ${errObj.error.message}`;
             }
           } catch (e) {
-            // Không parse được thì giữ nguyên errMsg ban đầu
+            // Lỗi parse thì giữ nguyên
           }
         }
       }
     }
     res.status(500).json({
       success: false,
-      message: 'Không thể phân tích ghi âm giọng nói: ' + errMsg
+      message: 'Không thể phân tích transcript: ' + errMsg
     });
   }
 };
@@ -883,6 +820,11 @@ const deleteTransaction = async (req, res, next) => {
   }
 };
 
+// 7. Phân tích câu nói ghi nợ/trả tiền dạng văn bản qua Google Gemini API
+const parseTranscript = async (req, res, next) => {
+  return voiceToText(req, res, next);
+};
+
 module.exports = {
   createTransaction,
   getTransactions,
@@ -890,4 +832,5 @@ module.exports = {
   scanTicket,
   voiceToText,
   deleteTransaction,
+  parseTranscript,
 };
