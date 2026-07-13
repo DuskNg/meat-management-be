@@ -692,7 +692,7 @@ Chỉ trả về JSON, không thêm giải thích, không thêm markdown code fe
   "raw_transcript": string
 }`;
     // 3. Chuẩn bị nội dung gửi cho Gemini tùy thuộc vào đầu vào là âm thanh hay văn bản
-    let modelName = 'gemini-2.0-flash'; // Dùng gemini-2.0-flash cho cả âm thanh và văn bản vì hỗ trợ multimodal tốt
+    let modelName = 'gemini-2.5-flash'; // Gemini 2.0 Flash đã ngừng cung cấp; 2.5 Flash hỗ trợ cả âm thanh và văn bản
     const contents = [
       {
         parts: []
