@@ -674,6 +674,8 @@ Có 3 loại giao dịch, xác định dựa trên các dấu hiệu sau:
   - "150 nghìn" / "150k" → 150000
   - "1 triệu 2" → 1200000
   - "hai trăm nghìn" → 200000
+- Nếu câu nói có "giá X" sau số kg, hiểu X là giá X nghìn đồng cho mỗi 1 lạng (100g), không phải tổng tiền. Ví dụ "2,6 cân bắp bò giá 30" → amount = 2.6 × 10 × 30 × 1000 = 780000.
+- Khi có đủ weight_kg, meat_type và giá X để tính amount, bắt buộc tự tính amount theo quy tắc trên, đặt status = "complete" và không đưa "amount" vào missing_fields.
 - Nếu câu nói không đủ thông tin bắt buộc (thiếu tên khách hoặc thiếu số tiền khi không phải trường hợp trả đủ), đặt "status": "incomplete" và liệt kê trường còn thiếu trong "missing_fields".
 
 ## ĐỊNH DẠNG OUTPUT
@@ -751,13 +753,45 @@ Chỉ trả về JSON, không thêm giải thích, không thêm markdown code fe
 
     const parsedData = JSON.parse(textResponse.trim());
 
+    // Bổ sung amount khi Gemini nhận ra cân nặng và mẫu "giá X" nhưng để amount null.
+    // Quy ước của ứng dụng: X = X nghìn đồng / 1 lạng (100g).
+    const normalizeVoiceResult = (item) => {
+      if (!item || typeof item !== 'object') return item;
+      const normalized = { ...item };
+      const weight = Number(normalized.weight_kg);
+      const transcriptText = String(normalized.raw_transcript || '');
+      const priceMatch = transcriptText.match(/(?:giá|đơn\s*giá)\s*([\d.,]+)/i);
+
+      if ((normalized.amount === null || normalized.amount === undefined) && weight > 0 && priceMatch) {
+        const pricePerHang = Number(priceMatch[1].replace(',', '.'));
+        if (Number.isFinite(pricePerHang) && pricePerHang > 0) {
+          normalized.amount = Math.round(weight * 10 * pricePerHang * 1000);
+        }
+      }
+
+      if (normalized.amount !== null && normalized.amount !== undefined) {
+        const missingFields = Array.isArray(normalized.missing_fields)
+          ? normalized.missing_fields.filter((field) => field !== 'amount')
+          : [];
+        normalized.missing_fields = missingFields;
+        if (missingFields.length === 0) normalized.status = 'complete';
+      }
+
+      return normalized;
+    };
+
+    const normalizedData = Array.isArray(parsedData)
+      ? parsedData.map(normalizeVoiceResult)
+      : normalizeVoiceResult(parsedData);
+
     // So khớp khách hàng trong DB dựa trên customer_name trích xuất từ Gemini
     let matchedCustomer = null;
-    if (parsedData && parsedData.customer_name) {
+    const firstResult = Array.isArray(normalizedData) ? normalizedData[0] : normalizedData;
+    if (firstResult && firstResult.customer_name) {
       const customers = await prisma.customer.findMany({
         where: { userId, isActive: true }
       });
-      const cleanSearchName = normalizeName(parsedData.customer_name);
+      const cleanSearchName = normalizeName(firstResult.customer_name);
 
       matchedCustomer = customers.find(c => normalizeName(c.name) === cleanSearchName);
       if (!matchedCustomer) {
@@ -771,8 +805,8 @@ Chỉ trả về JSON, không thêm giải thích, không thêm markdown code fe
     res.status(200).json({
       success: true,
       customerId: matchedCustomer ? matchedCustomer.id : null,
-      customerName: matchedCustomer ? matchedCustomer.name : (parsedData ? parsedData.customer_name : null),
-      data: parsedData
+      customerName: matchedCustomer ? matchedCustomer.name : (firstResult ? firstResult.customer_name : null),
+      data: normalizedData
     });
   } catch (error) {
     console.error('[GEMINI PARSE ERROR]', error);
