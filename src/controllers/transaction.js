@@ -447,7 +447,7 @@ const scanTicket = async (req, res, next) => {
     }
 
     // Gọi API của Google Gemini 2.0 Flash để nhận diện hình ảnh
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -493,6 +493,9 @@ Lưu ý quan trọng:
 - Nếu không đọc được rõ, ghi null`
               },
               {
+                text: `IMPORTANT OCR OVERRIDE: Do not assume the image is a monthly matrix. It may be a handwritten or printed meat ticket with one product per row, columns such as product, quantity, unit, price, and total. Read the actual visible rows from top to bottom. Ignore headers, subtotals, totals, dates, customer names, phone numbers, and crossed-out rows. Return only the products that have a clearly readable positive quantity. Normalize Vietnamese product names without inventing missing text. If a quantity is unclear, omit that row instead of guessing. Return exactly this JSON shape: {"items":[{"name":"string","quantity":0}]} with no other keys.`,
+              },
+              {
                 inlineData: {
                   mimeType,
                   data: base64Data
@@ -502,7 +505,25 @@ Lưu ý quan trọng:
           }
         ],
         generationConfig: {
-          responseMimeType: "application/json"
+          responseMimeType: "application/json",
+          temperature: 0,
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              items: {
+                type: "ARRAY",
+                items: {
+                  type: "OBJECT",
+                  properties: {
+                    name: { type: "STRING" },
+                    quantity: { type: "NUMBER" }
+                  },
+                  required: ["name", "quantity"]
+                }
+              }
+            },
+            required: ["items"]
+          }
         }
       })
     });
@@ -526,6 +547,8 @@ Lưu ý quan trọng:
     if (Array.isArray(parsedData)) {
       // Hỗ trợ định dạng cũ (mảng các sản phẩm)
       parsedItems = parsedData;
+    } else if (parsedData && Array.isArray(parsedData.items)) {
+      parsedItems = parsedData.items;
     } else if (parsedData && Array.isArray(parsedData.rows)) {
       // Định dạng cấu trúc bảng mới
       const lastDay = parsedData.last_day;
