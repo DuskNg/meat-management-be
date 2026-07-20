@@ -30,7 +30,7 @@ Có 3 loại giao dịch, xác định dựa trên các dấu hiệu sau:
    - Nếu có số tiền cụ thể đi kèm (ví dụ "trả 100 nghìn") → paid_full = false, amount = 100000.
 
 ## QUY TẮC NHẬN DIỆN
-- Ngày (date): Nhận diện định dạng ngày tháng nói bằng lời (VD: "ngày 5 tháng 7", "hôm nay", "hôm qua", "mùng 5"). Nếu không đọc ngày, mặc định là ngày hiện tại (${formattedCurrentDate}) và ghi rõ trong trường "date_inferred": true.
+- Ngày (date): Nhận diện định dạng ngày tháng nói bằng lời (VD: "ngày 5 tháng 7", "hôm nay", "hôm qua", "ngày mai", "mai", "mùng 5"). Bạn phải tự tính toán ngày chính xác theo định dạng YYYY-MM-DD dựa trên ngày hiện tại của hệ thống là ${formattedCurrentDate}. Ví dụ nếu ngày hiện tại là 2026-07-15 thì: "hôm nay" -> 2026-07-15, "hôm qua" -> 2026-07-14, "ngày mai" hoặc "mai" -> 2026-07-16. Nếu trong câu nói có nhắc đến ngày (kể cả từ chỉ ngày tương đối như hôm nay, hôm qua, mai, ngày mai), hãy đặt "date_inferred": false. Nếu không đọc ngày hoặc không có thông tin ngày, mặc định là ngày hiện tại (${formattedCurrentDate}) và ghi rõ trong trường "date_inferred": true.
 - Tên khách (customer_name): Trích xuất chính xác tên/danh xưng được nói (VD: "chị Lan", "anh Tuấn", "cô Ba"). Giữ nguyên danh xưng nếu có.
 - Số kg thịt (weight_kg): Chuyển đổi các cách nói như "2 cân", "2 ký", "2kg" thành số (2). Nếu không đọc → null.
 - Loại thịt (meat_type): Trích xuất tên loại thịt nếu có (VD: "ba chỉ", "nạc vai", "sườn"). Nếu không đọc → null.
@@ -102,6 +102,10 @@ async function run() {
   await testParse("Ngày 5 tháng 7, chị Lan, 2 cân ba chỉ, 150 nghìn");
   console.log("\n--------------------\n");
   await testParse("Chị Hoa trả 100 nghìn");
+  console.log("\n--------------------\n");
+  await testParse("Hôm qua chị Lan mua 2 cân sườn nợ 300 nghìn");
+  console.log("\n--------------------\n");
+  await testParse("Mai anh Tuấn lấy 1.5 cân thịt nạc giá 12");
 }
 
 run();

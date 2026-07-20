@@ -2,6 +2,7 @@
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
+const { recordAiUsage } = require('../utils/aiUsage');
 
 // Hàm chuẩn hóa tên tiếng Việt phục vụ so khớp giọng nói
 const normalizeName = (str) => {
@@ -84,19 +85,23 @@ const createTransaction = async (req, res, next) => {
           if (matchedProduct) {
             finalProductId = matchedProduct.id;
           } else {
-            // Tự động tạo sản phẩm mới do không khớp tên nào trong DB
-            const newProduct = await prisma.product.create({
-              data: {
-                userId,
-                name: trimmedName,
-                defaultPrice: reqPrice, // lấy đơn giá hiện tại làm giá mặc định
-                unit: 'kg',
-              },
-            });
-            console.log(`[TRANSACTION] Tự động tạo sản phẩm mới khi lưu nợ: ${trimmedName}`);
-            // Thêm vào danh mục của chủ buôn để tránh tạo lặp nếu có dòng tiếp theo cùng tên
-            allUserProducts.push(newProduct);
-            finalProductId = newProduct.id;
+            // Không tự động tạo sản phẩm mới để tránh ô nhiễm danh mục sản phẩm của chủ buôn.
+            // Thay vào đó, tìm kiếm sản phẩm generic "Thịt lẻ" để gán, hoặc tạo nó duy nhất 1 lần nếu chưa có.
+            let genericProduct = allUserProducts.find(
+              (p) => p.name.toLowerCase().trim() === 'thịt lẻ'
+            );
+            if (!genericProduct) {
+              genericProduct = await prisma.product.create({
+                data: {
+                  userId,
+                  name: 'Thịt lẻ',
+                  defaultPrice: reqPrice,
+                  unit: 'kg',
+                },
+              });
+              allUserProducts.push(genericProduct);
+            }
+            finalProductId = genericProduct.id;
           }
         }
       }
@@ -380,17 +385,23 @@ const matchOrCreateProducts = async (userId, parsedItems) => {
 
     let product = matchedProduct;
 
-    // Nếu không khớp với sản phẩm nào trong DB, tự động tạo mới sản phẩm với giá mặc định 100,000 VND
+    // Nếu không khớp với sản phẩm nào trong DB, dùng đối tượng ảo thay vì tự ý tạo sản phẩm mới trong DB
     if (!product) {
-      product = await prisma.product.create({
-        data: {
-          userId,
-          name: scannedName,
-          defaultPrice: 100000,
-          unit: 'kg'
-        }
-      });
-      console.log(`[GEMINI] Tự động tạo sản phẩm mới do không khớp: ${scannedName}`);
+      product = {
+        id: null,
+        name: scannedName,
+        defaultPrice: null,
+        unit: 'kg'
+      };
+    }
+
+    // Chỉ lấy đơn giá/thành tiền nếu ảnh thực sự cung cấp. Không tự gán giá mặc định
+    // vì người dùng cần nhập giá thủ công khi phiếu chỉ có tên hàng và số lượng.
+    let price = null;
+    if (item.price && parseFloat(item.price) > 0) {
+      price = parseFloat(item.price);
+    } else if (item.amount && parseFloat(item.amount) > 0 && quantity > 0) {
+      price = Math.round(parseFloat(item.amount) / quantity);
     }
 
     resultItems.push({
@@ -398,10 +409,11 @@ const matchOrCreateProducts = async (userId, parsedItems) => {
         id: product.id,
         name: product.name,
         unit: product.unit,
-        defaultPrice: parseFloat(product.defaultPrice)
+        defaultPrice: product.defaultPrice == null ? null : parseFloat(product.defaultPrice)
       },
+      selectedProductId: product.id, // Sẽ là null nếu không khớp sản phẩm nào
       quantity,
-      price: parseFloat(product.defaultPrice)
+      price
     });
   }
 
@@ -429,25 +441,35 @@ const scanTicket = async (req, res, next) => {
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
+    const modelName = 'gemini-3.1-pro-preview'; // Gemini 3.1 Pro Preview cho OCR hình ảnh chính xác hơn
 
     // Nếu không có API Key, chạy chế độ giả lập để người dùng thử nghiệm
     if (!apiKey || apiKey === 'your_gemini_api_key_here') {
       console.log('[GEMINI] Chạy chế độ giả lập vì chưa cấu hình GEMINI_API_KEY.');
       const mockItems = [
-        { name: 'Thịt ba chỉ', quantity: 1.5 },
-        { name: 'Sườn non', quantity: 0.8 },
-        { name: 'Nạc vai', quantity: 2.2 }
+        { name: 'Thịt ba chỉ', quantity: 1.5, price: 150000 },
+        { name: 'Sườn non', quantity: 0.8, price: 180000 },
+        { name: 'Nạc vai', quantity: 2.2, price: 160000 }
       ];
       const matchedMockItems = await matchOrCreateProducts(userId, mockItems);
       return res.status(200).json({
         success: true,
         isMock: true,
+        usageCost: {
+          model: modelName,
+          inputType: 'image',
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          costUsd: 0,
+          currency: 'USD',
+        },
         data: matchedMockItems
       });
     }
 
-    // Gọi API của Google Gemini 2.0 Flash để nhận diện hình ảnh
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`;
+    // Gọi API của Google Gemini để nhận diện hình ảnh tích kê hàng thịt
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -458,42 +480,23 @@ const scanTicket = async (req, res, next) => {
           {
             parts: [
               {
-                text: `Bạn là trợ lý OCR chuyên đọc bảng viết tay tiếng Việt.
+                text: `Bạn là trợ lý OCR chuyên nghiệp, chuyên trích xuất dữ liệu từ hình ảnh hóa đơn bán hàng, tích kê bán thịt viết tay tiếng Việt.
 
-Ảnh này là một bảng tích kê ghi nợ hàng thịt, viết tay trên giấy kẻ ô.
+Hãy đọc thêm trường "Tên khách hàng" ở phía trên bảng (thường nằm sau nhãn "Tên khách hàng:"). Trả về đúng tên viết tay đọc được vào trường customer_name. Nếu không đọc rõ hoặc trường này để trống, trả về customer_name = null. Không lấy tên cửa hàng, tên chủ cửa hàng hoặc tên người bán làm tên khách hàng.
 
-CẤU TRÚC BẢNG:
-- Cột đầu tiên bên trái: "TT" = số thứ tự ngày (1, 2, 3... đến 31)
-- Các cột tiếp theo (từ trái sang phải) là TÊN CÁC LOẠI THỊT ghi ở hàng tiêu đề trên cùng
-- Mỗi ô trong bảng chứa số lượng kg của loại thịt đó trong ngày đó
-- Ô trống = không giao hàng ngày đó
-- Dòng cuối cùng (TT = số lớn nhất) có thể là dòng tổng cộng
+Hãy tập trung phân tích BẢNG CHI TIẾT HÀNG HÓA trong hình ảnh. Bảng gồm các cột:
+- STT (Số thứ tự): có thể có hoặc trống.
+- Tên hàng hóa: Tên loại thịt/sản phẩm viết tay (Ví dụ: "Tai", "X", "Tiết").
+- Số lượng: Số lượng (thường tính bằng kg hoặc cái). Có thể sử dụng dấu phẩy làm dấu thập phân (Ví dụ: "2,04" -> 2.04). Nếu trống nhưng có thành tiền, hãy mặc định số lượng là 1.
+- Đơn giá: Giá tiền mỗi đơn vị. NẾU KHÔNG GHI ĐƠN GIÁ, hãy tính Đơn giá = Thành tiền / Số lượng (làm tròn thành số nguyên).
+- Thành tiền: Tổng số tiền cuối cùng của dòng đó. Chữ số viết tay thường ghi tắt hàng nghìn (Ví dụ: "490" nghĩa là 490000, "202" nghĩa là 202000, "43" nghĩa là 43000). Hãy nhân giá trị này với 1,000 để ra số tiền thực tế đầy đủ đơn vị VNĐ.
+- Tổng cộng (ở cuối bảng): Tổng số tiền cuối cùng của toàn bộ hóa đơn. Thường viết tắt hàng nghìn (Ví dụ: "735" nghĩa là 735000 VNĐ). Hãy kiểm tra xem tổng các dòng thành tiền có khớp với Tổng cộng hay không để tự điều chỉnh số liệu cho chính xác (Ví dụ: 490000 + 202000 + 43000 = 735000).
 
-NHIỆM VỤ:
-1. Đọc tên tất cả các cột thịt từ hàng tiêu đề
-2. Với MỖI dòng TT từ 1 đến dòng cuối cùng có dữ liệu thực (không phải dòng tổng):
-   - Ghi nhận số TT (ngày)
-   - Đọc giá trị kg của từng cột có số
-3. Bỏ qua dòng tổng cộng (thường là dòng có ký hiệu "=" hoặc "Σ")
-
-TRẢ VỀ KẾT QUẢ duy nhất là JSON hợp lệ theo cấu trúc sau, không có markdown, không có giải thích:
-{
-  "columns": ["tên_cột_1", "tên_cột_2", ...],
-  "rows": [
-    {"tt": 1, "tên_cột_1": số_hoặc_null, "tên_cột_2": số_hoặc_null, ...},
-    {"tt": 2, ...},
-    ...
-  ],
-  "last_day": số_TT_cuối_cùng_có_dữ_liệu_thực
-}
-
-Lưu ý quan trọng:
-- Chữ số viết tay có thể nhầm: "1" và "7", "3" và "8", "9" và "4" — đọc cẩn thận theo ngữ cảnh
-- Dấu phẩy trong số là dấu thập phân (ví dụ: 14,88 = 14.88 kg)
-- Nếu không đọc được rõ, ghi null`
-              },
-              {
-                text: `IMPORTANT OCR OVERRIDE: Do not assume the image is a monthly matrix. It may be a handwritten or printed meat ticket with one product per row, columns such as product, quantity, unit, price, and total. Read the actual visible rows from top to bottom. Ignore headers, subtotals, totals, dates, customer names, phone numbers, and crossed-out rows. Return only the products that have a clearly readable positive quantity. Normalize Vietnamese product names without inventing missing text. If a quantity is unclear, omit that row instead of guessing. Return exactly this JSON shape: {"items":[{"name":"string","quantity":0}]} with no other keys.`,
+Lưu ý quy đổi:
+- Nếu tích kê không ghi đơn giá và thành tiền, hãy cứ liệt kê đầy đủ tên hàng hóa và số lượng, còn lại để trống (price = null, amount = null) để người dùng tự nhập tay.
+- Nếu cột đơn giá trống nhưng có số lượng và thành tiền, bắt buộc phải tính: price = amount / quantity (làm tròn thành số nguyên).
+- Nếu cột số lượng trống nhưng có thành tiền, hãy để quantity = 1 và price = amount.
+- Chỉ trả về chuỗi JSON hợp lệ theo đúng cấu trúc schema yêu cầu.`
               },
               {
                 inlineData: {
@@ -507,6 +510,7 @@ Lưu ý quan trọng:
         generationConfig: {
           responseMimeType: "application/json",
           temperature: 0,
+          maxOutputTokens: 8192, // Tăng giới hạn để tránh JSON OCR bị cắt giữa chừng
           responseSchema: {
             type: "OBJECT",
             properties: {
@@ -516,13 +520,16 @@ Lưu ý quan trọng:
                   type: "OBJECT",
                   properties: {
                     name: { type: "STRING" },
-                    quantity: { type: "NUMBER" }
+                    quantity: { type: "NUMBER" },
+                    price: { type: "NUMBER" },
+                    amount: { type: "NUMBER" }
                   },
                   required: ["name", "quantity"]
                 }
-              }
+              },
+              customer_name: { type: "STRING", nullable: true }
             },
-            required: ["items"]
+            required: ["items", "customer_name"]
           }
         }
       })
@@ -575,9 +582,22 @@ Lưu ý quan trọng:
       }
     }
 
+    const scannedCustomerName = parsedData && !Array.isArray(parsedData)
+      ? (parsedData.customer_name || parsedData.customerName || null)
+      : null;
+
+    const usageCost = await recordAiUsage({
+      userId,
+      feature: 'SCAN_TICKET',
+      model: modelName,
+      inputType: 'image',
+      usageMetadata: result.usageMetadata,
+    });
     const matchedItems = await matchOrCreateProducts(userId, parsedItems);
     res.status(200).json({
       success: true,
+      usageCost,
+      customerName: scannedCustomerName,
       data: matchedItems
     });
   } catch (error) {
@@ -631,13 +651,23 @@ const voiceToText = async (req, res, next) => {
     if (!apiKey || apiKey === 'your_gemini_api_key_here') {
       console.log('[GEMINI] Chạy chế độ giả lập voiceToText vì chưa cấu hình GEMINI_API_KEY.');
       const mockText = transcript || "Ngày 5 tháng 7, chị Lan, 2 cân ba chỉ, 150 nghìn";
+      const mockIsUnrelated = transcript && !/(ghi|nợ|no|trả|tra|tiền|tien|cân|can|kg|thịt|thit|khách|khach|ngày|ngay)/i.test(transcript);
       return res.status(200).json({
         success: true,
         isMock: true,
+        usageCost: {
+          model: 'gemini-2.5-pro',
+          inputType: audio ? 'audio' : 'text',
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          costUsd: 0,
+          currency: 'USD',
+        },
         customerId: null,
         customerName: "chị Lan",
         data: {
-          transaction_type: mockText.includes('trả') ? "tra_tien" : "ghi_no_thu_cong",
+          transaction_type: mockIsUnrelated ? "unrelated" : (mockText.includes('trả') ? "tra_tien" : "ghi_no_thu_cong"),
           date: formattedCurrentDate,
           date_inferred: true,
           customer_name: "chị Lan",
@@ -645,7 +675,7 @@ const voiceToText = async (req, res, next) => {
           meat_type: mockText.includes('trả') ? null : "ba chỉ",
           amount: mockText.includes('trả') ? 100000 : 150000,
           paid_full: false,
-          status: "complete",
+          status: mockIsUnrelated ? "unrelated" : "complete",
           missing_fields: [],
           raw_transcript: mockText
         }
@@ -666,7 +696,7 @@ Có 3 loại giao dịch, xác định dựa trên các dấu hiệu sau:
    - Nếu có số tiền cụ thể đi kèm (ví dụ "trả 100 nghìn") → paid_full = false, amount = 100000.
 
 ## QUY TẮC NHẬN DIỆN
-- Ngày (date): Nhận diện định dạng ngày tháng nói bằng lời (VD: "ngày 5 tháng 7", "hôm nay", "hôm qua", "mùng 5"). Nếu không đọc ngày, mặc định là ngày hiện tại (${formattedCurrentDate}) và ghi rõ trong trường "date_inferred": true.
+- Ngày (date): Nhận diện định dạng ngày tháng nói bằng lời (VD: "ngày 5 tháng 7", "hôm nay", "hôm qua", "ngày mai", "mai", "mùng 5"). Bạn phải tự tính toán ngày chính xác theo định dạng YYYY-MM-DD dựa trên ngày hiện tại của hệ thống là ${formattedCurrentDate}. Ví dụ nếu ngày hiện tại là 2026-07-15 thì: "hôm nay" -> 2026-07-15, "hôm qua" -> 2026-07-14, "ngày mai" hoặc "mai" -> 2026-07-16. Nếu trong câu nói có nhắc đến ngày (kể cả từ chỉ ngày tương đối như hôm nay, hôm qua, mai, ngày mai), hãy đặt "date_inferred": false. Nếu không đọc ngày hoặc không có thông tin ngày, mặc định là ngày hiện tại (${formattedCurrentDate}) và ghi rõ trong trường "date_inferred": true.
 - Tên khách (customer_name): Trích xuất chính xác tên/danh xưng được nói (VD: "chị Lan", "anh Tuấn", "cô Ba"). Giữ nguyên danh xưng nếu có.
 - Số kg thịt (weight_kg): Chuyển đổi các cách nói như "2 cân", "2 ký", "2kg" thành số (2). Nếu không đọc → null.
 - Loại thịt (meat_type): Trích xuất tên loại thịt nếu có (VD: "ba chỉ", "nạc vai", "sườn"). Nếu không đọc → null.
@@ -681,7 +711,7 @@ Có 3 loại giao dịch, xác định dựa trên các dấu hiệu sau:
 ## ĐỊNH DẠNG OUTPUT
 Chỉ trả về JSON, không thêm giải thích, không thêm markdown code fence. Cấu trúc:
 {
-  "transaction_type": "ghi_no_nhanh" | "ghi_no_thu_cong" | "tra_tien",
+  "transaction_type": "ghi_no_nhanh" | "ghi_no_thu_cong" | "tra_tien" | "unrelated",
   "date": "YYYY-MM-DD",
   "date_inferred": boolean,
   "customer_name": string,
@@ -689,12 +719,16 @@ Chỉ trả về JSON, không thêm giải thích, không thêm markdown code fe
   "meat_type": string | null,
   "amount": number | null,
   "paid_full": boolean,
-  "status": "complete" | "incomplete",
+  "status": "complete" | "incomplete" | "unrelated",
   "missing_fields": string[],
   "raw_transcript": string
 }`;
     // 3. Chuẩn bị nội dung gửi cho Gemini tùy thuộc vào đầu vào là âm thanh hay văn bản
-    let modelName = 'gemini-2.5-flash'; // Gemini 2.0 Flash đã ngừng cung cấp; 2.5 Flash hỗ trợ cả âm thanh và văn bản
+    let modelName = 'gemini-2.5-pro'; // Gemini 2.5 Pro hỗ trợ âm thanh, văn bản và structured output
+    const classificationPrompt = `${systemPrompt}
+QUY TẮC BẮT BUỘC: Nếu transcript không liên quan đến ghi nợ hoặc trả nợ, hãy trả về transaction_type = "unrelated", status = "unrelated", các trường dữ liệu khác là null và missing_fields = []. Không được suy đoán tên khách hàng, số tiền hoặc giao dịch từ nội dung không liên quan.
+`;
+
     const contents = [
       {
         parts: []
@@ -711,7 +745,7 @@ Chỉ trả về JSON, không thêm giải thích, không thêm markdown code fe
         base64Data = parts[1];
       }
 
-      contents[0].parts.push({ text: systemPrompt + '\nHãy nghe file âm thanh dưới đây và trích xuất dữ liệu thành cấu trúc JSON trên. Đọc lời thoại trích xuất được điền vào trường "raw_transcript".' });
+      contents[0].parts.push({ text: classificationPrompt + '\nHãy nghe file âm thanh dưới đây và trích xuất dữ liệu thành cấu trúc JSON trên. Đọc lời thoại trích xuất được điền vào trường "raw_transcript".' });
       contents[0].parts.push({
         inlineData: {
           mimeType,
@@ -720,8 +754,8 @@ Chỉ trả về JSON, không thêm giải thích, không thêm markdown code fe
       });
     } else {
       // Đầu vào là văn bản
-      modelName = 'gemini-2.5-flash'; // Dùng gemini-2.5-flash tối ưu hơn cho văn bản chữ
-      contents[0].parts.push({ text: systemPrompt + `\nBây giờ hãy phân tích transcript sau đây và trả về JSON:\n"${transcript}"` });
+      modelName = 'gemini-2.5-pro'; // Dùng cùng model Pro cho kết quả phân tích nhất quán
+      contents[0].parts.push({ text: classificationPrompt + `\nBây giờ hãy phân tích transcript sau đây và trả về JSON:\n"${transcript}"` });
     }
 
     // 4. Gọi API của Google Gemini
@@ -784,6 +818,14 @@ Chỉ trả về JSON, không thêm giải thích, không thêm markdown code fe
       ? parsedData.map(normalizeVoiceResult)
       : normalizeVoiceResult(parsedData);
 
+    const usageCost = await recordAiUsage({
+      userId,
+      feature: 'VOICE_TO_TEXT',
+      model: 'gemini-2.5-pro',
+      inputType: audio ? 'audio' : 'text',
+      usageMetadata: result.usageMetadata,
+    });
+
     // So khớp khách hàng trong DB dựa trên customer_name trích xuất từ Gemini
     let matchedCustomer = null;
     const firstResult = Array.isArray(normalizedData) ? normalizedData[0] : normalizedData;
@@ -804,6 +846,7 @@ Chỉ trả về JSON, không thêm giải thích, không thêm markdown code fe
 
     res.status(200).json({
       success: true,
+      usageCost,
       customerId: matchedCustomer ? matchedCustomer.id : null,
       customerName: matchedCustomer ? matchedCustomer.name : (firstResult ? firstResult.customer_name : null),
       data: normalizedData

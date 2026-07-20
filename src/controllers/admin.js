@@ -135,8 +135,92 @@ const getUserLogs = async (req, res, next) => {
   }
 };
 
+// 4. Xem lịch sử và tổng chi phí voice/chụp tích kê của một tài khoản
+const getUserAiUsage = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { date } = req.query;
+
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
+    }
+
+    // 1. Tính toán tổng chi phí AI tích lũy trọn đời (tất cả các ngày)
+    const allLogs = await prisma.activityLog.findMany({
+      where: { userId: id, action: 'AI_USAGE' },
+    });
+
+    const allRecords = allLogs.map((log) => {
+      try {
+        return JSON.parse(log.details);
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+
+    const allTimeSummary = allRecords.reduce((result, record) => ({
+      requestCount: result.requestCount + 1,
+      costUsd: result.costUsd + (Number(record.costUsd) || 0),
+      totalTokens: result.totalTokens + (Number(record.totalTokens) || 0),
+    }), {
+      requestCount: 0,
+      costUsd: 0,
+      totalTokens: 0,
+    });
+
+    // 2. Lấy dữ liệu chi tiết của ngày lọc hiện tại
+    const whereClause = { userId: id };
+    if (date) {
+      const startDate = new Date(`${date}T00:00:00.000Z`);
+      const endDate = new Date(`${date}T23:59:59.999Z`);
+      whereClause.createdAt = { gte: startDate, lte: endDate };
+    }
+
+    const logs = await prisma.activityLog.findMany({
+      where: { ...whereClause, action: 'AI_USAGE' },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+
+    const records = logs.map((log) => {
+      try {
+        return { id: log.id, createdAt: log.createdAt, ...JSON.parse(log.details) };
+      } catch {
+        return null;
+      }
+    }).filter(Boolean);
+
+    const summary = records.reduce((result, record) => ({
+      requestCount: result.requestCount + 1,
+      costUsd: result.costUsd + (Number(record.costUsd) || 0),
+      inputTokens: result.inputTokens + (Number(record.inputTokens) || 0),
+      outputTokens: result.outputTokens + (Number(record.outputTokens) || 0),
+      totalTokens: result.totalTokens + (Number(record.totalTokens) || 0),
+    }), {
+      requestCount: 0,
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        records,
+        summary,
+        allTimeSummary,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getUsers,
   updatePermissions,
   getUserLogs,
+  getUserAiUsage,
 };
