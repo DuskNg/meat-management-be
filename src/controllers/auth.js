@@ -74,6 +74,7 @@ const requestOtp = async (req, res, next) => {
           canManageDebt: user.canManageDebt,
           canManageBadDebt: user.canManageBadDebt,
           canManageEmployees: user.canManageEmployees,
+          canManageStore: user.canManageStore,
         },
       },
       tokens: {
@@ -165,6 +166,7 @@ const verifyOtp = async (req, res, next) => {
           canManageDebt: user.canManageDebt,
           canManageBadDebt: user.canManageBadDebt,
           canManageEmployees: user.canManageEmployees,
+          canManageStore: user.canManageStore,
         },
       },
       tokens: {
@@ -266,6 +268,7 @@ const getProfile = async (req, res, next) => {
         canManageDebt: true,
         canManageBadDebt: true,
         canManageEmployees: true,
+        canManageStore: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -288,6 +291,7 @@ const getProfile = async (req, res, next) => {
           canManageDebt: user.canManageDebt,
           canManageBadDebt: user.canManageBadDebt,
           canManageEmployees: user.canManageEmployees,
+          canManageStore: user.canManageStore,
         },
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,

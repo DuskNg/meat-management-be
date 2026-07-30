@@ -67,6 +67,7 @@ const paymentRoutes = require('./routes/payment');
 const supplierRoutes = require('./routes/supplier');
 const employeeRoutes = require('./routes/employee');
 const adminRoutes = require('./routes/admin');
+const storeRoutes = require('./routes/store');
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
@@ -76,6 +77,7 @@ app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/suppliers', supplierRoutes);
 app.use('/api/v1/employees', employeeRoutes);
 app.use('/api/v1/admin', adminRoutes);
+app.use('/api/v1/store', storeRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {
@@ -114,3 +116,4 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   logger.info(`Máy chủ Express đang chạy thành công tại cổng ${PORT}`);
 });
+// Khởi động lại nodemon để nạp Prisma Client mới nhất

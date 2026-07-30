@@ -21,6 +21,7 @@ const getUsers = async (req, res, next) => {
         canManageDebt: true,
         canManageBadDebt: true,
         canManageEmployees: true,
+        canManageStore: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -42,7 +43,7 @@ const getUsers = async (req, res, next) => {
 const updatePermissions = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { canManageCustomers, canManageDebt, canManageBadDebt, canManageEmployees } = req.body;
+    const { canManageCustomers, canManageDebt, canManageBadDebt, canManageEmployees, canManageStore } = req.body;
 
     const user = await prisma.user.findUnique({
       where: { id },
@@ -63,6 +64,7 @@ const updatePermissions = async (req, res, next) => {
         canManageDebt: canManageDebt !== undefined ? !!canManageDebt : undefined,
         canManageBadDebt: canManageBadDebt !== undefined ? !!canManageBadDebt : undefined,
         canManageEmployees: canManageEmployees !== undefined ? !!canManageEmployees : undefined,
+        canManageStore: canManageStore !== undefined ? !!canManageStore : undefined,
       },
     });
 
@@ -70,7 +72,7 @@ const updatePermissions = async (req, res, next) => {
     await logActivity(
       req.user.id,
       'UPDATE_USER_PERMISSIONS',
-      `Phân quyền cho tài khoản ${user.name} (${user.phone}): Khách hàng [${!!canManageCustomers}], Công nợ [${!!canManageDebt}], Nợ xấu [${!!canManageBadDebt}], Nhân viên [${!!canManageEmployees}]`
+      `Phân quyền cho tài khoản ${user.name} (${user.phone}): Khách hàng [${!!canManageCustomers}], Công nợ [${!!canManageDebt}], Nợ xấu [${!!canManageBadDebt}], Nhân viên [${!!canManageEmployees}], Cửa hàng [${!!canManageStore}]`
     );
 
     res.status(200).json({
@@ -85,6 +87,7 @@ const updatePermissions = async (req, res, next) => {
           canManageDebt: updatedUser.canManageDebt,
           canManageBadDebt: updatedUser.canManageBadDebt,
           canManageEmployees: updatedUser.canManageEmployees,
+          canManageStore: updatedUser.canManageStore,
         },
       },
     });

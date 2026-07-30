@@ -26,6 +26,7 @@ model User {
   canManageDebt      Boolean  @default(true)
   canManageBadDebt   Boolean  @default(true)
   canManageEmployees Boolean  @default(true)
+  canManageStore     Boolean  @default(true) // Quyền quản lý cửa hàng (bàn, món ăn)
 
   createdAt DateTime @default(now()) // Thời gian tạo tài khoản
   updatedAt DateTime @updatedAt // Thời gian tự động cập nhật mỗi khi thay đổi thông tin
@@ -66,6 +67,7 @@ model Customer {
   isActive    Boolean  @default(true) // Trạng thái hoạt động. Chức năng "xóa khách hàng" ở app sẽ set isActive = false (soft delete), KHÔNG gọi DELETE thật trên Customer để bảo toàn lịch sử nợ.
   isBadDebt   Boolean  @default(false) // Trạng thái nợ xấu (khoanh vùng lưu trữ)
   manualDebt  Decimal  @default(0) @db.Decimal(12, 2) // Số tiền nợ ban đầu được nhập thủ công (dành cho khách nợ xấu không có lịch sử giao dịch)
+  type        String   @default("customer") // Phân loại: "customer" (Khách hàng) hoặc "store" (Bàn ăn cửa hàng)
   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -89,6 +91,7 @@ model Product {
   defaultPrice Decimal           @db.Decimal(12, 2) // Giá bán mặc định trên một đơn vị (VND)
   unit         String            @default("kg") // Đơn vị tính (mặc định là kg, có thể là "bộ", "cái")
   isActive     Boolean           @default(true) // Trạng thái kích hoạt (cho phép ẩn khi không còn bán nữa)
+  type         String            @default("customer") // Phân loại: "customer" (Sản phẩm thịt) hoặc "store" (Món ăn thực đơn)
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
 
@@ -112,6 +115,7 @@ model Transaction {
   date        DateTime @default(now()) // Ngày thực hiện giao dịch mua bán
   note        String?  // Ghi chú riêng cho đơn hàng này
   totalAmount Decimal  @db.Decimal(12, 2) // Tổng giá trị đơn hàng sau khi tính tổng các dòng
+  type        String   @default("customer") // Phân loại: "customer" (Hóa đơn mua thịt) hoặc "store" (Hóa đơn cửa hàng)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -151,6 +155,7 @@ model Payment {
   amount        Decimal     @db.Decimal(12, 2) // Số tiền trả trong đợt này (VND)
   paidAt        DateTime    @default(now()) // Thời điểm thanh toán tiền
   note          String?     // Ghi chú thanh toán (ví dụ: trả tiền mặt tại sạp, chuyển khoản Vietcombank)
+  type          String      @default("customer") // Phân loại: "customer" (Trả tiền thịt) hoặc "store" (Thanh toán bàn cửa hàng)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
