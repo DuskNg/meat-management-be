@@ -22,11 +22,15 @@ model User {
   // Các trường phục vụ Admin và Phân quyền
   isAdmin            Boolean  @default(false)
   password           String?  // Mật khẩu mã hóa cho tài khoản Admin
-  canManageCustomers Boolean  @default(true)
-  canManageDebt      Boolean  @default(true)
-  canManageBadDebt   Boolean  @default(true)
-  canManageEmployees Boolean  @default(true)
-  canManageStore     Boolean  @default(true) // Quyền quản lý cửa hàng (bàn, món ăn)
+  canManageCustomers Boolean  @default(false)
+  canManageDebt      Boolean  @default(false)
+  canManageBadDebt   Boolean  @default(false)
+  canManageEmployees Boolean  @default(false)
+  canManageStore     Boolean  @default(false) // Quyền quản lý cửa hàng (bàn, món ăn)
+  canManageInventory Boolean  @default(false) // Quyền quản lý kho (sản phẩm, tồn kho)
+  canManageShop      Boolean  @default(false) // Quyền quản lý cửa hàng tính giờ (bida, karaoke...)
+  isActive           Boolean  @default(true)  // Trạng thái hoạt động (cho phép xóa mềm)
+  deletedAt          DateTime?                // Thời điểm xóa tài khoản tạm thời
 
   createdAt DateTime @default(now()) // Thời gian tạo tài khoản
   updatedAt DateTime @updatedAt // Thời gian tự động cập nhật mỗi khi thay đổi thông tin
@@ -38,6 +42,9 @@ model User {
   suppliers    Supplier[]    // Một chủ buôn quản lý nhiều nhà cung cấp tiền hàng
   employees    Employee[]    // Một chủ buôn quản lý nhiều nhân viên sạp hàng
   activityLogs ActivityLog[] // Nhật ký hoạt động của chủ buôn này
+  inventoryProducts InventoryProduct[] // Các sản phẩm trong kho của chủ buôn này
+  shopTables   ShopTable[]
+  shopSessions ShopSession[]
 
   @@map("users") // Đặt tên bảng trong PostgreSQL là "users"
 }
@@ -313,4 +320,53 @@ model ActivityLog {
   @@index([userId])
   @@index([createdAt])
   @@map("activity_logs")
+}
+
+model InventoryProduct {
+  id           String   @id @default(uuid())
+  userId       String   // ID của chủ buôn sở hữu sản phẩm này
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String   // Tên sản phẩm trong kho
+  quantity     Decimal  @db.Decimal(12, 3) @default(0) // Số lượng tồn kho
+  price        Decimal  @db.Decimal(12, 2) @default(0) // Giá nhập hàng
+  unit         String   @default("cái") // Đơn vị tính
+  isActive     Boolean  @default(true) // Trạng thái hoạt động (cho phép ẩn/xóa mềm)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+  @@map("inventory_products")
+}
+
+model ShopTable {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String   // Tên bàn/phòng (VD: Bàn 1, Phòng VIP 2)
+  pricePerHour Int     // Giá tiền 1 tiếng (VND)
+  isActive    Boolean  @default(true)
+  sessions    ShopSession[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("shop_tables")
+}
+
+model ShopSession {
+  id          String    @id @default(uuid())
+  tableId     String
+  table       ShopTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  startTime   DateTime  // Giờ bắt đầu
+  endTime     DateTime? // Giờ kết thúc (null = đang chơi)
+  extraAmount Int       @default(0)  // Phụ thu thêm (nước, snack...)
+  extraNote   String?   // Ghi chú khoản phụ thu
+  isPaid      Boolean   @default(false)
+  paidAt      DateTime?
+  totalAmount Int       @default(0)  // Thành tiền cuối cùng đã tính
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("shop_sessions")
 }

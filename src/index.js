@@ -15,6 +15,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const winston = require('winston');
+const prisma = require('./utils/db');
 
 // Khởi tạo Express
 const app = express();
@@ -68,6 +69,8 @@ const supplierRoutes = require('./routes/supplier');
 const employeeRoutes = require('./routes/employee');
 const adminRoutes = require('./routes/admin');
 const storeRoutes = require('./routes/store');
+const inventoryRoutes = require('./routes/inventory');
+const shopRoutes = require('./routes/shop');
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
@@ -78,6 +81,8 @@ app.use('/api/v1/suppliers', supplierRoutes);
 app.use('/api/v1/employees', employeeRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/store', storeRoutes);
+app.use('/api/v1/inventory', inventoryRoutes);
+app.use('/api/v1/shop', shopRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {
@@ -112,8 +117,44 @@ app.use((err, req, res, next) => {
   });
 });
 
+// Cập nhật cấu hình và giá trị phân quyền mặc định tài khoản mới
+
+// Lập lịch dọn dẹp tài khoản đã xóa mềm quá 7 ngày (Chạy định kỳ mỗi 24 giờ)
+const startCleanupScheduler = () => {
+  const cleanup = async () => {
+    try {
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+      const result = await prisma.user.deleteMany({
+        where: {
+          isActive: false,
+          deletedAt: {
+            lte: sevenDaysAgo,
+          },
+        },
+      });
+
+      if (result.count > 0) {
+        logger.info(`[CLEANUP] Đã xóa vĩnh viễn ${result.count} tài khoản đã xóa mềm quá 7 ngày.`);
+      }
+    } catch (error) {
+      logger.error(`[CLEANUP] Lỗi dọn dẹp tài khoản xóa mềm: ${error.stack || error.message}`);
+    }
+  };
+
+  // Chạy dọn dẹp ngay khi khởi động máy chủ
+  cleanup();
+
+  // Chạy lại mỗi 24 giờ
+  setInterval(cleanup, 24 * 60 * 60 * 1000);
+};
+
+startCleanupScheduler();
+
 // Bắt đầu lắng nghe cổng mạng (Tải lại máy chủ khi lưu cấu hình và prompt mới)
 app.listen(PORT, () => {
   logger.info(`Máy chủ Express đang chạy thành công tại cổng ${PORT}`);
 });
-// Khởi động lại nodemon để nạp Prisma Client mới nhất
+
+// Kích hoạt nodemon tải lại Prisma Client mới phát sinh

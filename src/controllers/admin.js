@@ -22,12 +22,17 @@ const getUsers = async (req, res, next) => {
         canManageBadDebt: true,
         canManageEmployees: true,
         canManageStore: true,
+        canManageInventory: true,
+        canManageShop: true,
+        isActive: true,
+        deletedAt: true,
         createdAt: true,
         updatedAt: true,
       },
-      orderBy: {
-        createdAt: 'desc',
-      },
+      orderBy: [
+        { isActive: 'desc' },
+        { createdAt: 'desc' },
+      ],
     });
 
     res.status(200).json({
@@ -39,11 +44,99 @@ const getUsers = async (req, res, next) => {
   }
 };
 
-// 2. Cập nhật phân quyền của một tài khoản người dùng
+// 2. Xóa mềm một tài khoản người dùng
+const softDeleteUser = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const user = await prisma.user.findUnique({
+      where: { id },
+    });
+
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng cần xóa.');
+    }
+
+    if (user.isAdmin) {
+      throw new BadRequestError('Không thể xóa tài khoản Admin tối cao.');
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: {
+        isActive: false,
+        deletedAt: new Date(),
+      },
+    });
+
+    // Ghi log hoạt động của admin
+    await logActivity(
+      req.user.id,
+      'SOFT_DELETE_USER',
+      `Xóa tạm thời tài khoản ${user.name} (${user.phone})`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Xóa tạm thời tài khoản thành công. Tài khoản sẽ bị xóa vĩnh viễn sau 7 ngày.',
+      data: {
+        id: updatedUser.id,
+        isActive: updatedUser.isActive,
+        deletedAt: updatedUser.deletedAt,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 3. Khôi phục một tài khoản người dùng đã bị xóa mềm
+const restoreUser = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const user = await prisma.user.findUnique({
+      where: { id },
+    });
+
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng cần khôi phục.');
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: {
+        isActive: true,
+        deletedAt: null,
+      },
+    });
+
+    // Ghi log hoạt động của admin
+    await logActivity(
+      req.user.id,
+      'RESTORE_USER',
+      `Khôi phục tài khoản ${user.name} (${user.phone})`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Khôi phục tài khoản người dùng thành công.',
+      data: {
+        id: updatedUser.id,
+        isActive: updatedUser.isActive,
+        deletedAt: updatedUser.deletedAt,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 4. Cập nhật phân quyền của một tài khoản người dùng
 const updatePermissions = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { canManageCustomers, canManageDebt, canManageBadDebt, canManageEmployees, canManageStore } = req.body;
+    const { canManageCustomers, canManageDebt, canManageBadDebt, canManageEmployees, canManageStore, canManageInventory, canManageShop } = req.body;
 
     const user = await prisma.user.findUnique({
       where: { id },
@@ -65,6 +158,8 @@ const updatePermissions = async (req, res, next) => {
         canManageBadDebt: canManageBadDebt !== undefined ? !!canManageBadDebt : undefined,
         canManageEmployees: canManageEmployees !== undefined ? !!canManageEmployees : undefined,
         canManageStore: canManageStore !== undefined ? !!canManageStore : undefined,
+        canManageInventory: canManageInventory !== undefined ? !!canManageInventory : undefined,
+        canManageShop: canManageShop !== undefined ? !!canManageShop : undefined,
       },
     });
 
@@ -72,7 +167,7 @@ const updatePermissions = async (req, res, next) => {
     await logActivity(
       req.user.id,
       'UPDATE_USER_PERMISSIONS',
-      `Phân quyền cho tài khoản ${user.name} (${user.phone}): Khách hàng [${!!canManageCustomers}], Công nợ [${!!canManageDebt}], Nợ xấu [${!!canManageBadDebt}], Nhân viên [${!!canManageEmployees}], Cửa hàng [${!!canManageStore}]`
+      `Phân quyền cho tài khoản ${user.name} (${user.phone}): Khách hàng [${!!canManageCustomers}], Công nợ [${!!canManageDebt}], Nợ xấu [${!!canManageBadDebt}], Nhân viên [${!!canManageEmployees}], Cửa hàng [${!!canManageStore}], Kho [${!!canManageInventory}], Cửa hàng tính giờ [${!!canManageShop}]`
     );
 
     res.status(200).json({
@@ -88,6 +183,8 @@ const updatePermissions = async (req, res, next) => {
           canManageBadDebt: updatedUser.canManageBadDebt,
           canManageEmployees: updatedUser.canManageEmployees,
           canManageStore: updatedUser.canManageStore,
+          canManageInventory: updatedUser.canManageInventory,
+          canManageShop: updatedUser.canManageShop,
         },
       },
     });
@@ -223,6 +320,8 @@ const getUserAiUsage = async (req, res, next) => {
 
 module.exports = {
   getUsers,
+  softDeleteUser,
+  restoreUser,
   updatePermissions,
   getUserLogs,
   getUserAiUsage,

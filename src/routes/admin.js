@@ -14,6 +14,12 @@ router.get('/users', adminController.getUsers);
 // Cập nhật phân quyền của một tài khoản
 router.put('/users/:id/permissions', adminController.updatePermissions);
 
+// Xóa mềm một tài khoản
+router.delete('/users/:id', adminController.softDeleteUser);
+
+// Khôi phục tài khoản đã xóa mềm
+router.post('/users/:id/restore', adminController.restoreUser);
+
 // Xem logs hoạt động của một tài khoản theo ngày
 router.get('/users/:id/logs', adminController.getUserLogs);
 

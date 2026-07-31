@@ -75,6 +75,8 @@ const requestOtp = async (req, res, next) => {
           canManageBadDebt: user.canManageBadDebt,
           canManageEmployees: user.canManageEmployees,
           canManageStore: user.canManageStore,
+          canManageInventory: user.canManageInventory,
+          canManageShop: user.canManageShop,
         },
       },
       tokens: {
@@ -124,8 +126,19 @@ const verifyOtp = async (req, res, next) => {
       where: { phone },
     });
 
-    // Nếu chưa có, tiến hành đăng ký mới tài khoản chủ buôn
-    if (!user) {
+    // Nếu tài khoản đã bị xóa mềm, tự động khôi phục khi đăng nhập lại
+    if (user && !user.isActive) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          isActive: true,
+          deletedAt: null,
+          name: name || user.name,
+        },
+      });
+      console.log(`[AUTH] Tự động khôi phục tài khoản chủ buôn cho SĐT: ${phone}`);
+    } else if (!user) {
+      // Nếu chưa có, tiến hành đăng ký mới tài khoản chủ buôn
       user = await prisma.user.create({
         data: {
           phone,
@@ -167,6 +180,8 @@ const verifyOtp = async (req, res, next) => {
           canManageBadDebt: user.canManageBadDebt,
           canManageEmployees: user.canManageEmployees,
           canManageStore: user.canManageStore,
+          canManageInventory: user.canManageInventory,
+          canManageShop: user.canManageShop,
         },
       },
       tokens: {
@@ -202,8 +217,8 @@ const refreshToken = async (req, res, next) => {
         where: { id: decoded.id },
       });
 
-      if (!user) {
-        return next(new UnauthorizedError('Tài khoản người dùng không tồn tại.'));
+      if (!user || !user.isActive) {
+        return next(new UnauthorizedError('Tài khoản người dùng không tồn tại hoặc đã bị khóa/xóa.'));
       }
 
       // Tạo cặp Access Token và Refresh Token mới
@@ -269,13 +284,16 @@ const getProfile = async (req, res, next) => {
         canManageBadDebt: true,
         canManageEmployees: true,
         canManageStore: true,
+        canManageInventory: true,
+        canManageShop: true,
+        isActive: true,
         createdAt: true,
         updatedAt: true,
       },
     });
 
-    if (!user) {
-      throw new NotFoundError('Không tìm thấy tài khoản chủ buôn.');
+    if (!user || !user.isActive) {
+      throw new NotFoundError('Không tìm thấy tài khoản hoặc tài khoản đã bị khóa/xóa.');
     }
 
     res.status(200).json({
@@ -292,6 +310,8 @@ const getProfile = async (req, res, next) => {
           canManageBadDebt: user.canManageBadDebt,
           canManageEmployees: user.canManageEmployees,
           canManageStore: user.canManageStore,
+          canManageInventory: user.canManageInventory,
+          canManageShop: user.canManageShop,
         },
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,

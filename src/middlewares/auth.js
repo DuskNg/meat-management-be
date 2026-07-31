@@ -44,8 +44,8 @@ const requireAdmin = async (req, res, next) => {
       where: { id: req.user.id },
     });
 
-    if (!user || !user.isAdmin) {
-      throw new ForbiddenError('Bạn không có quyền quản trị viên.');
+    if (!user || !user.isAdmin || !user.isActive) {
+      throw new ForbiddenError('Bạn không có quyền quản trị viên hoặc tài khoản đã bị khóa/xóa.');
     }
 
     next();
@@ -65,8 +65,8 @@ const requirePermission = (permissionField) => async (req, res, next) => {
       where: { id: req.user.id },
     });
 
-    if (!user) {
-      throw new UnauthorizedError('Tài khoản không tồn tại.');
+    if (!user || !user.isActive) {
+      throw new UnauthorizedError('Tài khoản không tồn tại hoặc đã bị khóa/xóa.');
     }
 
     // Admin có toàn bộ quyền
