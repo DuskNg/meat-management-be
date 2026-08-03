@@ -360,6 +360,10 @@ const approveJoinRequest = async (req, res, next) => {
         create: { workspaceId: workspace.id, userId: request.userId, ...defaultPermissions },
         update: {},
       }),
+      prisma.user.update({
+        where: { id: request.userId },
+        data: defaultPermissions,
+      }),
     ]);
 
     await logActivity(
@@ -447,6 +451,20 @@ const updateMemberPermissions = async (req, res, next) => {
 
     const updated = await prisma.workspaceMember.update({
       where: { id: memberId },
+      data: {
+        canManageCustomers: canManageCustomers !== undefined ? !!canManageCustomers : undefined,
+        canManageDebt: canManageDebt !== undefined ? !!canManageDebt : undefined,
+        canManageBadDebt: canManageBadDebt !== undefined ? !!canManageBadDebt : undefined,
+        canManageEmployees: canManageEmployees !== undefined ? !!canManageEmployees : undefined,
+        canManageStore: canManageStore !== undefined ? !!canManageStore : undefined,
+        canManageInventory: canManageInventory !== undefined ? !!canManageInventory : undefined,
+        canManageShop: canManageShop !== undefined ? !!canManageShop : undefined,
+      },
+    });
+
+    // Đồng bộ sang bảng User để frontend của nhân viên nhận diện đúng quyền
+    await prisma.user.update({
+      where: { id: member.userId },
       data: {
         canManageCustomers: canManageCustomers !== undefined ? !!canManageCustomers : undefined,
         canManageDebt: canManageDebt !== undefined ? !!canManageDebt : undefined,

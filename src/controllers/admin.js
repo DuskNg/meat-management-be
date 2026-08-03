@@ -32,6 +32,30 @@ const getUsers = async (req, res, next) => {
         ownedWorkspace: {
           select: { id: true, name: true, inviteCode: true, isActive: true },
         },
+        workspaceMemberships: {
+          select: {
+            workspace: {
+              select: {
+                id: true,
+                name: true,
+                owner: {
+                  select: {
+                    id: true,
+                    name: true,
+                    phone: true,
+                    canManageCustomers: true,
+                    canManageDebt: true,
+                    canManageBadDebt: true,
+                    canManageEmployees: true,
+                    canManageStore: true,
+                    canManageInventory: true,
+                    canManageShop: true,
+                  },
+                },
+              },
+            },
+          },
+        },
       },
       orderBy: [
         { isActive: 'desc' },
@@ -39,9 +63,28 @@ const getUsers = async (req, res, next) => {
       ],
     });
 
+    // Định dạng lại danh sách user: nhân viên sẽ chung quyền với chủ sạp
+    const formattedUsers = users.map((user) => {
+      const isLinked = user.workspaceMemberships && user.workspaceMemberships.length > 0;
+      if (isLinked) {
+        const owner = user.workspaceMemberships[0].workspace.owner;
+        return {
+          ...user,
+          canManageCustomers: owner.canManageCustomers,
+          canManageDebt: owner.canManageDebt,
+          canManageBadDebt: owner.canManageBadDebt,
+          canManageEmployees: owner.canManageEmployees,
+          canManageStore: owner.canManageStore,
+          canManageInventory: owner.canManageInventory,
+          canManageShop: owner.canManageShop,
+        };
+      }
+      return user;
+    });
+
     res.status(200).json({
       success: true,
-      data: users,
+      data: formattedUsers,
     });
   } catch (error) {
     next(error);
@@ -154,6 +197,14 @@ const updatePermissions = async (req, res, next) => {
       throw new BadRequestError('Không thể sửa quyền của tài khoản Admin tối cao.');
     }
 
+    // Kiểm tra xem đây có phải là tài khoản nhân viên (được liên kết với chủ workspace) không
+    const membership = await prisma.workspaceMember.findFirst({
+      where: { userId: id },
+    });
+    if (membership) {
+      throw new BadRequestError('Tài khoản này là nhân viên Workspace. Quyền hạn của họ tự động chung với chủ Workspace.');
+    }
+
     // Thiết lập các quyền một cách độc lập
     const isOwnerBool = isWorkspaceOwner !== undefined ? !!isWorkspaceOwner : undefined;
     const customersVal = canManageCustomers !== undefined ? !!canManageCustomers : undefined;
@@ -177,6 +228,43 @@ const updatePermissions = async (req, res, next) => {
         canManageShop: shopVal,
       },
     });
+
+    // Nếu là chủ workspace, tự động đồng bộ quyền cho toàn bộ nhân viên liên kết
+    const workspace = await prisma.workspace.findUnique({
+      where: { ownerId: id },
+      include: { members: true },
+    });
+    if (workspace && workspace.members.length > 0) {
+      const memberUserIds = workspace.members.map((m) => m.userId);
+
+      // Đồng bộ ở bảng User
+      await prisma.user.updateMany({
+        where: { id: { in: memberUserIds } },
+        data: {
+          canManageCustomers: customersVal,
+          canManageDebt: debtVal,
+          canManageBadDebt: badDebtVal,
+          canManageEmployees: employeesVal,
+          canManageStore: storeVal,
+          canManageInventory: inventoryVal,
+          canManageShop: shopVal,
+        },
+      });
+
+      // Đồng bộ ở bảng WorkspaceMember
+      await prisma.workspaceMember.updateMany({
+        where: { workspaceId: workspace.id },
+        data: {
+          canManageCustomers: customersVal,
+          canManageDebt: debtVal,
+          canManageBadDebt: badDebtVal,
+          canManageEmployees: employeesVal,
+          canManageStore: storeVal,
+          canManageInventory: inventoryVal,
+          canManageShop: shopVal,
+        },
+      });
+    }
 
     // Ghi log hoạt động phân quyền của admin
     await logActivity(
