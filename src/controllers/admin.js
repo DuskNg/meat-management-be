@@ -17,6 +17,7 @@ const getUsers = async (req, res, next) => {
         name: true,
         phone: true,
         isAdmin: true,
+        isWorkspaceOwner: true,
         canManageCustomers: true,
         canManageDebt: true,
         canManageBadDebt: true,
@@ -28,6 +29,9 @@ const getUsers = async (req, res, next) => {
         deletedAt: true,
         createdAt: true,
         updatedAt: true,
+        ownedWorkspace: {
+          select: { id: true, name: true, inviteCode: true, isActive: true },
+        },
       },
       orderBy: [
         { isActive: 'desc' },
@@ -136,7 +140,7 @@ const restoreUser = async (req, res, next) => {
 const updatePermissions = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { canManageCustomers, canManageDebt, canManageBadDebt, canManageEmployees, canManageStore, canManageInventory, canManageShop } = req.body;
+    const { isWorkspaceOwner, canManageCustomers, canManageDebt, canManageBadDebt, canManageEmployees, canManageStore, canManageInventory, canManageShop } = req.body;
 
     const user = await prisma.user.findUnique({
       where: { id },
@@ -150,16 +154,27 @@ const updatePermissions = async (req, res, next) => {
       throw new BadRequestError('Không thể sửa quyền của tài khoản Admin tối cao.');
     }
 
+    // Thiết lập các quyền một cách độc lập
+    const isOwnerBool = isWorkspaceOwner !== undefined ? !!isWorkspaceOwner : undefined;
+    const customersVal = canManageCustomers !== undefined ? !!canManageCustomers : undefined;
+    const debtVal = canManageDebt !== undefined ? !!canManageDebt : undefined;
+    const badDebtVal = canManageBadDebt !== undefined ? !!canManageBadDebt : undefined;
+    const employeesVal = canManageEmployees !== undefined ? !!canManageEmployees : undefined;
+    const storeVal = canManageStore !== undefined ? !!canManageStore : undefined;
+    const inventoryVal = canManageInventory !== undefined ? !!canManageInventory : undefined;
+    const shopVal = canManageShop !== undefined ? !!canManageShop : undefined;
+
     const updatedUser = await prisma.user.update({
       where: { id },
       data: {
-        canManageCustomers: canManageCustomers !== undefined ? !!canManageCustomers : undefined,
-        canManageDebt: canManageDebt !== undefined ? !!canManageDebt : undefined,
-        canManageBadDebt: canManageBadDebt !== undefined ? !!canManageBadDebt : undefined,
-        canManageEmployees: canManageEmployees !== undefined ? !!canManageEmployees : undefined,
-        canManageStore: canManageStore !== undefined ? !!canManageStore : undefined,
-        canManageInventory: canManageInventory !== undefined ? !!canManageInventory : undefined,
-        canManageShop: canManageShop !== undefined ? !!canManageShop : undefined,
+        isWorkspaceOwner: isOwnerBool,
+        canManageCustomers: customersVal,
+        canManageDebt: debtVal,
+        canManageBadDebt: badDebtVal,
+        canManageEmployees: employeesVal,
+        canManageStore: storeVal,
+        canManageInventory: inventoryVal,
+        canManageShop: shopVal,
       },
     });
 
@@ -167,7 +182,7 @@ const updatePermissions = async (req, res, next) => {
     await logActivity(
       req.user.id,
       'UPDATE_USER_PERMISSIONS',
-      `Phân quyền cho tài khoản ${user.name} (${user.phone}): Khách hàng [${!!canManageCustomers}], Công nợ [${!!canManageDebt}], Nợ xấu [${!!canManageBadDebt}], Nhân viên [${!!canManageEmployees}], Cửa hàng [${!!canManageStore}], Kho [${!!canManageInventory}], Cửa hàng tính giờ [${!!canManageShop}]`
+      `Phân quyền cho tài khoản ${user.name} (${user.phone}): Chủ Workspace [${!!updatedUser.isWorkspaceOwner}], Khách hàng [${!!updatedUser.canManageCustomers}], Công nợ [${!!updatedUser.canManageDebt}], Nợ xấu [${!!updatedUser.canManageBadDebt}], Nhân viên [${!!updatedUser.canManageEmployees}], Cửa hàng [${!!updatedUser.canManageStore}], Kho [${!!updatedUser.canManageInventory}], Cửa hàng tính giờ [${!!updatedUser.canManageShop}]`
     );
 
     res.status(200).json({
@@ -178,6 +193,7 @@ const updatePermissions = async (req, res, next) => {
         name: updatedUser.name,
         phone: updatedUser.phone,
         permissions: {
+          isWorkspaceOwner: updatedUser.isWorkspaceOwner,
           canManageCustomers: updatedUser.canManageCustomers,
           canManageDebt: updatedUser.canManageDebt,
           canManageBadDebt: updatedUser.canManageBadDebt,
@@ -318,6 +334,54 @@ const getUserAiUsage = async (req, res, next) => {
   }
 };
 
+// 7. Admin bật/tắt quyền chủ Workspace cho một tài khoản
+const toggleWorkspaceOwner = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { isWorkspaceOwner } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
+    }
+    if (user.isAdmin) {
+      throw new BadRequestError('Không thể thay đổi quyền của tài khoản Admin tối cao.');
+    }
+
+    const isOwnerBool = !!isWorkspaceOwner;
+    const updateData = { isWorkspaceOwner: isOwnerBool };
+
+    const updated = await prisma.user.update({
+      where: { id },
+      data: updateData,
+    });
+
+    await logActivity(
+      req.user.id,
+      'TOGGLE_WORKSPACE_OWNER',
+      `${isOwnerBool ? 'Cấp' : 'Thu hồi'} quyền Chủ Workspace cho tài khoản ${user.name} (${user.phone})`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Đã ${isOwnerBool ? 'cấp' : 'thu hồi'} quyền Chủ Workspace cho ${user.name}.`,
+      data: {
+        id: updated.id,
+        isWorkspaceOwner: updated.isWorkspaceOwner,
+        canManageCustomers: updated.canManageCustomers,
+        canManageDebt: updated.canManageDebt,
+        canManageBadDebt: updated.canManageBadDebt,
+        canManageEmployees: updated.canManageEmployees,
+        canManageStore: updated.canManageStore,
+        canManageInventory: updated.canManageInventory,
+        canManageShop: updated.canManageShop,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getUsers,
   softDeleteUser,
@@ -325,4 +389,5 @@ module.exports = {
   updatePermissions,
   getUserLogs,
   getUserAiUsage,
+  toggleWorkspaceOwner,
 };

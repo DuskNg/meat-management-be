@@ -1,12 +1,12 @@
 // meat-management-be/src/controllers/product.js
 const prisma = require('../utils/db');
-const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
 
 // 1. Lấy danh sách sản phẩm hoạt động của chủ buôn đang đăng nhập (hỗ trợ lấy giá riêng theo khách hàng)
 const getProducts = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { customerId } = req.query;
 
     const products = await prisma.product.findMany({
@@ -60,7 +60,7 @@ const getProducts = async (req, res, next) => {
 const createProduct = async (req, res, next) => {
   try {
     const { name, defaultPrice, unit } = req.body;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     if (!name || defaultPrice === undefined) {
       throw new BadRequestError('Tên sản phẩm và giá bán mặc định là bắt buộc.');
@@ -69,6 +69,7 @@ const createProduct = async (req, res, next) => {
     const product = await prisma.product.create({
       data: {
         userId,
+        createdBy: req.user.id,
         name,
         defaultPrice: parseFloat(defaultPrice),
         unit: unit || 'kg',
@@ -96,7 +97,7 @@ const updateProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, defaultPrice, unit } = req.body;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     // Kiểm tra sản phẩm có tồn tại và thuộc chủ buôn này không
     const productExists = await prisma.product.findFirst({
@@ -140,7 +141,7 @@ const updateProduct = async (req, res, next) => {
 const deleteProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     // Kiểm tra sản phẩm có tồn tại và thuộc chủ buôn này không
     const productExists = await prisma.product.findFirst({
@@ -153,6 +154,13 @@ const deleteProduct = async (req, res, next) => {
 
     if (!productExists) {
       throw new NotFoundError('Không tìm thấy sản phẩm hoặc bạn không có quyền xóa.');
+    }
+
+    // Kiểm tra bảo vệ dữ liệu chéo: Nhân viên chỉ được xóa dữ liệu do chính mình tạo. Chủ Workspace và Admin tối cao có toàn quyền.
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && productExists.createdBy !== actorId && actorId !== productExists.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
     }
 
     // Ẩn sản phẩm đi bằng cách set isActive = false

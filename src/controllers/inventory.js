@@ -1,12 +1,12 @@
 // meat-management-be/src/controllers/inventory.js
 const prisma = require('../utils/db');
-const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
 
 // 1. Lấy danh sách sản phẩm trong kho và tổng giá trị kho
 const getInventoryProducts = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const products = await prisma.inventoryProduct.findMany({
       where: {
         userId,
@@ -45,7 +45,7 @@ const getInventoryProducts = async (req, res, next) => {
 // 2. Thêm sản phẩm mới vào kho
 const createInventoryProduct = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { name, quantity, price, unit } = req.body;
 
     if (!name || !name.trim()) {
@@ -65,6 +65,7 @@ const createInventoryProduct = async (req, res, next) => {
     const product = await prisma.inventoryProduct.create({
       data: {
         userId,
+        createdBy: req.user.id,
         name: name.trim(),
         quantity: qty,
         price: prc,
@@ -87,7 +88,7 @@ const createInventoryProduct = async (req, res, next) => {
 const updateInventoryProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { name, quantity, price, unit } = req.body;
 
     const product = await prisma.inventoryProduct.findFirst({
@@ -137,7 +138,7 @@ const updateInventoryProduct = async (req, res, next) => {
 const deleteInventoryProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const product = await prisma.inventoryProduct.findFirst({
       where: {
@@ -149,6 +150,13 @@ const deleteInventoryProduct = async (req, res, next) => {
 
     if (!product) {
       throw new NotFoundError('Sản phẩm kho không tồn tại.');
+    }
+
+    // Kiểm tra bảo vệ dữ liệu chéo: Nhân viên chỉ được xóa dữ liệu do chính mình tạo. Chủ Workspace và Admin tối cao có toàn quyền.
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && product.createdBy !== actorId && actorId !== product.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
     }
 
     await prisma.inventoryProduct.update({

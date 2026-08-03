@@ -2,10 +2,11 @@
 const express = require('express');
 const router = express.Router();
 const customerController = require('../controllers/customer');
-const { authenticateToken, requirePermission } = require('../middlewares/auth');
+const { authenticateToken, requirePermission, resolveWorkspace } = require('../middlewares/auth');
 
 // Bảo vệ tất cả các tuyến đường quản lý khách hàng bằng middleware xác thực token và quyền
 router.use(authenticateToken);
+router.use(resolveWorkspace); // Chuyển hướng userId sang workspace owner nếu là nhân viên
 router.use(requirePermission('canManageCustomers'));
 
 // Lấy danh sách toàn bộ khách hàng

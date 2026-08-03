@@ -26,6 +26,17 @@ const authenticateToken = (req, res, next) => {
 
       // Gắn thông tin người dùng đã giải mã vào object request
       req.user = decodedUser;
+
+      // Hỗ trợ Admin ghi đè quyền để xem và quản lý Workspace của chủ tài khoản khác
+      const overrideUserId = req.headers['x-user-override'];
+      if (decodedUser.isAdmin && overrideUserId) {
+        req.user = {
+          ...decodedUser,
+          id: overrideUserId,
+          isAdmin: false, // Hoạt động dưới danh nghĩa tài khoản được ghi đè
+        };
+      }
+
       next();
     });
   } catch (error) {
@@ -54,7 +65,7 @@ const requireAdmin = async (req, res, next) => {
   }
 };
 
-// Middleware yêu cầu phân quyền cụ thể
+// Middleware kiểm tra quyền hạn cụ thể
 const requirePermission = (permissionField) => async (req, res, next) => {
   try {
     if (!req.user || !req.user.id) {
@@ -74,9 +85,64 @@ const requirePermission = (permissionField) => async (req, res, next) => {
       return next();
     }
 
-    // Kiểm tra quyền cụ thể
+    // Nếu là thành viên workspace → kiểm tra quyền theo workspace member
+    if (req.workspaceMember) {
+      if (!req.workspaceMember[permissionField]) {
+        throw new ForbiddenError('Bạn không được cấp quyền thực hiện chức năng này trong Workspace.');
+      }
+      return next();
+    }
+
+    // Kiểm tra quyền cụ thể của tài khoản thường
     if (!user[permissionField]) {
       throw new ForbiddenError('Tài khoản của bạn không được cấp quyền thực hiện chức năng này.');
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Middleware giải quyết Workspace — gắn effectiveUserId và actorId vào request
+// Nếu user là thành viên của một workspace: effectiveUserId = ownerId (dùng data của chủ)
+// Nếu user thường: effectiveUserId = req.user.id (không thay đổi gì, tương thích ngược)
+const resolveWorkspace = async (req, res, next) => {
+  try {
+    if (!req.user || !req.user.id) {
+      req.effectiveUserId = null;
+      req.actorId = null;
+      req.workspaceMember = null;
+      return next();
+    }
+
+    const actorId = req.user.id;
+
+    // Tìm membership của user trong bất kỳ workspace nào
+    const membership = await prisma.workspaceMember.findFirst({
+      where: { userId: actorId },
+      include: {
+        workspace: {
+          select: {
+            id: true,
+            ownerId: true,
+            name: true,
+            isActive: true,
+          },
+        },
+      },
+    });
+
+    if (membership && membership.workspace && membership.workspace.isActive) {
+      // Thành viên workspace → dùng data của chủ workspace nhưng log theo actorId
+      req.effectiveUserId = membership.workspace.ownerId;
+      req.actorId = actorId;
+      req.workspaceMember = membership; // Chứa permissions để kiểm tra quyền
+    } else {
+      // User thường — hoàn toàn như cũ
+      req.effectiveUserId = actorId;
+      req.actorId = actorId;
+      req.workspaceMember = null;
     }
 
     next();
@@ -89,4 +155,6 @@ module.exports = {
   authenticateToken,
   requireAdmin,
   requirePermission,
+  resolveWorkspace,
 };
+

@@ -2,10 +2,11 @@
 const express = require('express');
 const router = express.Router();
 const paymentController = require('../controllers/payment');
-const { authenticateToken, requirePermission } = require('../middlewares/auth');
+const { authenticateToken, requirePermission, resolveWorkspace } = require('../middlewares/auth');
 
 // Bảo vệ toàn bộ các API trả tiền nợ bằng token và quyền quản lý khách hàng
 router.use(authenticateToken);
+router.use(resolveWorkspace); // Chuyển hướng userId sang workspace owner nếu là nhân viên
 router.use(requirePermission('canManageCustomers'));
 
 // Ghi nhận lượt thanh toán trả nợ của khách hàng

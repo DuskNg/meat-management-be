@@ -71,6 +71,7 @@ const adminRoutes = require('./routes/admin');
 const storeRoutes = require('./routes/store');
 const inventoryRoutes = require('./routes/inventory');
 const shopRoutes = require('./routes/shop');
+const workspaceRoutes = require('./routes/workspace');
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
@@ -83,6 +84,7 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/store', storeRoutes);
 app.use('/api/v1/inventory', inventoryRoutes);
 app.use('/api/v1/shop', shopRoutes);
+app.use('/api/v1/workspace', workspaceRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {
@@ -157,4 +159,4 @@ app.listen(PORT, () => {
   logger.info(`Máy chủ Express đang chạy thành công tại cổng ${PORT}`);
 });
 
-// Kích hoạt nodemon tải lại Prisma Client mới phát sinh
+// Kích hoạt nodemon tải lại Prisma Client mới phát sinh: Workspace Owner permissions updated.

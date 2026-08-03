@@ -6,7 +6,7 @@ const { logActivity } = require('../utils/activityLogger');
 // 1. Lấy toàn bộ danh sách khách hàng của chủ buôn đang đăng nhập
 const getCustomers = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { isBadDebt } = req.query;
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -85,7 +85,7 @@ const getCustomers = async (req, res, next) => {
 const getCustomerById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
@@ -152,7 +152,7 @@ const getCustomerById = async (req, res, next) => {
 const createCustomer = async (req, res, next) => {
   try {
     const { name, phone, address, note, isBadDebt, manualDebt } = req.body;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     if (!name || name.trim() === '') {
       throw new BadRequestError('Tên khách hàng là thông tin bắt buộc.');
@@ -220,6 +220,7 @@ const createCustomer = async (req, res, next) => {
     const customer = await prisma.customer.create({
       data: {
         userId,
+        createdBy: req.user.id,
         name: trimmedName,
         phone: phone ? phone.trim() : null,
         address: address ? address.trim() : null,
@@ -250,7 +251,7 @@ const updateCustomer = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, phone, address, note, isBadDebt } = req.body;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     // Kiểm tra khách hàng có tồn tại và thuộc về chủ buôn này hay không
     const customerExists = await prisma.customer.findFirst({
@@ -353,7 +354,7 @@ const updateCustomer = async (req, res, next) => {
 const deleteCustomer = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     // Kiểm tra khách hàng có tồn tại và thuộc về chủ buôn này hay không
     const customerExists = await prisma.customer.findFirst({
@@ -366,6 +367,13 @@ const deleteCustomer = async (req, res, next) => {
 
     if (!customerExists) {
       throw new NotFoundError('Không tìm thấy khách hàng hoặc bạn không có quyền xóa.');
+    }
+
+    // Kiểm tra bảo vệ dữ liệu chéo: Nhân viên chỉ được xóa dữ liệu do chính mình tạo. Chủ Workspace và Admin tối cao có toàn quyền.
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && customerExists.createdBy !== actorId && actorId !== customerExists.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
     }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });

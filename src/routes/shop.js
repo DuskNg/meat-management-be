@@ -1,11 +1,12 @@
 // meat-management-be/src/routes/shop.js
 const express = require('express');
 const router = express.Router();
-const { authenticateToken, requirePermission } = require('../middlewares/auth');
+const { authenticateToken, requirePermission, resolveWorkspace } = require('../middlewares/auth');
 const shopController = require('../controllers/shop');
 
 // Tất cả các API quản lý cửa hàng tính giờ yêu cầu đăng nhập và có quyền canManageShop
 router.use(authenticateToken);
+router.use(resolveWorkspace); // Chuyển hướng userId sang workspace owner nếu là nhân viên
 router.use(requirePermission('canManageShop'));
 
 // 1. Quản lý Bàn chơi

@@ -69,6 +69,7 @@ const requestOtp = async (req, res, next) => {
         phone: user.phone,
         hasPin: !!user.pin,
         isAdmin: user.isAdmin,
+        isWorkspaceOwner: user.isWorkspaceOwner,
         permissions: {
           canManageCustomers: user.canManageCustomers,
           canManageDebt: user.canManageDebt,
@@ -174,6 +175,7 @@ const verifyOtp = async (req, res, next) => {
         phone: user.phone,
         hasPin: !!user.pin,
         isAdmin: user.isAdmin,
+        isWorkspaceOwner: user.isWorkspaceOwner,
         permissions: {
           canManageCustomers: user.canManageCustomers,
           canManageDebt: user.canManageDebt,
@@ -279,6 +281,7 @@ const getProfile = async (req, res, next) => {
         phone: true,
         pin: true,
         isAdmin: true,
+        isWorkspaceOwner: true,
         canManageCustomers: true,
         canManageDebt: true,
         canManageBadDebt: true,

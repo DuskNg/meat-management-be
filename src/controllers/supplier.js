@@ -1,12 +1,12 @@
 const prisma = require('../utils/db');
-const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
 
 // 1. Lấy toàn bộ danh sách nhà cung cấp kèm theo dư nợ (Tiền nợ)
 // Dư nợ = Tổng số tiền transactions (nhập hàng) - Tổng số tiền payments (đã trả)
 const getSuppliers = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     // Lấy danh sách nhà cung cấp đang hoạt động của chủ sạp
     const suppliers = await prisma.supplier.findMany({
@@ -58,7 +58,7 @@ const getSuppliers = async (req, res, next) => {
 const createSupplier = async (req, res, next) => {
   try {
     const { name, phone, address, note } = req.body;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     if (!name || name.trim() === '') {
       throw new BadRequestError('Tên nhà cung cấp là thông tin bắt buộc.');
@@ -82,6 +82,7 @@ const createSupplier = async (req, res, next) => {
     const supplier = await prisma.supplier.create({
       data: {
         userId,
+        createdBy: req.user.id,
         name: trimmedName,
         phone: phone ? phone.trim() : null,
         address: address ? address.trim() : null,
@@ -109,7 +110,7 @@ const updateSupplier = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, phone, address, note } = req.body;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     // Kiểm tra sự tồn tại của nhà cung cấp
     const supplierExists = await prisma.supplier.findFirst({
@@ -172,7 +173,7 @@ const updateSupplier = async (req, res, next) => {
 const deleteSupplier = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const supplierExists = await prisma.supplier.findFirst({
       where: {
@@ -184,6 +185,13 @@ const deleteSupplier = async (req, res, next) => {
 
     if (!supplierExists) {
       throw new NotFoundError('Không tìm thấy nhà cung cấp này hoặc bạn không có quyền xóa.');
+    }
+
+    // Kiểm tra bảo vệ dữ liệu chéo: Nhân viên chỉ được xóa dữ liệu do chính mình tạo. Chủ Workspace và Admin tối cao có toàn quyền.
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && supplierExists.createdBy !== actorId && actorId !== supplierExists.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
     }
 
     await prisma.supplier.update({
@@ -212,7 +220,7 @@ const deleteSupplier = async (req, res, next) => {
 const createSupplierTransaction = async (req, res, next) => {
   try {
     const { supplierId, totalAmount, note, date } = req.body;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     if (!supplierId) {
       throw new BadRequestError('supplierId là bắt buộc.');
@@ -237,6 +245,7 @@ const createSupplierTransaction = async (req, res, next) => {
     const transaction = await prisma.supplierTransaction.create({
       data: {
         supplierId,
+        createdBy: req.user.id,
         totalAmount: parseFloat(totalAmount),
         note: note ? note.trim() : null,
         date: date ? new Date(date) : new Date(),
@@ -263,7 +272,7 @@ const createSupplierTransaction = async (req, res, next) => {
 const createSupplierPayment = async (req, res, next) => {
   try {
     const { supplierId, amount, note, paidAt } = req.body;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     if (!supplierId) {
       throw new BadRequestError('supplierId là bắt buộc.');
@@ -288,6 +297,7 @@ const createSupplierPayment = async (req, res, next) => {
     const payment = await prisma.supplierPayment.create({
       data: {
         supplierId,
+        createdBy: req.user.id,
         amount: parseFloat(amount),
         note: note ? note.trim() : null,
         paidAt: paidAt ? new Date(paidAt) : new Date(),
@@ -314,7 +324,7 @@ const createSupplierPayment = async (req, res, next) => {
 const getSupplierHistory = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     // Kiểm tra nhà cung cấp
     const supplier = await prisma.supplier.findFirst({

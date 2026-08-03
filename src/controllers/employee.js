@@ -21,7 +21,7 @@ const parseMonthKey = (monthKey) => {
 // 1. Lấy toàn bộ danh sách nhân viên
 const getEmployees = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const employees = await prisma.employee.findMany({
       where: {
         userId,
@@ -45,7 +45,7 @@ const getEmployees = async (req, res, next) => {
 const createEmployee = async (req, res, next) => {
   try {
     const { name, phone, address, role, baseSalary } = req.body;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     if (!name || name.trim() === '') {
       throw new BadRequestError('Tên nhân viên là thông tin bắt buộc.');
@@ -85,7 +85,7 @@ const updateEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, phone, address, role, baseSalary } = req.body;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const employee = await prisma.employee.findFirst({
       where: { id, userId, isActive: true },
@@ -125,7 +125,7 @@ const updateEmployee = async (req, res, next) => {
 const deleteEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const employee = await prisma.employee.findFirst({
       where: { id, userId, isActive: true },
@@ -158,7 +158,7 @@ const deleteEmployee = async (req, res, next) => {
 // 5. Lấy danh sách chấm công theo ngày
 const getAttendances = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { date } = req.query; // Ngày truyền lên dạng "YYYY-MM-DD"
 
     if (!date) {
@@ -216,7 +216,7 @@ const getAttendances = async (req, res, next) => {
 // 6. Ghi nhận/Cập nhật chấm công hàng loạt trong ngày
 const saveAttendance = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { date, list } = req.body; // list: [{ employeeId, status, shift, note }]
 
     if (!date || !list || !Array.isArray(list)) {
@@ -290,7 +290,7 @@ const saveAttendance = async (req, res, next) => {
 // 7. Tạo khoản tạm ứng lương cho nhân viên
 const createSalaryAdvance = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { employeeId, amount, note, date } = req.body;
 
     if (!employeeId || !amount || parseFloat(amount) <= 0) {
@@ -363,7 +363,7 @@ const createSalaryAdvance = async (req, res, next) => {
 // 8. Tính toán bảng lương dự kiến của một tháng
 const calculateSalary = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { monthKey } = req.query; // Tháng tính lương, định dạng "MM/YYYY"
 
     if (!monthKey) {
@@ -478,7 +478,7 @@ const calculateSalary = async (req, res, next) => {
 // 9. Chốt và thanh toán lương tháng
 const paySalary = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { employeeId, monthKey, bonus, deductions, note } = req.body;
 
     if (!employeeId || !monthKey) {
@@ -576,7 +576,7 @@ const paySalary = async (req, res, next) => {
 const getEmployeeHistory = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const employee = await prisma.employee.findFirst({
       where: { id, userId, isActive: true },

@@ -1,11 +1,11 @@
 // meat-management-be/src/controllers/store.js
 const prisma = require('../utils/db');
-const { BadRequestError, NotFoundError, AppError } = require('../utils/errors');
+const { BadRequestError, NotFoundError, AppError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
 const crypto = require('crypto');
 
 // Hàm hỗ trợ so khớp tên món ăn hoặc chuyển thành "Món lẻ" ảo
-const matchOrCreateStoreProducts = async (userId, items) => {
+const matchOrCreateStoreProducts = async (userId, items, creatorId) => {
   const matched = [];
 
   // Lấy toàn bộ thực đơn của chủ quán
@@ -27,6 +27,7 @@ const matchOrCreateStoreProducts = async (userId, items) => {
     monLeProduct = await prisma.product.create({
       data: {
         userId,
+        createdBy: creatorId,
         name: 'Món lẻ',
         defaultPrice: 0,
         unit: 'phần',
@@ -73,7 +74,7 @@ const matchOrCreateStoreProducts = async (userId, items) => {
 // 1. Tạo hàng loạt bàn ăn trong một lần gửi (Bulk Create Tables)
 const createTablesBulk = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { prefix, count } = req.body;
     const tableCount = parseInt(count);
 
@@ -87,6 +88,7 @@ const createTablesBulk = async (req, res, next) => {
       tablesData.push({
         id: crypto.randomUUID(),
         userId,
+        createdBy: req.user.id,
         name: `${cleanPrefix} ${i}`,
         type: 'store',
         isActive: true,
@@ -139,7 +141,7 @@ const createTablesBulk = async (req, res, next) => {
 // 2. Tính tổng doanh thu từ tất cả các đơn hàng cửa hàng (Tổng doanh thu)
 const getStoreTotalRevenue = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const aggregations = await prisma.transaction.aggregate({
       _sum: {
@@ -167,7 +169,7 @@ const getStoreTotalRevenue = async (req, res, next) => {
 // 3. Tính doanh thu của cửa hàng phân tách theo từng ngày (Doanh thu theo ngày)
 const getStoreDailyRevenue = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const transactions = await prisma.transaction.findMany({
       where: {
@@ -209,7 +211,7 @@ const getStoreDailyRevenue = async (req, res, next) => {
 // 4. Lấy danh sách bàn ăn (đọc từ bảng Customer với type = 'store')
 const getTables = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const tables = await prisma.customer.findMany({
       where: {
         userId,
@@ -264,7 +266,7 @@ const getTables = async (req, res, next) => {
 const getTableById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const table = await prisma.customer.findFirst({
       where: {
@@ -291,7 +293,7 @@ const getTableById = async (req, res, next) => {
 // 6. Tạo một bàn ăn mới đơn lẻ
 const createTable = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { name, phone, address, note } = req.body;
 
     if (!name || !name.trim()) {
@@ -314,6 +316,7 @@ const createTable = async (req, res, next) => {
     const table = await prisma.customer.create({
       data: {
         userId,
+        createdBy: req.user.id,
         name: name.trim(),
         phone: phone?.trim() || null,
         address: address?.trim() || null,
@@ -337,7 +340,7 @@ const createTable = async (req, res, next) => {
 const updateTable = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { name, phone, address, note } = req.body;
 
     const table = await prisma.customer.findFirst({
@@ -393,7 +396,7 @@ const updateTable = async (req, res, next) => {
 const deleteTable = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const table = await prisma.customer.findFirst({
       where: {
@@ -406,6 +409,13 @@ const deleteTable = async (req, res, next) => {
 
     if (!table) {
       throw new NotFoundError('Bàn ăn không tồn tại.');
+    }
+
+    // Kiểm tra bảo vệ dữ liệu chéo: Nhân viên chỉ được xóa dữ liệu do chính mình tạo. Chủ Workspace và Admin tối cao có toàn quyền.
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && table.createdBy !== actorId && actorId !== table.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
     }
 
     await prisma.customer.update({
@@ -427,7 +437,7 @@ const deleteTable = async (req, res, next) => {
 // 9. Lấy danh sách thực đơn (Sản phẩm với type = 'store')
 const getProducts = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const products = await prisma.product.findMany({
       where: {
         userId,
@@ -451,7 +461,7 @@ const getProducts = async (req, res, next) => {
 // 10. Tạo món ăn thực đơn mới
 const createProduct = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { name, defaultPrice, unit } = req.body;
 
     if (!name || !name.trim()) {
@@ -466,6 +476,7 @@ const createProduct = async (req, res, next) => {
     const product = await prisma.product.create({
       data: {
         userId,
+        createdBy: req.user.id,
         name: name.trim(),
         defaultPrice: price,
         unit: unit?.trim() || 'phần',
@@ -489,7 +500,7 @@ const createProduct = async (req, res, next) => {
 const updateProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { name, defaultPrice, unit, isActive } = req.body;
 
     const product = await prisma.product.findFirst({
@@ -534,7 +545,7 @@ const updateProduct = async (req, res, next) => {
 const deleteProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const product = await prisma.product.findFirst({
       where: {
@@ -546,6 +557,13 @@ const deleteProduct = async (req, res, next) => {
 
     if (!product) {
       throw new NotFoundError('Món ăn không tồn tại.');
+    }
+
+    // Kiểm tra bảo vệ dữ liệu chéo: Nhân viên chỉ được xóa dữ liệu do chính mình tạo. Chủ Workspace và Admin tối cao có toàn quyền.
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && product.createdBy !== actorId && actorId !== product.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
     }
 
     await prisma.product.update({
@@ -567,7 +585,7 @@ const deleteProduct = async (req, res, next) => {
 // 13. Lấy danh sách giao dịch/hóa đơn gọi món
 const getTransactions = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { customerId } = req.query;
 
     const whereClause = {
@@ -610,7 +628,7 @@ const getTransactions = async (req, res, next) => {
 // 14. Tạo hóa đơn gọi món mới cho bàn ăn
 const createTransaction = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { customerId, date, note, items } = req.body;
 
     if (!customerId || !items || !Array.isArray(items) || items.length === 0) {
@@ -638,6 +656,7 @@ const createTransaction = async (req, res, next) => {
       monLeProduct = await prisma.product.create({
         data: {
           userId,
+          createdBy: req.user.id,
           name: 'Món lẻ',
           defaultPrice: 0,
           unit: 'phần',
@@ -714,6 +733,7 @@ const createTransaction = async (req, res, next) => {
         data: {
           customerId,
           userId,
+          createdBy: req.user.id,
           date: date ? new Date(date) : new Date(),
           note: note?.trim() || null,
           totalAmount: calculatedTotal,
@@ -752,7 +772,7 @@ const createTransaction = async (req, res, next) => {
 const deleteTransaction = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const transaction = await prisma.transaction.findFirst({
       where: {
@@ -764,6 +784,13 @@ const deleteTransaction = async (req, res, next) => {
 
     if (!transaction) {
       throw new NotFoundError('Hóa đơn gọi món không tồn tại.');
+    }
+
+    // Kiểm tra bảo vệ dữ liệu chéo: Nhân viên chỉ được xóa dữ liệu do chính mình tạo. Chủ Workspace và Admin tối cao có toàn quyền.
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && transaction.createdBy !== actorId && actorId !== transaction.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
     }
 
     await prisma.$transaction([
@@ -789,7 +816,7 @@ const deleteTransaction = async (req, res, next) => {
 // 16. Lấy danh sách các đợt thanh toán hóa đơn bàn ăn
 const getPayments = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { customerId } = req.query;
 
     const whereClause = {
@@ -827,7 +854,7 @@ const getPayments = async (req, res, next) => {
 // 17. Thực hiện thanh toán cho bàn ăn
 const createPayment = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { customerId, amount: reqAmount, paidAt, note } = req.body;
 
     if (!customerId || reqAmount === undefined) {
@@ -850,6 +877,7 @@ const createPayment = async (req, res, next) => {
     const payment = await prisma.payment.create({
       data: {
         customerId,
+        createdBy: req.user.id,
         amount,
         paidAt: paidAt ? new Date(paidAt) : new Date(),
         note: note?.trim() || 'Thanh toán bàn',
@@ -871,7 +899,7 @@ const createPayment = async (req, res, next) => {
 // 18. Nhận diện hình ảnh tích kê/hóa đơn qua Google Gemini API
 const scanInvoice = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { image } = req.body;
 
     if (!image) {
@@ -895,7 +923,7 @@ const scanInvoice = async (req, res, next) => {
         { name: 'Bún chả', quantity: 2, price: 45000, amount: 90000 },
         { name: 'Nước ngọt', quantity: 2, price: 15000, amount: 30000 },
       ];
-      const matchedMockItems = await matchOrCreateStoreProducts(userId, mockItems);
+      const matchedMockItems = await matchOrCreateStoreProducts(userId, mockItems, req.user.id);
       return res.status(200).json({
         success: true,
         isMock: true,
@@ -982,7 +1010,7 @@ Lưu ý quy đổi:
     }
 
     const parsedJson = JSON.parse(textResponse);
-    const matchedItems = await matchOrCreateStoreProducts(userId, parsedJson.items);
+    const matchedItems = await matchOrCreateStoreProducts(userId, parsedJson.items, req.user.id);
 
     res.status(200).json({
       success: true,
@@ -997,7 +1025,7 @@ Lưu ý quy đổi:
 // 19. Nhận diện giọng nói gọi món qua Google Gemini API
 const voiceToText = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { audio, mimeType: reqMimeType, transcript } = req.body;
 
     if (!audio && !transcript) {
@@ -1014,7 +1042,7 @@ const voiceToText = async (req, res, next) => {
         { name: 'Bún chả', quantity: 2, price: 45000, amount: 90000 },
         { name: 'Trà đá', quantity: 2, price: 5000, amount: 10000 },
       ];
-      const matchedMockItems = await matchOrCreateStoreProducts(userId, mockItems);
+      const matchedMockItems = await matchOrCreateStoreProducts(userId, mockItems, req.user.id);
       return res.status(200).json({
         success: true,
         isMock: true,
@@ -1126,7 +1154,7 @@ Hãy phân tích câu nói: "${transcript || 'Hãy nghe file ghi âm đính kèm
       });
     }
 
-    const matchedItems = await matchOrCreateStoreProducts(userId, parsedJson.items || []);
+    const matchedItems = await matchOrCreateStoreProducts(userId, parsedJson.items || [], req.user.id);
 
     res.status(200).json({
       success: true,

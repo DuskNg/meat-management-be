@@ -26,4 +26,7 @@ router.get('/users/:id/logs', adminController.getUserLogs);
 // Xem chi phí sử dụng AI của một tài khoản
 router.get('/users/:id/ai-usage', adminController.getUserAiUsage);
 
+// Bật/tắt quyền Chủ Workspace cho một tài khoản
+router.put('/users/:id/workspace-owner', adminController.toggleWorkspaceOwner);
+
 module.exports = router;

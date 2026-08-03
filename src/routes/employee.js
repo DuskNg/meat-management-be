@@ -2,10 +2,11 @@
 const express = require('express');
 const router = express.Router();
 const employeeController = require('../controllers/employee');
-const { authenticateToken, requirePermission } = require('../middlewares/auth');
+const { authenticateToken, requirePermission, resolveWorkspace } = require('../middlewares/auth');
 
 // Tất cả các tuyến đường cần xác thực người dùng và quyền quản lý nhân viên
 router.use(authenticateToken);
+router.use(resolveWorkspace); // Chuyển hướng userId sang workspace owner nếu là nhân viên
 router.use(requirePermission('canManageEmployees'));
 
 // API CRUD Nhân viên

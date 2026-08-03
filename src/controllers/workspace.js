@@ -1,0 +1,534 @@
+// meat-management-be/src/controllers/workspace.js
+const prisma = require('../utils/db');
+const { BadRequestError, NotFoundError, ForbiddenError, ConflictError } = require('../utils/errors');
+const { logActivity } = require('../utils/activityLogger');
+const crypto = require('crypto');
+
+// Tạo mã mời ngẫu nhiên 8 ký tự (chữ hoa + số)
+const generateInviteCode = () => {
+  return crypto.randomBytes(4).toString('hex').toUpperCase();
+};
+
+// 1. Chủ tạo Workspace (chỉ dùng được nếu isWorkspaceOwner = true)
+const createWorkspace = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { name } = req.body;
+
+    if (!name || !name.trim()) {
+      throw new BadRequestError('Tên workspace là bắt buộc.');
+    }
+
+    // Kiểm tra quyền tạo workspace
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.isActive) {
+      throw new NotFoundError('Không tìm thấy tài khoản.');
+    }
+    if (!user.isWorkspaceOwner && !user.isAdmin) {
+      throw new ForbiddenError('Tài khoản của bạn không được phép tạo Workspace. Vui lòng liên hệ Admin.');
+    }
+
+    // Kiểm tra xem đã có workspace chưa
+    const existing = await prisma.workspace.findUnique({ where: { ownerId: userId } });
+    if (existing) {
+      throw new ConflictError('Bạn đã có một Workspace rồi. Mỗi tài khoản chỉ được tạo 1 Workspace.');
+    }
+
+    // Tạo mã mời duy nhất
+    let inviteCode;
+    let isUnique = false;
+    while (!isUnique) {
+      inviteCode = generateInviteCode();
+      const exists = await prisma.workspace.findUnique({ where: { inviteCode } });
+      if (!exists) isUnique = true;
+    }
+
+    const workspace = await prisma.workspace.create({
+      data: {
+        ownerId: userId,
+        name: name.trim(),
+        inviteCode,
+      },
+    });
+
+    await logActivity(userId, 'CREATE_WORKSPACE', `Tạo Workspace: "${workspace.name}" với mã mời ${workspace.inviteCode}`);
+
+    res.status(201).json({
+      success: true,
+      message: 'Tạo Workspace thành công.',
+      data: workspace,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 2. Lấy thông tin workspace của chủ (kèm members và pending requests)
+const getMyWorkspace = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    const workspace = await prisma.workspace.findUnique({
+      where: { ownerId: userId },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: { id: true, name: true, phone: true },
+            },
+          },
+          orderBy: { joinedAt: 'asc' },
+        },
+        joinRequests: {
+          where: { status: 'pending' },
+          include: {
+            user: {
+              select: { id: true, name: true, phone: true },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+
+    if (!workspace) {
+      return res.status(200).json({
+        success: true,
+        data: null,
+        message: 'Bạn chưa có Workspace. Hãy tạo mới.',
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: workspace,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 3. Lấy danh sách yêu cầu đang chờ (dùng cho polling thông báo — gọn nhẹ)
+const getPendingRequests = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    const workspace = await prisma.workspace.findUnique({ where: { ownerId: userId } });
+    if (!workspace) {
+      return res.status(200).json({ success: true, data: [], count: 0 });
+    }
+
+    const requests = await prisma.workspaceJoinRequest.findMany({
+      where: { workspaceId: workspace.id, status: 'pending' },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.status(200).json({
+      success: true,
+      data: requests,
+      count: requests.length,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 4. Nhân viên gửi yêu cầu tham gia workspace qua inviteCode
+const joinWorkspace = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { inviteCode } = req.body;
+
+    if (!inviteCode || !inviteCode.trim()) {
+      throw new BadRequestError('Mã mời là bắt buộc.');
+    }
+
+    // Tìm workspace theo mã mời
+    const workspace = await prisma.workspace.findUnique({
+      where: { inviteCode: inviteCode.trim().toUpperCase() },
+      include: { owner: { select: { name: true } } },
+    });
+
+    if (!workspace || !workspace.isActive) {
+      throw new NotFoundError('Mã mời không hợp lệ hoặc workspace đã bị tắt.');
+    }
+
+    // Không thể tự gia nhập workspace của chính mình
+    if (workspace.ownerId === userId) {
+      throw new BadRequestError('Bạn là chủ của Workspace này, không cần tham gia.');
+    }
+
+    // Kiểm tra đã là thành viên chưa
+    const existingMember = await prisma.workspaceMember.findFirst({
+      where: { workspaceId: workspace.id, userId },
+    });
+    if (existingMember) {
+      return res.status(200).json({
+        success: true,
+        status: 'already_member',
+        message: `Bạn đã là thành viên của Workspace "${workspace.name}" rồi.`,
+        data: { workspaceName: workspace.name, ownerName: workspace.owner.name },
+      });
+    }
+
+    // Kiểm tra yêu cầu đang chờ
+    const existingRequest = await prisma.workspaceJoinRequest.findFirst({
+      where: { workspaceId: workspace.id, userId },
+    });
+
+    if (existingRequest) {
+      if (existingRequest.status === 'pending') {
+        return res.status(200).json({
+          success: true,
+          status: 'pending',
+          message: `Yêu cầu của bạn đang chờ phê duyệt từ chủ Workspace "${workspace.name}".`,
+          data: { requestId: existingRequest.id, workspaceName: workspace.name, ownerName: workspace.owner.name },
+        });
+      }
+      if (existingRequest.status === 'rejected') {
+        // Reset yêu cầu bị từ chối để gửi lại
+        await prisma.workspaceJoinRequest.update({
+          where: { id: existingRequest.id },
+          data: { status: 'pending', updatedAt: new Date() },
+        });
+        return res.status(200).json({
+          success: true,
+          status: 'pending',
+          message: `Đã gửi lại yêu cầu tham gia Workspace "${workspace.name}". Vui lòng chờ phê duyệt.`,
+          data: { requestId: existingRequest.id, workspaceName: workspace.name, ownerName: workspace.owner.name },
+        });
+      }
+    }
+
+    // Tạo yêu cầu mới
+    const joinRequest = await prisma.workspaceJoinRequest.create({
+      data: {
+        workspaceId: workspace.id,
+        userId,
+        status: 'pending',
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      status: 'pending',
+      message: `Yêu cầu tham gia Workspace "${workspace.name}" đã được gửi. Vui lòng chờ chủ phê duyệt.`,
+      data: { requestId: joinRequest.id, workspaceName: workspace.name, ownerName: workspace.owner.name },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 5. Nhân viên kiểm tra trạng thái yêu cầu tham gia của mình
+const getJoinStatus = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    // Kiểm tra xem đã là thành viên chưa
+    const membership = await prisma.workspaceMember.findFirst({
+      where: { userId },
+      include: {
+        workspace: {
+          select: {
+            id: true,
+            name: true,
+            ownerId: true,
+            owner: { select: { name: true } },
+          },
+        },
+      },
+    });
+
+    if (membership) {
+      return res.status(200).json({
+        success: true,
+        status: 'approved',
+        data: {
+          workspaceId: membership.workspaceId,
+          workspaceName: membership.workspace.name,
+          ownerName: membership.workspace.owner.name,
+          permissions: {
+            canManageCustomers: membership.canManageCustomers,
+            canManageDebt: membership.canManageDebt,
+            canManageBadDebt: membership.canManageBadDebt,
+            canManageEmployees: membership.canManageEmployees,
+            canManageStore: membership.canManageStore,
+            canManageInventory: membership.canManageInventory,
+            canManageShop: membership.canManageShop,
+          },
+        },
+      });
+    }
+
+    // Kiểm tra yêu cầu đang chờ
+    const request = await prisma.workspaceJoinRequest.findFirst({
+      where: { userId, status: 'pending' },
+      include: {
+        workspace: {
+          select: { name: true, owner: { select: { name: true } } },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (request) {
+      return res.status(200).json({
+        success: true,
+        status: 'pending',
+        data: {
+          requestId: request.id,
+          workspaceName: request.workspace.name,
+          ownerName: request.workspace.owner.name,
+        },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      status: 'none',
+      data: null,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 6. Chủ phê duyệt yêu cầu tham gia
+const approveJoinRequest = async (req, res, next) => {
+  try {
+    const ownerId = req.user.id;
+    const { requestId } = req.params;
+
+    // Lấy workspace của chủ
+    const workspace = await prisma.workspace.findUnique({ where: { ownerId } });
+    if (!workspace) {
+      throw new NotFoundError('Bạn chưa có Workspace.');
+    }
+
+    // Lấy yêu cầu tham gia
+    const request = await prisma.workspaceJoinRequest.findUnique({
+      where: { id: requestId },
+      include: { user: { select: { id: true, name: true, phone: true } } },
+    });
+
+    if (!request || request.workspaceId !== workspace.id) {
+      throw new NotFoundError('Không tìm thấy yêu cầu tham gia.');
+    }
+    if (request.status !== 'pending') {
+      throw new BadRequestError('Yêu cầu này đã được xử lý rồi.');
+    }
+
+    // Tạo thành viên và cập nhật trạng thái yêu cầu (trong transaction)
+    await prisma.$transaction([
+      prisma.workspaceJoinRequest.update({
+        where: { id: requestId },
+        data: { status: 'approved' },
+      }),
+      prisma.workspaceMember.upsert({
+        where: { workspaceId_userId: { workspaceId: workspace.id, userId: request.userId } },
+        create: { workspaceId: workspace.id, userId: request.userId },
+        update: {},
+      }),
+    ]);
+
+    await logActivity(
+      ownerId,
+      'APPROVE_WORKSPACE_JOIN',
+      `Phê duyệt ${request.user.name} (${request.user.phone}) tham gia Workspace "${workspace.name}"`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Đã phê duyệt ${request.user.name} tham gia Workspace.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 7. Chủ từ chối yêu cầu tham gia
+const rejectJoinRequest = async (req, res, next) => {
+  try {
+    const ownerId = req.user.id;
+    const { requestId } = req.params;
+
+    const workspace = await prisma.workspace.findUnique({ where: { ownerId } });
+    if (!workspace) throw new NotFoundError('Bạn chưa có Workspace.');
+
+    const request = await prisma.workspaceJoinRequest.findUnique({
+      where: { id: requestId },
+      include: { user: { select: { id: true, name: true, phone: true } } },
+    });
+
+    if (!request || request.workspaceId !== workspace.id) {
+      throw new NotFoundError('Không tìm thấy yêu cầu tham gia.');
+    }
+    if (request.status !== 'pending') {
+      throw new BadRequestError('Yêu cầu này đã được xử lý rồi.');
+    }
+
+    await prisma.workspaceJoinRequest.update({
+      where: { id: requestId },
+      data: { status: 'rejected' },
+    });
+
+    await logActivity(
+      ownerId,
+      'REJECT_WORKSPACE_JOIN',
+      `Từ chối ${request.user.name} (${request.user.phone}) tham gia Workspace "${workspace.name}"`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Đã từ chối yêu cầu của ${request.user.name}.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 8. Chủ cập nhật quyền thành viên
+const updateMemberPermissions = async (req, res, next) => {
+  try {
+    const ownerId = req.user.id;
+    const { memberId } = req.params;
+    const {
+      canManageCustomers,
+      canManageDebt,
+      canManageBadDebt,
+      canManageEmployees,
+      canManageStore,
+      canManageInventory,
+      canManageShop,
+    } = req.body;
+
+    const workspace = await prisma.workspace.findUnique({ where: { ownerId } });
+    if (!workspace) throw new NotFoundError('Bạn chưa có Workspace.');
+
+    const member = await prisma.workspaceMember.findUnique({
+      where: { id: memberId },
+      include: { user: { select: { name: true, phone: true } } },
+    });
+
+    if (!member || member.workspaceId !== workspace.id) {
+      throw new NotFoundError('Không tìm thấy thành viên trong Workspace của bạn.');
+    }
+
+    const updated = await prisma.workspaceMember.update({
+      where: { id: memberId },
+      data: {
+        canManageCustomers: canManageCustomers !== undefined ? !!canManageCustomers : undefined,
+        canManageDebt: canManageDebt !== undefined ? !!canManageDebt : undefined,
+        canManageBadDebt: canManageBadDebt !== undefined ? !!canManageBadDebt : undefined,
+        canManageEmployees: canManageEmployees !== undefined ? !!canManageEmployees : undefined,
+        canManageStore: canManageStore !== undefined ? !!canManageStore : undefined,
+        canManageInventory: canManageInventory !== undefined ? !!canManageInventory : undefined,
+        canManageShop: canManageShop !== undefined ? !!canManageShop : undefined,
+      },
+    });
+
+    await logActivity(
+      ownerId,
+      'UPDATE_WORKSPACE_MEMBER_PERMISSIONS',
+      `Cập nhật quyền cho ${member.user.name} (${member.user.phone}) trong Workspace`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Cập nhật quyền thành viên thành công.',
+      data: updated,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 9. Chủ kick thành viên ra khỏi workspace
+const kickMember = async (req, res, next) => {
+  try {
+    const ownerId = req.user.id;
+    const { memberId } = req.params;
+
+    const workspace = await prisma.workspace.findUnique({ where: { ownerId } });
+    if (!workspace) throw new NotFoundError('Bạn chưa có Workspace.');
+
+    const member = await prisma.workspaceMember.findUnique({
+      where: { id: memberId },
+      include: { user: { select: { id: true, name: true, phone: true } } },
+    });
+
+    if (!member || member.workspaceId !== workspace.id) {
+      throw new NotFoundError('Không tìm thấy thành viên trong Workspace của bạn.');
+    }
+
+    // Xóa thành viên và đặt lại yêu cầu thành rejected
+    await prisma.$transaction([
+      prisma.workspaceMember.delete({ where: { id: memberId } }),
+      prisma.workspaceJoinRequest.updateMany({
+        where: { workspaceId: workspace.id, userId: member.userId },
+        data: { status: 'rejected' },
+      }),
+    ]);
+
+    await logActivity(
+      ownerId,
+      'KICK_WORKSPACE_MEMBER',
+      `Loại ${member.user.name} (${member.user.phone}) khỏi Workspace "${workspace.name}"`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Đã loại ${member.user.name} khỏi Workspace.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 10. Nhân viên tự rời workspace
+const leaveWorkspace = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    const membership = await prisma.workspaceMember.findFirst({
+      where: { userId },
+      include: { workspace: { select: { name: true } } },
+    });
+
+    if (!membership) {
+      throw new NotFoundError('Bạn không phải là thành viên của Workspace nào.');
+    }
+
+    await prisma.workspaceMember.delete({ where: { id: membership.id } });
+
+    await logActivity(
+      userId,
+      'LEAVE_WORKSPACE',
+      `Rời khỏi Workspace "${membership.workspace.name}"`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Đã rời khỏi Workspace "${membership.workspace.name}" thành công.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  createWorkspace,
+  getMyWorkspace,
+  getPendingRequests,
+  joinWorkspace,
+  getJoinStatus,
+  approveJoinRequest,
+  rejectJoinRequest,
+  updateMemberPermissions,
+  kickMember,
+  leaveWorkspace,
+};

@@ -6,7 +6,7 @@ const { logActivity } = require('../utils/activityLogger');
 // 1. Lấy danh sách bàn kèm phiên chơi đang chạy (nếu có)
 const getTables = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const tables = await prisma.shopTable.findMany({
       where: {
@@ -42,7 +42,7 @@ const getTables = async (req, res, next) => {
 // 2. Tạo bàn mới
 const createTable = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { name, pricePerHour, tables } = req.body;
 
     // Hỗ trợ tạo hàng loạt nếu nhận được mảng tables
@@ -142,7 +142,7 @@ const createTable = async (req, res, next) => {
 const updateTable = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { name, pricePerHour } = req.body;
 
     const table = await prisma.shopTable.findFirst({
@@ -203,7 +203,7 @@ const updateTable = async (req, res, next) => {
 const deleteTable = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const table = await prisma.shopTable.findFirst({
       where: {
@@ -248,7 +248,7 @@ const deleteTable = async (req, res, next) => {
 // 5. Bắt đầu phiên chơi mới (Bấm bắt đầu)
 const startSession = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { tableId } = req.body;
 
     if (!tableId) {
@@ -312,7 +312,7 @@ const calculateSessionTotal = (session, endTimeInput) => {
 const endSession = async (req, res, next) => {
   try {
     const { id } = req.params; // Session ID
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const session = await prisma.shopSession.findFirst({
       where: {
@@ -362,7 +362,7 @@ const endSession = async (req, res, next) => {
 const addExtra = async (req, res, next) => {
   try {
     const { id } = req.params; // Session ID
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { extraAmount, extraNote } = req.body;
 
     const session = await prisma.shopSession.findFirst({
@@ -424,7 +424,7 @@ const addExtra = async (req, res, next) => {
 const paySession = async (req, res, next) => {
   try {
     const { id } = req.params; // Session ID
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const session = await prisma.shopSession.findFirst({
       where: {
@@ -481,7 +481,7 @@ const paySession = async (req, res, next) => {
 // 9. Lấy tổng doanh thu của phân hệ cửa hàng
 const getTotalRevenue = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const aggregations = await prisma.shopSession.aggregate({
       _sum: {
@@ -507,7 +507,7 @@ const getTotalRevenue = async (req, res, next) => {
 // 10. Lấy doanh thu theo ngày của cửa hàng
 const getDailyRevenue = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
 
     const sessions = await prisma.shopSession.findMany({
       where: {

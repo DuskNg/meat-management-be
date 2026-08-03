@@ -1,6 +1,6 @@
 // meat-management-be/src/controllers/transaction.js
 const prisma = require('../utils/db');
-const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
 const { recordAiUsage } = require('../utils/aiUsage');
 
@@ -50,7 +50,7 @@ const calculateNameSimilarity = (name1, name2) => {
 // 1. Tạo đơn hàng ghi nợ mới (Transaction)
 const createTransaction = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { customerId, date, note, items } = req.body;
 
     if (!customerId || !items || !Array.isArray(items) || items.length === 0) {
@@ -125,6 +125,7 @@ const createTransaction = async (req, res, next) => {
               genericProduct = await prisma.product.create({
                 data: {
                   userId,
+                  createdBy: req.user.id,
                   name: 'Thịt lẻ',
                   defaultPrice: reqPrice,
                   unit: 'kg',
@@ -174,6 +175,7 @@ const createTransaction = async (req, res, next) => {
       const transaction = await tx.transaction.create({
         data: {
           userId,
+          createdBy: req.user.id,
           customerId,
           date: date ? new Date(date) : new Date(),
           note: note || null,
@@ -237,7 +239,7 @@ const createTransaction = async (req, res, next) => {
 // 2. Lấy danh sách hóa đơn giao dịch (có thể lọc theo khách hàng)
 const getTransactions = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { customerId } = req.query;
 
     const whereClause = { userId };
@@ -282,7 +284,7 @@ const getTransactions = async (req, res, next) => {
 // 3. Cập nhật thông tin đơn ghi nợ (thay toàn bộ items, ngày, ghi chú)
 const updateTransaction = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { id } = req.params;
     const { date, note, items } = req.body;
 
@@ -454,7 +456,7 @@ const matchOrCreateProducts = async (userId, parsedItems) => {
 // 4. Nhận diện hình ảnh tích kê qua Google Gemini API
 const scanTicket = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { image } = req.body;
 
     if (!image) {
@@ -665,7 +667,7 @@ Lưu ý quy đổi:
 // 5. Nhận diện ghi nợ bằng giọng nói hoặc văn bản qua Google Gemini API
 const voiceToText = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { audio, mimeType: reqMimeType, transcript } = req.body;
 
     if (!audio && !transcript) {
@@ -1011,7 +1013,7 @@ QUY TẮC BẮT BUỘC: Nếu câu thoại không liên quan đến ghi nợ hay
 // 6. Xóa giao dịch ghi nợ thịt (Transaction) theo ID
 const deleteTransaction = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { id } = req.params;
 
     // Kiểm tra giao dịch có tồn tại và thuộc chủ buôn này không
@@ -1025,6 +1027,13 @@ const deleteTransaction = async (req, res, next) => {
     const customer = await prisma.customer.findUnique({
       where: { id: existing.customerId }
     });
+
+    // Kiểm tra bảo vệ dữ liệu chéo: Nhân viên chỉ được xóa dữ liệu do chính mình tạo. Chủ Workspace và Admin tối cao có toàn quyền.
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && existing.createdBy !== actorId && actorId !== existing.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
+    }
 
     // Thực hiện xóa giao dịch (bảng transaction_items tự động xóa theo cascade)
     await prisma.transaction.delete({

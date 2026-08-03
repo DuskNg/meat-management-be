@@ -1,12 +1,12 @@
 // meat-management-be/src/controllers/payment.js
 const prisma = require('../utils/db');
-const { BadRequestError, NotFoundError } = require('../utils/errors');
+const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
 
 // 1. Tạo nhật ký thu tiền trả nợ mới (Payment)
 const createPayment = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { customerId, amount, paidAt, note } = req.body;
 
     if (!customerId || amount === undefined) {
@@ -30,6 +30,7 @@ const createPayment = async (req, res, next) => {
     const payment = await prisma.payment.create({
       data: {
         customerId,
+        createdBy: req.user.id,
         amount: payAmount,
         paidAt: paidAt ? new Date(paidAt) : new Date(),
         note: note || null,
@@ -62,7 +63,7 @@ const createPayment = async (req, res, next) => {
 // 2. Lấy danh sách nhật ký trả nợ (có thể lọc theo khách hàng)
 const getPayments = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { customerId } = req.query;
 
     // Lọc theo khách hàng thuộc chủ buôn này
@@ -102,7 +103,7 @@ const getPayments = async (req, res, next) => {
 // 3. Cập nhật lượt thu tiền (số tiền, ngày, ghi chú)
 const updatePayment = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { id } = req.params;
     const { amount, paidAt, note } = req.body;
 
@@ -146,7 +147,7 @@ const updatePayment = async (req, res, next) => {
 // 4. Xóa lượt thu tiền trả nợ (Payment) theo ID
 const deletePayment = async (req, res, next) => {
   try {
-    const userId = req.user.id;
+    const userId = req.effectiveUserId;
     const { id } = req.params;
 
     // Kiểm tra payment tồn tại và thuộc khách hàng của chủ buôn này
@@ -155,6 +156,13 @@ const deletePayment = async (req, res, next) => {
     });
     if (!existing) {
       throw new NotFoundError('Lượt thu tiền không tồn tại hoặc không thuộc quyền quản lý của bạn.');
+    }
+
+    // Kiểm tra bảo vệ dữ liệu chéo: Nhân viên chỉ được xóa dữ liệu do chính mình tạo. Chủ Workspace và Admin tối cao có toàn quyền.
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && existing.createdBy !== actorId && actorId !== userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
     }
 
     // Thực hiện xóa lượt trả nợ
