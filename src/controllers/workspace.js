@@ -303,8 +303,23 @@ const approveJoinRequest = async (req, res, next) => {
     const ownerId = req.user.id;
     const { requestId } = req.params;
 
-    // Lấy workspace của chủ
-    const workspace = await prisma.workspace.findUnique({ where: { ownerId } });
+    // Lấy workspace của chủ kèm thông tin quyền của chủ
+    const workspace = await prisma.workspace.findUnique({
+      where: { ownerId },
+      include: {
+        owner: {
+          select: {
+            canManageCustomers: true,
+            canManageDebt: true,
+            canManageBadDebt: true,
+            canManageEmployees: true,
+            canManageStore: true,
+            canManageInventory: true,
+            canManageShop: true,
+          },
+        },
+      },
+    });
     if (!workspace) {
       throw new NotFoundError('Bạn chưa có Workspace.');
     }
@@ -322,7 +337,19 @@ const approveJoinRequest = async (req, res, next) => {
       throw new BadRequestError('Yêu cầu này đã được xử lý rồi.');
     }
 
-    // Tạo thành viên và cập nhật trạng thái yêu cầu (trong transaction)
+    // Sao chép quyền từ chủ workspace để gán cho thành viên mới
+    const ownerPerms = workspace.owner;
+    const defaultPermissions = {
+      canManageCustomers: ownerPerms.canManageCustomers ?? false,
+      canManageDebt: ownerPerms.canManageDebt ?? false,
+      canManageBadDebt: ownerPerms.canManageBadDebt ?? false,
+      canManageEmployees: ownerPerms.canManageEmployees ?? false,
+      canManageStore: ownerPerms.canManageStore ?? false,
+      canManageInventory: ownerPerms.canManageInventory ?? false,
+      canManageShop: ownerPerms.canManageShop ?? false,
+    };
+
+    // Tạo thành viên với quyền được sao chép từ chủ và cập nhật trạng thái yêu cầu
     await prisma.$transaction([
       prisma.workspaceJoinRequest.update({
         where: { id: requestId },
@@ -330,7 +357,7 @@ const approveJoinRequest = async (req, res, next) => {
       }),
       prisma.workspaceMember.upsert({
         where: { workspaceId_userId: { workspaceId: workspace.id, userId: request.userId } },
-        create: { workspaceId: workspace.id, userId: request.userId },
+        create: { workspaceId: workspace.id, userId: request.userId, ...defaultPermissions },
         update: {},
       }),
     ]);
@@ -338,7 +365,7 @@ const approveJoinRequest = async (req, res, next) => {
     await logActivity(
       ownerId,
       'APPROVE_WORKSPACE_JOIN',
-      `Phê duyệt ${request.user.name} (${request.user.phone}) tham gia Workspace "${workspace.name}"`
+      `Phê duyệt ${request.user.name} (${request.user.phone}) tham gia Workspace "${workspace.name}" với quyền mặc định theo chủ`
     );
 
     res.status(200).json({
