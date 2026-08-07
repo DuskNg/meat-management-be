@@ -59,6 +59,31 @@ const requestOtp = async (req, res, next) => {
       { expiresIn: '30d' }
     );
 
+    // Kiểm tra xem user có phải là thành viên của workspace nào không để đồng bộ phân quyền
+    const membership = await prisma.workspaceMember.findFirst({
+      where: { userId: user.id },
+    });
+
+    const permissions = membership
+      ? {
+          canManageCustomers: membership.canManageCustomers,
+          canManageDebt: membership.canManageDebt,
+          canManageBadDebt: membership.canManageBadDebt,
+          canManageEmployees: membership.canManageEmployees,
+          canManageStore: membership.canManageStore,
+          canManageInventory: membership.canManageInventory,
+          canManageShop: membership.canManageShop,
+        }
+      : {
+          canManageCustomers: user.canManageCustomers,
+          canManageDebt: user.canManageDebt,
+          canManageBadDebt: user.canManageBadDebt,
+          canManageEmployees: user.canManageEmployees,
+          canManageStore: user.canManageStore,
+          canManageInventory: user.canManageInventory,
+          canManageShop: user.canManageShop,
+        };
+
     // Trả về trực tiếp thông tin đăng nhập thành công cho client
     res.status(200).json({
       success: true,
@@ -70,15 +95,7 @@ const requestOtp = async (req, res, next) => {
         hasPin: !!user.pin,
         isAdmin: user.isAdmin,
         isWorkspaceOwner: user.isWorkspaceOwner,
-        permissions: {
-          canManageCustomers: user.canManageCustomers,
-          canManageDebt: user.canManageDebt,
-          canManageBadDebt: user.canManageBadDebt,
-          canManageEmployees: user.canManageEmployees,
-          canManageStore: user.canManageStore,
-          canManageInventory: user.canManageInventory,
-          canManageShop: user.canManageShop,
-        },
+        permissions,
       },
       tokens: {
         accessToken,
@@ -167,6 +184,31 @@ const verifyOtp = async (req, res, next) => {
       { expiresIn: '30d' }
     );
 
+    // Kiểm tra xem user có phải là thành viên của workspace nào không để đồng bộ phân quyền
+    const membership = await prisma.workspaceMember.findFirst({
+      where: { userId: user.id },
+    });
+
+    const permissions = membership
+      ? {
+          canManageCustomers: membership.canManageCustomers,
+          canManageDebt: membership.canManageDebt,
+          canManageBadDebt: membership.canManageBadDebt,
+          canManageEmployees: membership.canManageEmployees,
+          canManageStore: membership.canManageStore,
+          canManageInventory: membership.canManageInventory,
+          canManageShop: membership.canManageShop,
+        }
+      : {
+          canManageCustomers: user.canManageCustomers,
+          canManageDebt: user.canManageDebt,
+          canManageBadDebt: user.canManageBadDebt,
+          canManageEmployees: user.canManageEmployees,
+          canManageStore: user.canManageStore,
+          canManageInventory: user.canManageInventory,
+          canManageShop: user.canManageShop,
+        };
+
     res.status(200).json({
       success: true,
       user: {
@@ -176,15 +218,7 @@ const verifyOtp = async (req, res, next) => {
         hasPin: !!user.pin,
         isAdmin: user.isAdmin,
         isWorkspaceOwner: user.isWorkspaceOwner,
-        permissions: {
-          canManageCustomers: user.canManageCustomers,
-          canManageDebt: user.canManageDebt,
-          canManageBadDebt: user.canManageBadDebt,
-          canManageEmployees: user.canManageEmployees,
-          canManageStore: user.canManageStore,
-          canManageInventory: user.canManageInventory,
-          canManageShop: user.canManageShop,
-        },
+        permissions,
       },
       tokens: {
         accessToken,
@@ -299,6 +333,31 @@ const getProfile = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy tài khoản hoặc tài khoản đã bị khóa/xóa.');
     }
 
+    // Kiểm tra xem user có phải là thành viên của workspace nào không để đồng bộ phân quyền
+    const membership = await prisma.workspaceMember.findFirst({
+      where: { userId },
+    });
+
+    const permissions = membership
+      ? {
+          canManageCustomers: membership.canManageCustomers,
+          canManageDebt: membership.canManageDebt,
+          canManageBadDebt: membership.canManageBadDebt,
+          canManageEmployees: membership.canManageEmployees,
+          canManageStore: membership.canManageStore,
+          canManageInventory: membership.canManageInventory,
+          canManageShop: membership.canManageShop,
+        }
+      : {
+          canManageCustomers: user.canManageCustomers,
+          canManageDebt: user.canManageDebt,
+          canManageBadDebt: user.canManageBadDebt,
+          canManageEmployees: user.canManageEmployees,
+          canManageStore: user.canManageStore,
+          canManageInventory: user.canManageInventory,
+          canManageShop: user.canManageShop,
+        };
+
     res.status(200).json({
       success: true,
       user: {
@@ -307,15 +366,7 @@ const getProfile = async (req, res, next) => {
         phone: user.phone,
         hasPin: !!user.pin,
         isAdmin: user.isAdmin,
-        permissions: {
-          canManageCustomers: user.canManageCustomers,
-          canManageDebt: user.canManageDebt,
-          canManageBadDebt: user.canManageBadDebt,
-          canManageEmployees: user.canManageEmployees,
-          canManageStore: user.canManageStore,
-          canManageInventory: user.canManageInventory,
-          canManageShop: user.canManageShop,
-        },
+        permissions,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },

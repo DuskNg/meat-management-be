@@ -18,23 +18,126 @@ const parseMonthKey = (monthKey) => {
   return { month, year };
 };
 
-// 1. Lấy toàn bộ danh sách nhân viên
+// Helper tính toán nợ lương/tiền ứng thừa lũy kế được chuyển từ tháng trước sang tháng sau
+const calculateCarryOver = async (employeeId, baseSalary, targetMonthKey) => {
+  let carryOver = 0;
+  const parsed = parseMonthKey(targetMonthKey);
+  if (!parsed) return 0;
+  const { month: m, year: y } = parsed;
+
+  const monthsList = [];
+  // Truy vết ngược tối đa 12 tháng để tính toán nợ chuyển tiếp
+  for (let i = 12; i >= 1; i--) {
+    let tempM = m - i;
+    let tempY = y;
+    while (tempM <= 0) {
+      tempM += 12;
+      tempY -= 1;
+    }
+    monthsList.push({ 
+      month: tempM, 
+      year: tempY, 
+      key: `${tempM.toString().padStart(2, '0')}/${tempY}` 
+    });
+  }
+
+  for (const item of monthsList) {
+    const start = new Date(item.year, item.month - 1, 1);
+    const end = new Date(item.year, item.month, 0, 23, 59, 59, 999);
+    
+    const advances = await prisma.salaryAdvance.findMany({
+      where: {
+        employeeId,
+        date: {
+          gte: start,
+          lte: end,
+        }
+      }
+    });
+    const totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
+    
+    // Số dư còn lại của tháng = Lương cơ bản - Tiền tạm ứng tháng đó + Khoản âm mang sang từ trước
+    const remaining = baseSalary - totalAdvances + carryOver;
+    if (remaining < 0) {
+      carryOver = remaining; // Nếu âm (ứng quá tay) thì tiếp tục chuyển khoản nợ này sang tháng sau
+    } else {
+      carryOver = 0; // Nếu dương thì đã thanh toán hết, không có nợ mang sang
+    }
+  }
+  return carryOver;
+};
+
+// 1. Lấy toàn bộ danh sách nhân viên (hỗ trợ tính toán tạm ứng và trạng thái trả lương theo tháng)
 const getEmployees = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
+    const { monthKey } = req.query; // Định dạng "MM/YYYY"
+
+    let startOfMonth, endOfMonth;
+    let targetMonthKey = monthKey;
+
+    if (!targetMonthKey) {
+      const now = new Date();
+      const mm = (now.getMonth() + 1).toString().padStart(2, '0');
+      const yyyy = now.getFullYear();
+      targetMonthKey = `${mm}/${yyyy}`;
+    }
+
+    const dateParsed = parseMonthKey(targetMonthKey);
+    if (dateParsed) {
+      const { month, year } = dateParsed;
+      startOfMonth = new Date(year, month - 1, 1);
+      endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+    }
+
     const employees = await prisma.employee.findMany({
       where: {
         userId,
         isActive: true,
+      },
+      include: {
+        advances: {
+          where: startOfMonth ? {
+            date: {
+              gte: startOfMonth,
+              lte: endOfMonth,
+            }
+          } : undefined,
+        },
+        payments: {
+          where: {
+            monthKey: targetMonthKey,
+          }
+        }
       },
       orderBy: {
         name: 'asc',
       },
     });
 
+    const result = await Promise.all(employees.map(async (emp) => {
+      const totalAdvances = emp.advances ? emp.advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0) : 0;
+      const isPaid = emp.payments ? emp.payments.length > 0 : false;
+      const paidAt = isPaid ? emp.payments[0].paidAt : null;
+
+      const baseSalary = parseFloat(emp.baseSalary);
+      const carryOver = await calculateCarryOver(emp.id, baseSalary, targetMonthKey);
+
+      // Loại bỏ trường advances và payments để payload gọn nhẹ
+      const { advances, payments, ...rest } = emp;
+
+      return {
+        ...rest,
+        totalAdvances,
+        carryOver,
+        isPaid,
+        paidAt,
+      };
+    }));
+
     res.status(200).json({
       success: true,
-      data: employees,
+      data: result,
     });
   } catch (error) {
     next(error);
@@ -327,14 +430,7 @@ const createSalaryAdvance = async (req, res, next) => {
     const newAmount = parseFloat(amount);
     const baseSalary = parseFloat(employee.baseSalary);
 
-    // 3. Validate không cho phép tổng tiền ứng vượt quá lương cơ bản tháng
-    if (totalExistingAdvances + newAmount > baseSalary) {
-      const remaining = Math.max(0, baseSalary - totalExistingAdvances);
-      const fmt = (val) => new Intl.NumberFormat('vi-VN').format(val) + 'đ';
-      throw new BadRequestError(
-        `Không thể tạm ứng! Nhân viên đã ứng ${fmt(totalExistingAdvances)} trong tháng. Hạn mức ứng tối đa còn lại là ${fmt(remaining)} (Lương cơ bản: ${fmt(baseSalary)}).`
-      );
-    }
+    // Cho phép tạm ứng vượt quá lương cơ bản tháng, số âm dư thừa sẽ được lũy kế chuyển sang tháng sau.
 
     const advance = await prisma.salaryAdvance.create({
       data: {

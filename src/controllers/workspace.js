@@ -337,16 +337,16 @@ const approveJoinRequest = async (req, res, next) => {
       throw new BadRequestError('Yêu cầu này đã được xử lý rồi.');
     }
 
-    // Sao chép quyền từ chủ workspace để gán cho thành viên mới
+    // Thiết lập quyền mặc định tối thiểu cho thành viên mới (chỉ cấp quyền quản lý Khách hàng nếu Chủ có quyền)
     const ownerPerms = workspace.owner;
     const defaultPermissions = {
-      canManageCustomers: ownerPerms.canManageCustomers ?? false,
-      canManageDebt: ownerPerms.canManageDebt ?? false,
-      canManageBadDebt: ownerPerms.canManageBadDebt ?? false,
-      canManageEmployees: ownerPerms.canManageEmployees ?? false,
-      canManageStore: ownerPerms.canManageStore ?? false,
-      canManageInventory: ownerPerms.canManageInventory ?? false,
-      canManageShop: ownerPerms.canManageShop ?? false,
+      canManageCustomers: (ownerPerms.canManageCustomers === true),
+      canManageDebt: false,
+      canManageBadDebt: false,
+      canManageEmployees: false,
+      canManageStore: false,
+      canManageInventory: false,
+      canManageShop: false,
     };
 
     // Tạo thành viên với quyền được sao chép từ chủ và cập nhật trạng thái yêu cầu
@@ -369,7 +369,7 @@ const approveJoinRequest = async (req, res, next) => {
     await logActivity(
       ownerId,
       'APPROVE_WORKSPACE_JOIN',
-      `Phê duyệt ${request.user.name} (${request.user.phone}) tham gia Workspace "${workspace.name}" với quyền mặc định theo chủ`
+      `Phê duyệt ${request.user.name} (${request.user.phone}) tham gia Workspace "${workspace.name}" với quyền mặc định tối thiểu`
     );
 
     res.status(200).json({
@@ -510,12 +510,27 @@ const kickMember = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy thành viên trong Workspace của bạn.');
     }
 
-    // Xóa thành viên và đặt lại yêu cầu thành rejected
+    // Cấu hình reset quyền về false
+    const resetPermissions = {
+      canManageCustomers: false,
+      canManageDebt: false,
+      canManageBadDebt: false,
+      canManageEmployees: false,
+      canManageStore: false,
+      canManageInventory: false,
+      canManageShop: false,
+    };
+
+    // Xóa thành viên, đặt lại yêu cầu thành rejected và reset quyền trong bảng User về false
     await prisma.$transaction([
       prisma.workspaceMember.delete({ where: { id: memberId } }),
       prisma.workspaceJoinRequest.updateMany({
         where: { workspaceId: workspace.id, userId: member.userId },
         data: { status: 'rejected' },
+      }),
+      prisma.user.update({
+        where: { id: member.userId },
+        data: resetPermissions,
       }),
     ]);
 
@@ -548,7 +563,25 @@ const leaveWorkspace = async (req, res, next) => {
       throw new NotFoundError('Bạn không phải là thành viên của Workspace nào.');
     }
 
-    await prisma.workspaceMember.delete({ where: { id: membership.id } });
+    // Cấu hình reset quyền về false
+    const resetPermissions = {
+      canManageCustomers: false,
+      canManageDebt: false,
+      canManageBadDebt: false,
+      canManageEmployees: false,
+      canManageStore: false,
+      canManageInventory: false,
+      canManageShop: false,
+    };
+
+    // Xóa thành viên và reset quyền trong bảng User về false
+    await prisma.$transaction([
+      prisma.workspaceMember.delete({ where: { id: membership.id } }),
+      prisma.user.update({
+        where: { id: userId },
+        data: resetPermissions,
+      }),
+    ]);
 
     await logActivity(
       userId,
@@ -559,6 +592,43 @@ const leaveWorkspace = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: `Đã rời khỏi Workspace "${membership.workspace.name}" thành công.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 11. Cập nhật tên Workspace
+const updateWorkspace = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { name } = req.body;
+
+    if (!name || !name.trim()) {
+      throw new BadRequestError('Tên workspace là bắt buộc.');
+    }
+
+    const workspace = await prisma.workspace.findUnique({
+      where: { ownerId: userId },
+    });
+
+    if (!workspace) {
+      throw new NotFoundError('Không tìm thấy Workspace.');
+    }
+
+    const updatedWorkspace = await prisma.workspace.update({
+      where: { id: workspace.id },
+      data: {
+        name: name.trim(),
+      },
+    });
+
+    await logActivity(userId, 'UPDATE_WORKSPACE_NAME', `Cập nhật tên Workspace thành: "${updatedWorkspace.name}"`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Cập nhật tên Workspace thành công.',
+      data: updatedWorkspace,
     });
   } catch (error) {
     next(error);
@@ -576,4 +646,6 @@ module.exports = {
   updateMemberPermissions,
   kickMember,
   leaveWorkspace,
+  updateWorkspace,
 };
+

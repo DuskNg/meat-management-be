@@ -14,6 +14,9 @@ router.post('/create', workspaceController.createWorkspace);
 // Lấy thông tin workspace của chủ (kèm members và pending requests)
 router.get('/my', workspaceController.getMyWorkspace);
 
+// Cập nhật tên Workspace
+router.put('/update', workspaceController.updateWorkspace);
+
 // Polling danh sách yêu cầu đang chờ (gọn nhẹ cho banner thông báo)
 router.get('/pending-requests', workspaceController.getPendingRequests);
 

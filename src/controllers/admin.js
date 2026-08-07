@@ -229,7 +229,7 @@ const updatePermissions = async (req, res, next) => {
       },
     });
 
-    // Nếu là chủ workspace, tự động đồng bộ quyền cho toàn bộ nhân viên liên kết
+    // Nếu là chủ workspace, chỉ tự động đồng bộ thu hồi quyền (nếu quyền của Chủ bị tắt về false) cho toàn bộ nhân viên liên kết
     const workspace = await prisma.workspace.findUnique({
       where: { ownerId: id },
       include: { members: true },
@@ -237,33 +237,30 @@ const updatePermissions = async (req, res, next) => {
     if (workspace && workspace.members.length > 0) {
       const memberUserIds = workspace.members.map((m) => m.userId);
 
-      // Đồng bộ ở bảng User
-      await prisma.user.updateMany({
-        where: { id: { in: memberUserIds } },
-        data: {
-          canManageCustomers: customersVal,
-          canManageDebt: debtVal,
-          canManageBadDebt: badDebtVal,
-          canManageEmployees: employeesVal,
-          canManageStore: storeVal,
-          canManageInventory: inventoryVal,
-          canManageShop: shopVal,
-        },
-      });
+      // Chỉ lọc các quyền bị thu hồi (set về false) từ phía Chủ để đồng bộ xuống nhân viên
+      const permissionsToRevoke = {};
+      if (customersVal === false) permissionsToRevoke.canManageCustomers = false;
+      if (debtVal === false) permissionsToRevoke.canManageDebt = false;
+      if (badDebtVal === false) permissionsToRevoke.canManageBadDebt = false;
+      if (employeesVal === false) permissionsToRevoke.canManageEmployees = false;
+      if (storeVal === false) permissionsToRevoke.canManageStore = false;
+      if (inventoryVal === false) permissionsToRevoke.canManageInventory = false;
+      if (shopVal === false) permissionsToRevoke.canManageShop = false;
 
-      // Đồng bộ ở bảng WorkspaceMember
-      await prisma.workspaceMember.updateMany({
-        where: { workspaceId: workspace.id },
-        data: {
-          canManageCustomers: customersVal,
-          canManageDebt: debtVal,
-          canManageBadDebt: badDebtVal,
-          canManageEmployees: employeesVal,
-          canManageStore: storeVal,
-          canManageInventory: inventoryVal,
-          canManageShop: shopVal,
-        },
-      });
+      // Chỉ thực hiện cập nhật nếu có ít nhất một quyền bị thu hồi
+      if (Object.keys(permissionsToRevoke).length > 0) {
+        // Đồng bộ ở bảng User
+        await prisma.user.updateMany({
+          where: { id: { in: memberUserIds } },
+          data: permissionsToRevoke,
+        });
+
+        // Đồng bộ ở bảng WorkspaceMember
+        await prisma.workspaceMember.updateMany({
+          where: { workspaceId: workspace.id },
+          data: permissionsToRevoke,
+        });
+      }
     }
 
     // Ghi log hoạt động phân quyền của admin

@@ -1,7 +1,7 @@
 // meat-management-be/src/scripts/createAdminSafe.js
 // Polyfill Object.hasOwn
 if (!Object.hasOwn) {
-  Object.hasOwn = function(object, property) {
+  Object.hasOwn = function (object, property) {
     return Object.prototype.hasOwnProperty.call(object, property);
   };
 }
@@ -16,19 +16,19 @@ const bcrypt = require('bcryptjs');
 
 async function createAdminSafe() {
   console.log('🔄 Bắt đầu chạy kịch bản tạo tài khoản Admin an toàn...');
-  
+
   const adminPhone = '0000000000';
   const adminName = 'Hệ thống Quản trị';
-  
+
   try {
     // 1. Kiểm tra xem tài khoản admin đã tồn tại chưa
     const existingAdmin = await prisma.user.findUnique({
       where: { phone: adminPhone },
     });
-    
+
     if (existingAdmin) {
       console.log(`ℹ️ Tài khoản Admin với SĐT ${adminPhone} đã tồn tại từ trước.`);
-      
+
       // Nếu tồn tại nhưng chưa phải là admin, cập nhật thành admin
       if (!existingAdmin.isAdmin) {
         await prisma.user.update({
@@ -39,7 +39,7 @@ async function createAdminSafe() {
       }
       return;
     }
-    
+
     // 2. Tạo tài khoản admin mới an toàn
     const passwordHash = await bcrypt.hash('admin123', 10);
     const newAdmin = await prisma.user.create({
@@ -50,12 +50,12 @@ async function createAdminSafe() {
         isAdmin: true,
       },
     });
-    
+
     console.log(`🎉 Tạo thành công tài khoản Admin mới:`);
     console.log(`- Tên: ${newAdmin.name}`);
     console.log(`- SĐT đăng nhập: ${newAdmin.phone}`);
     console.log(`- Mật khẩu: admin123`);
-    
+
   } catch (error) {
     console.error('❌ Có lỗi xảy ra khi tạo tài khoản Admin:', error);
   } finally {

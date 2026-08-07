@@ -85,10 +85,14 @@ const requirePermission = (permissionField) => async (req, res, next) => {
       return next();
     }
 
-    // Nếu là thành viên workspace → kiểm tra quyền theo workspace member
+    // Nếu là thành viên workspace → kiểm tra quyền giao giữa workspace member và chủ workspace
     if (req.workspaceMember) {
       if (!req.workspaceMember[permissionField]) {
         throw new ForbiddenError('Bạn không được cấp quyền thực hiện chức năng này trong Workspace.');
+      }
+      const owner = req.workspaceMember.workspace.owner;
+      if (!owner || !owner[permissionField]) {
+        throw new ForbiddenError('Chủ Workspace hiện tại không sở hữu hoặc đã bị thu hồi quyền này.');
       }
       return next();
     }
@@ -118,16 +122,24 @@ const resolveWorkspace = async (req, res, next) => {
 
     const actorId = req.user.id;
 
-    // Tìm membership của user trong bất kỳ workspace nào
+    // Tìm membership của user trong bất kỳ workspace nào, kèm theo quyền của chủ workspace để kiểm tra chéo
     const membership = await prisma.workspaceMember.findFirst({
       where: { userId: actorId },
       include: {
         workspace: {
-          select: {
-            id: true,
-            ownerId: true,
-            name: true,
-            isActive: true,
+          include: {
+            owner: {
+              select: {
+                id: true,
+                canManageCustomers: true,
+                canManageDebt: true,
+                canManageBadDebt: true,
+                canManageEmployees: true,
+                canManageStore: true,
+                canManageInventory: true,
+                canManageShop: true,
+              },
+            },
           },
         },
       },
