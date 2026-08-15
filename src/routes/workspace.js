@@ -32,6 +32,9 @@ router.put('/members/:memberId/permissions', workspaceController.updateMemberPer
 // Kick thành viên ra khỏi workspace
 router.delete('/members/:memberId', workspaceController.kickMember);
 
+// Lấy danh sách thao tác/hành vi của các thành viên trong ngày
+router.get('/member-actions', workspaceController.getMemberActions);
+
 // --- Route dành cho Nhân Viên ---
 // Gửi yêu cầu tham gia workspace qua mã mời
 router.post('/join', workspaceController.joinWorkspace);

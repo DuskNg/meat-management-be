@@ -16,6 +16,9 @@ router.post('/refresh-token', authController.refreshToken);
 // Đăng nhập quản trị viên Admin (Không cần đăng nhập trước)
 router.post('/admin/login', authController.adminLogin);
 
+// Xác thực mã mời Workspace (Không cần đăng nhập trước)
+router.get('/validate-invite/:inviteCode', authController.validateInvite);
+
 // Đăng xuất và vô hiệu hóa token (Yêu cầu gửi refresh token)
 router.post('/logout', authController.logout);
 

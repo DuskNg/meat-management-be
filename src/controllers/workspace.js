@@ -635,6 +635,417 @@ const updateWorkspace = async (req, res, next) => {
   }
 };
 
+// 12. Chủ Workspace xem toàn bộ các thao tác/hành vi của các thành viên trong ngày
+const getMemberActions = async (req, res, next) => {
+  try {
+    const ownerId = req.user.id;
+    const { date, memberId, type } = req.query;
+
+    // Tìm workspace do user làm chủ
+    const workspace = await prisma.workspace.findUnique({
+      where: { ownerId },
+      include: {
+        owner: {
+          select: { id: true, name: true, phone: true },
+        },
+        members: {
+          include: {
+            user: {
+              select: { id: true, name: true, phone: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!workspace) {
+      throw new NotFoundError('Bạn không phải là Chủ của Workspace nào.');
+    }
+
+    // Danh sách các thành viên trong workspace (bao gồm cả chủ workspace)
+    const memberUsers = [
+      { id: workspace.owner.id, name: workspace.owner.name + ' (Chủ)', phone: workspace.owner.phone },
+      ...workspace.members.map((m) => m.user),
+    ];
+    const memberUserMap = new Map(memberUsers.map((u) => [u.id, u]));
+
+    // Xác định danh sách ID người dùng cần truy vấn (bao gồm cả chủ)
+    let targetUserIds = [workspace.ownerId, ...workspace.members.map((m) => m.userId)];
+    if (memberId && memberId !== 'ALL') {
+      targetUserIds = targetUserIds.filter((id) => id === memberId);
+    }
+
+    if (targetUserIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          summary: {
+            totalActions: 0,
+            totalDebtCreated: 0,
+            totalMoneyCollected: 0,
+          },
+          members: memberUsers,
+          actions: [],
+        },
+      });
+    }
+
+    // Xác định khoảng thời gian ngày cần lọc (mặc định hôm nay nếu không truyền)
+    let startDate, endDate;
+    if (date) {
+      startDate = new Date(`${date}T00:00:00.000Z`);
+      endDate = new Date(`${date}T23:59:59.999Z`);
+    } else {
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      startDate = new Date(`${yyyy}-${mm}-${dd}T00:00:00.000Z`);
+      endDate = new Date(`${yyyy}-${mm}-${dd}T23:59:59.999Z`);
+    }
+
+    const actions = [];
+    let totalDebtCreated = 0;
+    let totalMoneyCollected = 0;
+
+    // 1. Đơn nợ thịt (Transactions)
+    const shouldFetchTransactions = !type || type === 'ALL' || type === 'TRANSACTION';
+    if (shouldFetchTransactions) {
+      const transactions = await prisma.transaction.findMany({
+        where: {
+          userId: ownerId,
+          type: 'customer',
+          createdBy: { in: targetUserIds },
+          createdAt: { gte: startDate, lte: endDate },
+        },
+        include: {
+          customer: { select: { id: true, name: true, phone: true } },
+          items: {
+            include: {
+              product: { select: { id: true, name: true, unit: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const tx of transactions) {
+        const actor = memberUserMap.get(tx.createdBy) || { id: tx.createdBy, name: 'Nhân viên', phone: '' };
+        const amountNum = parseFloat(tx.totalAmount) || 0;
+        totalDebtCreated += amountNum;
+
+        const itemDetails = (tx.items || [])
+          .map((i) => `${i.product?.name || 'Mặt hàng'}: ${parseFloat(i.quantity)}${i.product?.unit || 'kg'} x ${parseFloat(i.price).toLocaleString('vi-VN')}đ = ${parseFloat(i.amount).toLocaleString('vi-VN')}đ`)
+          .join(', ');
+
+        actions.push({
+          id: tx.id,
+          type: 'TRANSACTION',
+          typeName: 'Đơn nợ thịt',
+          actionTitle: `Ghi nợ cho khách ${tx.customer?.name || 'Ẩn'}: ${amountNum.toLocaleString('vi-VN')}đ`,
+          actor,
+          createdAt: tx.createdAt,
+          amount: amountNum,
+          details: itemDetails + (tx.note ? ` (Ghi chú: ${tx.note})` : ''),
+          rawItem: tx,
+          canEdit: true,
+          canDelete: true,
+        });
+      }
+    }
+
+    // 2. Thu tiền nợ (Payments)
+    const shouldFetchPayments = !type || type === 'ALL' || type === 'PAYMENT';
+    if (shouldFetchPayments) {
+      const payments = await prisma.payment.findMany({
+        where: {
+          customer: { userId: ownerId },
+          type: 'customer',
+          createdBy: { in: targetUserIds },
+          createdAt: { gte: startDate, lte: endDate },
+        },
+        include: {
+          customer: { select: { id: true, name: true, phone: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const p of payments) {
+        const actor = memberUserMap.get(p.createdBy) || { id: p.createdBy, name: 'Nhân viên', phone: '' };
+        const amountNum = parseFloat(p.amount) || 0;
+        totalMoneyCollected += amountNum;
+
+        actions.push({
+          id: p.id,
+          type: 'PAYMENT',
+          typeName: 'Thu tiền nợ',
+          actionTitle: `Thu tiền từ khách ${p.customer?.name || 'Ẩn'}: ${amountNum.toLocaleString('vi-VN')}đ`,
+          actor,
+          createdAt: p.createdAt,
+          amount: amountNum,
+          details: `Đã thu: ${amountNum.toLocaleString('vi-VN')}đ vào lúc ${new Date(p.paidAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` + (p.note ? ` (Ghi chú: ${p.note})` : ''),
+          rawItem: p,
+          canEdit: true,
+          canDelete: true,
+        });
+      }
+    }
+
+    // 3. Khách hàng mới (Customers)
+    const shouldFetchCustomers = !type || type === 'ALL' || type === 'CUSTOMER';
+    if (shouldFetchCustomers) {
+      const customers = await prisma.customer.findMany({
+        where: {
+          userId: ownerId,
+          createdBy: { in: targetUserIds },
+          createdAt: { gte: startDate, lte: endDate },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const c of customers) {
+        const actor = memberUserMap.get(c.createdBy) || { id: c.createdBy, name: 'Nhân viên', phone: '' };
+        actions.push({
+          id: c.id,
+          type: 'CUSTOMER',
+          typeName: 'Thêm khách hàng',
+          actionTitle: `Tạo khách hàng mới: ${c.name}`,
+          actor,
+          createdAt: c.createdAt,
+          amount: parseFloat(c.manualDebt) || 0,
+          details: `SĐT: ${c.phone || 'Chưa có'} | Địa chỉ: ${c.address || 'Chưa có'}${c.isBadDebt ? ' | Phân loại: Nợ xấu' : ''}` + (c.note ? ` (Ghi chú: ${c.note})` : ''),
+          rawItem: c,
+          canEdit: true,
+          canDelete: true,
+        });
+      }
+    }
+
+    // 4. Hóa đơn bàn ăn / Cửa hàng (Store Transactions & Payments)
+    const shouldFetchStore = !type || type === 'ALL' || type === 'STORE';
+    if (shouldFetchStore) {
+      const storeTransactions = await prisma.transaction.findMany({
+        where: {
+          userId: ownerId,
+          type: 'store',
+          createdBy: { in: targetUserIds },
+          createdAt: { gte: startDate, lte: endDate },
+        },
+        include: {
+          customer: { select: { id: true, name: true } },
+          items: {
+            include: {
+              product: { select: { id: true, name: true, unit: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const st of storeTransactions) {
+        const actor = memberUserMap.get(st.createdBy) || { id: st.createdBy, name: 'Nhân viên', phone: '' };
+        const amountNum = parseFloat(st.totalAmount) || 0;
+        const itemDetails = (st.items || [])
+          .map((i) => `${i.product?.name || 'Món'}: ${parseFloat(i.quantity)} x ${parseFloat(i.price).toLocaleString('vi-VN')}đ`)
+          .join(', ');
+
+        actions.push({
+          id: st.id,
+          type: 'STORE_ORDER',
+          typeName: 'Gọi món bàn ăn',
+          actionTitle: `Hóa đơn ${st.customer?.name || 'Bàn ăn'}: ${amountNum.toLocaleString('vi-VN')}đ`,
+          actor,
+          createdAt: st.createdAt,
+          amount: amountNum,
+          details: itemDetails + (st.note ? ` (Ghi chú: ${st.note})` : ''),
+          rawItem: st,
+          canEdit: true,
+          canDelete: true,
+        });
+      }
+
+      const storePayments = await prisma.payment.findMany({
+        where: {
+          customer: { userId: ownerId },
+          type: 'store',
+          createdBy: { in: targetUserIds },
+          createdAt: { gte: startDate, lte: endDate },
+        },
+        include: {
+          customer: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const sp of storePayments) {
+        const actor = memberUserMap.get(sp.createdBy) || { id: sp.createdBy, name: 'Nhân viên', phone: '' };
+        const amountNum = parseFloat(sp.amount) || 0;
+        actions.push({
+          id: sp.id,
+          type: 'STORE_PAYMENT',
+          typeName: 'Thanh toán bàn ăn',
+          actionTitle: `Thanh toán cho ${sp.customer?.name || 'Bàn'}: ${amountNum.toLocaleString('vi-VN')}đ`,
+          actor,
+          createdAt: sp.createdAt,
+          amount: amountNum,
+          details: `Thanh toán thành công ${amountNum.toLocaleString('vi-VN')}đ` + (sp.note ? ` (Ghi chú: ${sp.note})` : ''),
+          rawItem: sp,
+          canEdit: true,
+          canDelete: true,
+        });
+      }
+    }
+
+    // 5. Cửa hàng tính giờ / Bida / Karaoke (Shop Sessions)
+    const shouldFetchShop = !type || type === 'ALL' || type === 'SHOP';
+    if (shouldFetchShop) {
+      const shopSessions = await prisma.shopSession.findMany({
+        where: {
+          userId: ownerId,
+          createdBy: { in: targetUserIds },
+          createdAt: { gte: startDate, lte: endDate },
+        },
+        include: {
+          table: { select: { id: true, name: true, pricePerHour: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const ss of shopSessions) {
+        const actor = memberUserMap.get(ss.createdBy) || { id: ss.createdBy, name: 'Nhân viên', phone: '' };
+        const amountNum = ss.totalAmount || 0;
+        const isEnded = !!ss.endTime;
+
+        actions.push({
+          id: ss.id,
+          type: 'SHOP_SESSION',
+          typeName: 'Phiên tính giờ',
+          actionTitle: `${ss.table?.name || 'Bàn/Phòng'}: ${isEnded ? (ss.isPaid ? 'Đã thanh toán ' + amountNum.toLocaleString('vi-VN') + 'đ' : 'Chờ thanh toán ' + amountNum.toLocaleString('vi-VN') + 'đ') : 'Đang chơi'}`,
+          actor,
+          createdAt: ss.createdAt,
+          amount: amountNum,
+          details: `Bắt đầu: ${new Date(ss.startTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` + (isEnded ? ` - Kết thúc: ${new Date(ss.endTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : '') + (ss.extraAmount ? ` | Phụ thu: ${ss.extraAmount.toLocaleString('vi-VN')}đ` : ''),
+          rawItem: ss,
+          canEdit: true,
+          canDelete: true,
+        });
+      }
+    }
+
+    // 6. Kho hàng (Inventory Products)
+    const shouldFetchInventory = !type || type === 'ALL' || type === 'INVENTORY';
+    if (shouldFetchInventory) {
+      const inventoryProducts = await prisma.inventoryProduct.findMany({
+        where: {
+          userId: ownerId,
+          createdBy: { in: targetUserIds },
+          createdAt: { gte: startDate, lte: endDate },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const ip of inventoryProducts) {
+        const actor = memberUserMap.get(ip.createdBy) || { id: ip.createdBy, name: 'Nhân viên', phone: '' };
+        actions.push({
+          id: ip.id,
+          type: 'INVENTORY',
+          typeName: 'Kho hàng',
+          actionTitle: `Thêm mặt hàng kho: ${ip.name}`,
+          actor,
+          createdAt: ip.createdAt,
+          amount: parseFloat(ip.price) || 0,
+          details: `Tồn kho: ${parseFloat(ip.quantity)} ${ip.unit} | Giá nhập: ${parseFloat(ip.price).toLocaleString('vi-VN')}đ`,
+          rawItem: ip,
+          canEdit: true,
+          canDelete: true,
+        });
+      }
+    }
+
+    // 7. Nhà cung cấp (Supplier Transactions & Payments)
+    const shouldFetchSuppliers = !type || type === 'ALL' || type === 'SUPPLIER';
+    if (shouldFetchSuppliers) {
+      const supplierTxs = await prisma.supplierTransaction.findMany({
+        where: {
+          supplier: { userId: ownerId },
+          createdBy: { in: targetUserIds },
+          createdAt: { gte: startDate, lte: endDate },
+        },
+        include: {
+          supplier: { select: { id: true, name: true, phone: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const stx of supplierTxs) {
+        const actor = memberUserMap.get(stx.createdBy) || { id: stx.createdBy, name: 'Nhân viên', phone: '' };
+        const amountNum = parseFloat(stx.totalAmount) || 0;
+        actions.push({
+          id: stx.id,
+          type: 'SUPPLIER_TX',
+          typeName: 'Nhập hàng NCC',
+          actionTitle: `Nhập hàng từ NCC ${stx.supplier?.name || 'Ẩn'}: ${amountNum.toLocaleString('vi-VN')}đ`,
+          actor,
+          createdAt: stx.createdAt,
+          amount: amountNum,
+          details: `Số tiền ghi nợ NCC: ${amountNum.toLocaleString('vi-VN')}đ` + (stx.note ? ` (Ghi chú: ${stx.note})` : ''),
+          rawItem: stx,
+          canEdit: true,
+          canDelete: true,
+        });
+      }
+
+      const supplierPayments = await prisma.supplierPayment.findMany({
+        where: {
+          supplier: { userId: ownerId },
+          createdBy: { in: targetUserIds },
+          createdAt: { gte: startDate, lte: endDate },
+        },
+        include: {
+          supplier: { select: { id: true, name: true, phone: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const spay of supplierPayments) {
+        const actor = memberUserMap.get(spay.createdBy) || { id: spay.createdBy, name: 'Nhân viên', phone: '' };
+        const amountNum = parseFloat(spay.amount) || 0;
+        actions.push({
+          id: spay.id,
+          type: 'SUPPLIER_PAYMENT',
+          typeName: 'Trả tiền NCC',
+          actionTitle: `Thanh toán nợ cho NCC ${spay.supplier?.name || 'Ẩn'}: ${amountNum.toLocaleString('vi-VN')}đ`,
+          actor,
+          createdAt: spay.createdAt,
+          amount: amountNum,
+          details: `Đã trả NCC: ${amountNum.toLocaleString('vi-VN')}đ` + (spay.note ? ` (Ghi chú: ${spay.note})` : ''),
+          rawItem: spay,
+          canEdit: true,
+          canDelete: true,
+        });
+      }
+    }
+
+    // Sắp xếp toàn bộ thao tác theo thời gian giảm dần (mới nhất lên đầu)
+    actions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        summary: {
+          totalActions: actions.length,
+          totalDebtCreated,
+          totalMoneyCollected,
+        },
+        members: memberUsers,
+        actions,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createWorkspace,
   getMyWorkspace,
@@ -647,5 +1058,7 @@ module.exports = {
   kickMember,
   leaveWorkspace,
   updateWorkspace,
+  getMemberActions,
 };
+
 

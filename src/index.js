@@ -128,18 +128,137 @@ const startCleanupScheduler = () => {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-      const result = await prisma.user.deleteMany({
+      const usersToDelete = await prisma.user.findMany({
         where: {
           isActive: false,
           deletedAt: {
             lte: sevenDaysAgo,
           },
         },
+        select: { id: true },
       });
 
-      if (result.count > 0) {
-        logger.info(`[CLEANUP] Đã xóa vĩnh viễn ${result.count} tài khoản đã xóa mềm quá 7 ngày.`);
-      }
+      if (usersToDelete.length === 0) return;
+
+      const userIds = usersToDelete.map((u) => u.id);
+
+      await prisma.$transaction(async (tx) => {
+        // 1. Xóa các chi tiết đơn hàng (transaction_items) liên quan đến user và sản phẩm của user
+        await tx.transactionItem.deleteMany({
+          where: {
+            OR: [
+              { transaction: { userId: { in: userIds } } },
+              { product: { userId: { in: userIds } } },
+            ],
+          },
+        });
+
+        // 2. Xóa các giao dịch mua hàng (transactions)
+        await tx.transaction.deleteMany({
+          where: { userId: { in: userIds } },
+        });
+
+        // 3. Xóa bảng giá bán riêng theo khách hàng (customer_product_prices)
+        await tx.customerProductPrice.deleteMany({
+          where: {
+            OR: [
+              { customer: { userId: { in: userIds } } },
+              { product: { userId: { in: userIds } } },
+            ],
+          },
+        });
+
+        // 4. Xóa các lượt thanh toán tiền của khách (payments)
+        await tx.payment.deleteMany({
+          where: { customer: { userId: { in: userIds } } },
+        });
+
+        // 5. Xóa danh mục khách hàng (customers)
+        await tx.customer.deleteMany({
+          where: { userId: { in: userIds } },
+        });
+
+        // 6. Xóa danh mục sản phẩm (products)
+        await tx.product.deleteMany({
+          where: { userId: { in: userIds } },
+        });
+
+        // 7. Xóa nhà cung cấp và các đơn/thanh toán nhập hàng (suppliers)
+        await tx.supplierTransaction.deleteMany({
+          where: { supplier: { userId: { in: userIds } } },
+        });
+        await tx.supplierPayment.deleteMany({
+          where: { supplier: { userId: { in: userIds } } },
+        });
+        await tx.supplier.deleteMany({
+          where: { userId: { in: userIds } },
+        });
+
+        // 8. Xóa nhân viên và chấm công/ứng lương/bảng lương (employees)
+        await tx.attendance.deleteMany({
+          where: { employee: { userId: { in: userIds } } },
+        });
+        await tx.salaryAdvance.deleteMany({
+          where: { employee: { userId: { in: userIds } } },
+        });
+        await tx.salaryPayment.deleteMany({
+          where: { employee: { userId: { in: userIds } } },
+        });
+        await tx.employee.deleteMany({
+          where: { userId: { in: userIds } },
+        });
+
+        // 9. Xóa dữ liệu quán tính giờ (shop tables, sessions)
+        await tx.shopSession.deleteMany({
+          where: {
+            OR: [
+              { userId: { in: userIds } },
+              { table: { userId: { in: userIds } } },
+            ],
+          },
+        });
+        await tx.shopTable.deleteMany({
+          where: { userId: { in: userIds } },
+        });
+
+        // 10. Xóa sản phẩm tồn kho (inventory_products)
+        await tx.inventoryProduct.deleteMany({
+          where: { userId: { in: userIds } },
+        });
+
+        // 11. Xóa liên kết và yêu cầu Workspace
+        await tx.workspaceJoinRequest.deleteMany({
+          where: {
+            OR: [
+              { userId: { in: userIds } },
+              { workspace: { ownerId: { in: userIds } } },
+            ],
+          },
+        });
+        await tx.workspaceMember.deleteMany({
+          where: {
+            OR: [
+              { userId: { in: userIds } },
+              { workspace: { ownerId: { in: userIds } } },
+            ],
+          },
+        });
+        await tx.workspace.deleteMany({
+          where: { ownerId: { in: userIds } },
+        });
+
+        // 12. Xóa nhật ký hoạt động (activity_logs)
+        await tx.activityLog.deleteMany({
+          where: { userId: { in: userIds } },
+        });
+
+        // 13. Xóa tài khoản User
+        await tx.user.deleteMany({
+          where: { id: { in: userIds } },
+        });
+      });
+
+      logger.info(`[CLEANUP] Đã xóa vĩnh viễn và dọn dẹp sạch sẽ ${userIds.length} tài khoản đã xóa mềm quá 7 ngày.`);
     } catch (error) {
       logger.error(`[CLEANUP] Lỗi dọn dẹp tài khoản xóa mềm: ${error.stack || error.message}`);
     }
@@ -154,9 +273,13 @@ const startCleanupScheduler = () => {
 
 startCleanupScheduler();
 
-// Bắt đầu lắng nghe cổng mạng (Tải lại máy chủ khi lưu cấu hình và prompt mới)
-app.listen(PORT, () => {
-  logger.info(`Máy chủ Express đang chạy thành công tại cổng ${PORT}`);
-});
+// Tạo HTTP server và khởi tạo Socket.IO
+const http = require('http');
+const { initSocket } = require('./utils/socket');
+const server = http.createServer(app);
+initSocket(server);
 
-// Kích hoạt nodemon tải lại Prisma Client mới phát sinh: Workspace Owner permissions updated.
+// Bắt đầu lắng nghe cổng mạng (Tải lại máy chủ khi lưu cấu hình và prompt mới)
+server.listen(PORT, () => {
+  logger.info(`Máy chủ Express + Socket.IO đang chạy thành công tại cổng ${PORT}`);
+});

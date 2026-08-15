@@ -44,6 +44,7 @@ model User {
   employees    Employee[]    // Một chủ buôn quản lý nhiều nhân viên sạp hàng
   activityLogs ActivityLog[] // Nhật ký hoạt động của chủ buôn này
   inventoryProducts InventoryProduct[] // Các sản phẩm trong kho của chủ buôn này
+  inventoryLogs     InventoryLog[]     // Lịch sử biến động nhập/xuất/điều chỉnh kho
   shopTables   ShopTable[]
   shopSessions ShopSession[]
   // Quan hệ Workspace
@@ -341,14 +342,39 @@ model InventoryProduct {
   createdBy    String?  // ID của người trực tiếp tạo bản ghi này
   name         String   // Tên sản phẩm trong kho
   quantity     Decimal  @db.Decimal(12, 3) @default(0) // Số lượng tồn kho
+  minQuantity  Decimal  @db.Decimal(12, 3) @default(0) // Định mức tồn tối thiểu để cảnh báo
   price        Decimal  @db.Decimal(12, 2) @default(0) // Giá nhập hàng
   unit         String   @default("cái") // Đơn vị tính
   isActive     Boolean  @default(true) // Trạng thái hoạt động (cho phép ẩn/xóa mềm)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  logs         InventoryLog[]
+  shopSessionItems ShopSessionItem[]
+
   @@index([userId])
   @@map("inventory_products")
+}
+
+model InventoryLog {
+  id           String           @id @default(uuid())
+  userId       String           // ID của chủ buôn/workspace
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId    String           // ID của sản phẩm kho
+  product      InventoryProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdBy    String?          // ID của người trực tiếp thực hiện thao tác
+  type         String           // "IN" (Nhập hàng), "OUT" (Xuất kho), "ADJUST" (Kiểm kê/Cân bằng)
+  quantity     Decimal          @db.Decimal(12, 3) // Số lượng thay đổi (số dương)
+  price        Decimal          @default(0) @db.Decimal(12, 2) // Đơn giá tại thời điểm thực hiện (nếu có)
+  previousQty  Decimal          @db.Decimal(12, 3) // Số lượng tồn trước khi thao tác
+  newQty       Decimal          @db.Decimal(12, 3) // Số lượng tồn sau khi thao tác
+  reason       String?          // Lý do (Dùng cho quán, Bán lẻ, Hư hỏng, Nhập mua mới, Cân bằng kiểm kê...)
+  createdAt    DateTime         @default(now())
+
+  @@index([userId])
+  @@index([productId])
+  @@index([createdAt])
+  @@map("inventory_logs")
 }
 
 model ShopTable {
@@ -383,7 +409,25 @@ model ShopSession {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  items       ShopSessionItem[]
+
   @@map("shop_sessions")
+}
+
+model ShopSessionItem {
+  id          String           @id @default(uuid())
+  sessionId   String
+  session     ShopSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  productId   String
+  product     InventoryProduct @relation(fields: [productId], references: [id], onDelete: Restrict)
+  quantity    Decimal          @db.Decimal(12, 3) // Số lượng sử dụng
+  price       Decimal          @db.Decimal(12, 2) // Đơn giá tại thời điểm gọi
+  amount      Decimal          @db.Decimal(12, 2) // Thành tiền (= quantity * price)
+  createdAt   DateTime         @default(now())
+
+  @@index([sessionId])
+  @@index([productId])
+  @@map("shop_session_items")
 }
 
 // --- HỆ THỐNG WORKSPACE ---

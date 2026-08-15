@@ -3,6 +3,18 @@ const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
 const { recordAiUsage } = require('../utils/aiUsage');
+const { callGeminiWithRetry } = require('../utils/geminiHelper');
+const { emitWorkspaceEvent } = require('../utils/socket');
+
+// Helper gửi socket event thông báo giao dịch / nợ khách hàng thay đổi
+const notifyCustomerUpdate = (userId, action, payload = {}) => {
+  emitWorkspaceEvent(userId, 'CUSTOMER_UPDATED', {
+    action,
+    userId,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  });
+};
 
 // Hàm chuẩn hóa tên tiếng Việt phục vụ so khớp giọng nói
 const normalizeName = (str) => {
@@ -159,7 +171,7 @@ const createTransaction = async (req, res, next) => {
         throw new BadRequestError('Số lượng thịt phải lớn hơn 0 và đơn giá không được âm.');
       }
 
-      const amount = quantity * price;
+      const amount = Math.round(quantity * price);
       calculatedTotal += amount;
 
       formattedItems.push({
@@ -226,6 +238,7 @@ const createTransaction = async (req, res, next) => {
       'CREATE_TRANSACTION',
       `Ghi nợ đơn hàng mới cho khách ${customer.name}: Tổng tiền ${calculatedTotal.toLocaleString('vi-VN')}đ`
     );
+    notifyCustomerUpdate(userId, 'CREATE_TRANSACTION', { customerId, transactionId: newTransaction.id });
 
     res.status(201).json({
       success: true,
@@ -323,7 +336,7 @@ const updateTransaction = async (req, res, next) => {
       if (quantity <= 0 || price < 0) {
         throw new BadRequestError('Số lượng phải > 0 và đơn giá không được âm.');
       }
-      const amount = quantity * price;
+      const amount = Math.round(quantity * price);
       calculatedTotal += amount;
       formattedItems.push({ productId: item.productId, quantity, price, amount });
     }
@@ -384,6 +397,7 @@ const updateTransaction = async (req, res, next) => {
       'UPDATE_TRANSACTION',
       `Cập nhật đơn nợ của khách hàng ${customer?.name || 'ẩn'}: Tổng tiền mới ${calculatedTotal.toLocaleString('vi-VN')}đ`
     );
+    notifyCustomerUpdate(userId, 'UPDATE_TRANSACTION', { customerId: existing.customerId, transactionId: id });
 
     res.status(200).json({ success: true, data: updated });
   } catch (error) {
@@ -474,7 +488,6 @@ const scanTicket = async (req, res, next) => {
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
-    const modelName = 'gemini-3.1-pro-preview'; // Gemini 3.1 Pro Preview cho OCR hình ảnh chính xác hơn
 
     // Nếu không có API Key, chạy chế độ giả lập để người dùng thử nghiệm
     if (!apiKey || apiKey === 'your_gemini_api_key_here') {
@@ -489,7 +502,7 @@ const scanTicket = async (req, res, next) => {
         success: true,
         isMock: true,
         usageCost: {
-          model: modelName,
+          model: 'gemini-2.5-flash',
           inputType: 'image',
           inputTokens: 0,
           outputTokens: 0,
@@ -501,19 +514,14 @@ const scanTicket = async (req, res, next) => {
       });
     }
 
-    // Gọi API của Google Gemini để nhận diện hình ảnh tích kê hàng thịt
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `Bạn là trợ lý OCR chuyên nghiệp, chuyên trích xuất dữ liệu từ hình ảnh hóa đơn bán hàng, tích kê bán thịt viết tay tiếng Việt.
+    // Gọi API của Google Gemini để nhận diện hình ảnh tích kê hàng thịt với retry tự động
+    const geminiResult = await callGeminiWithRetry({
+      apiKey,
+      contents: [
+        {
+          parts: [
+            {
+              text: `Bạn là trợ lý OCR chuyên nghiệp, chuyên trích xuất dữ liệu từ hình ảnh hóa đơn bán hàng, tích kê bán thịt viết tay tiếng Việt.
 
 Hãy đọc thêm trường "Tên khách hàng" ở phía trên bảng (thường nằm sau nhãn "Tên khách hàng:"). Trả về đúng tên viết tay đọc được vào trường customer_name. Nếu không đọc rõ hoặc trường này để trống, trả về customer_name = null. Không lấy tên cửa hàng, tên chủ cửa hàng hoặc tên người bán làm tên khách hàng.
 
@@ -530,55 +538,45 @@ Lưu ý quy đổi:
 - Nếu cột đơn giá trống nhưng có số lượng và thành tiền, bắt buộc phải tính: price = amount / quantity (làm tròn thành số nguyên).
 - Nếu cột số lượng trống nhưng có thành tiền, hãy để quantity = 1 và price = amount.
 - Chỉ trả về chuỗi JSON hợp lệ theo đúng cấu trúc schema yêu cầu.`
-              },
-              {
-                inlineData: {
-                  mimeType,
-                  data: base64Data
-                }
-              }
-            ]
-          }
-        ],
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0,
-          maxOutputTokens: 8192, // Tăng giới hạn để tránh JSON OCR bị cắt giữa chừng
-          responseSchema: {
-            type: "OBJECT",
-            properties: {
-              items: {
-                type: "ARRAY",
-                items: {
-                  type: "OBJECT",
-                  properties: {
-                    name: { type: "STRING" },
-                    quantity: { type: "NUMBER" },
-                    price: { type: "NUMBER" },
-                    amount: { type: "NUMBER" }
-                  },
-                  required: ["name", "quantity"]
-                }
-              },
-              customer_name: { type: "STRING", nullable: true }
             },
-            required: ["items", "customer_name"]
-          }
+            {
+              inlineData: {
+                mimeType,
+                data: base64Data
+              }
+            }
+          ]
         }
-      })
+      ],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 8192,
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            items: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  name: { type: "STRING" },
+                  quantity: { type: "NUMBER" },
+                  price: { type: "NUMBER" },
+                  amount: { type: "NUMBER" }
+                },
+                required: ["name", "quantity"]
+              }
+            },
+            customer_name: { type: "STRING", nullable: true }
+          },
+          required: ["items", "customer_name"]
+        }
+      }
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Lỗi Gemini API: ${response.status} - ${errText}`);
-    }
-
-    const result = await response.json();
-    const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!textResponse) {
-      throw new Error('Gemini không phản hồi dữ liệu.');
-    }
+    const textResponse = geminiResult.text;
+    const modelName = geminiResult.model;
+    const resultUsage = geminiResult.usageMetadata;
 
     // Giải mã kết quả JSON trả về từ AI và so khớp sản phẩm
     const parsedData = JSON.parse(textResponse.trim());
@@ -624,7 +622,7 @@ Lưu ý quy đổi:
       feature: 'SCAN_TICKET',
       model: modelName,
       inputType: 'image',
-      usageMetadata: result.usageMetadata,
+      usageMetadata: resultUsage,
     });
     const matchedItems = await matchOrCreateProducts(userId, parsedItems);
     res.status(200).json({
@@ -781,7 +779,6 @@ Chỉ trả về chuỗi JSON duy nhất, không thêm bất kỳ văn bản hư
 }`;
 
     // 3. Chuẩn bị nội dung gửi cho Gemini
-    let modelName = 'gemini-3.1-pro-preview';
     const classificationPrompt = `${systemPrompt}
 QUY TẮC BẮT BUỘC: Nếu câu thoại không liên quan đến ghi nợ hay trả tiền, đặt transaction_type = "unrelated", status = "unrelated", customer_name = null, items = [], missing_fields = [].
 `;
@@ -809,32 +806,16 @@ QUY TẮC BẮT BUỘC: Nếu câu thoại không liên quan đến ghi nợ hay
       contents[0].parts.push({ text: classificationPrompt + `\nBây giờ hãy phân tích transcript sau đây và trả về JSON:\n"${transcript}"` });
     }
 
-    // 4. Gọi API của Google Gemini
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents,
-        generationConfig: {
-          responseMimeType: "application/json"
-        }
-      })
+    // 4. Gọi API của Google Gemini với retry tự động
+    const geminiVoiceResult = await callGeminiWithRetry({
+      apiKey,
+      contents,
+      generationConfig: {},
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Lỗi Gemini API: ${response.status} - ${errText}`);
-    }
-
-    const result = await response.json();
-    const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!textResponse) {
-      throw new Error('Gemini không phản hồi dữ liệu.');
-    }
+    const textResponse = geminiVoiceResult.text;
+    const modelName = geminiVoiceResult.model;
+    const resultUsage = geminiVoiceResult.usageMetadata;
 
     const parsedData = JSON.parse(textResponse.trim());
     const firstResult = Array.isArray(parsedData) ? parsedData[0] : parsedData;
@@ -844,7 +825,7 @@ QUY TẮC BẮT BUỘC: Nếu câu thoại không liên quan đến ghi nợ hay
       feature: 'VOICE_TO_TEXT',
       model: modelName,
       inputType: audio ? 'audio' : 'text',
-      usageMetadata: result.usageMetadata,
+      usageMetadata: resultUsage,
     });
 
     // So khớp thông tin khách hàng trong DB từ customer_name đọc được
@@ -1045,6 +1026,7 @@ const deleteTransaction = async (req, res, next) => {
       'DELETE_TRANSACTION',
       `Xóa đơn nợ của khách hàng ${customer?.name || 'ẩn'}: Số tiền ${existing.totalAmount.toLocaleString('vi-VN')}đ`
     );
+    notifyCustomerUpdate(userId, 'DELETE_TRANSACTION', { customerId: existing.customerId, transactionId: id });
 
     res.status(200).json({
       success: true,

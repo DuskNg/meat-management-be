@@ -2,6 +2,17 @@
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
+const { emitWorkspaceEvent } = require('../utils/socket');
+
+// Helper gửi socket event thông báo thanh toán / nợ khách hàng thay đổi
+const notifyCustomerUpdate = (userId, action, payload = {}) => {
+  emitWorkspaceEvent(userId, 'CUSTOMER_UPDATED', {
+    action,
+    userId,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  });
+};
 
 // 1. Tạo nhật ký thu tiền trả nợ mới (Payment)
 const createPayment = async (req, res, next) => {
@@ -50,6 +61,7 @@ const createPayment = async (req, res, next) => {
       'CREATE_PAYMENT',
       `Thu tiền trả nợ từ khách hàng ${customer.name}: Số tiền ${payAmount.toLocaleString('vi-VN')}đ`
     );
+    notifyCustomerUpdate(userId, 'CREATE_PAYMENT', { customerId, paymentId: payment.id });
 
     res.status(201).json({
       success: true,
@@ -137,6 +149,7 @@ const updatePayment = async (req, res, next) => {
       'UPDATE_PAYMENT',
       `Cập nhật lượt thu tiền của khách hàng ${updated.customer.name}: Số tiền mới ${payAmount.toLocaleString('vi-VN')}đ`
     );
+    notifyCustomerUpdate(userId, 'UPDATE_PAYMENT', { customerId: existing.customerId, paymentId: id });
 
     res.status(200).json({ success: true, data: updated });
   } catch (error) {
@@ -179,6 +192,7 @@ const deletePayment = async (req, res, next) => {
       'DELETE_PAYMENT',
       `Xóa lượt thu tiền của khách hàng ${customer?.name || 'ẩn'}: Số tiền ${existing.amount.toLocaleString('vi-VN')}đ`
     );
+    notifyCustomerUpdate(userId, 'DELETE_PAYMENT', { customerId: existing.customerId, paymentId: id });
 
     res.status(200).json({
       success: true,

@@ -2,6 +2,17 @@
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
+const { emitWorkspaceEvent } = require('../utils/socket');
+
+// Helper gửi socket event thông báo khách hàng thay đổi
+const notifyCustomerUpdate = (userId, action, payload = {}) => {
+  emitWorkspaceEvent(userId, 'CUSTOMER_UPDATED', {
+    action,
+    userId,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  });
+};
 
 // 1. Lấy toàn bộ danh sách khách hàng của chủ buôn đang đăng nhập
 const getCustomers = async (req, res, next) => {
@@ -57,12 +68,15 @@ const getCustomers = async (req, res, next) => {
       },
     });
 
-    // Tính toán công nợ thực tế cho từng khách hàng
+    // Tính toán công nợ thực tế cho từng khách hàng (làm tròn số nguyên chuẩn VNĐ)
     const dataWithDebt = customers.map((c) => {
-      const totalPurchase = c.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0);
-      const totalPaid = c.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
+      const totalPurchase = Math.round(c.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0));
+      const totalPaid = Math.round(c.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0));
       // Bao gồm cả manualDebt (số nợ thủ công ban đầu cho khách nợ xấu không có lịch sử giao dịch)
-      const debt = totalPurchase - totalPaid + parseFloat(c.manualDebt || 0);
+      let debt = Math.round(totalPurchase - totalPaid + parseFloat(c.manualDebt || 0));
+      if (Math.abs(debt) < 1) {
+        debt = 0;
+      }
 
       // Loại bỏ danh sách giao dịch con để giảm tải dung lượng mạng
       const { transactions, payments, ...rest } = c;
@@ -129,10 +143,13 @@ const getCustomerById = async (req, res, next) => {
       }
     }
 
-    const totalPurchase = customer.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0);
-    const totalPaid = customer.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
+    const totalPurchase = Math.round(customer.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0));
+    const totalPaid = Math.round(customer.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0));
     // Bao gồm cả manualDebt (số nợ thủ công ban đầu cho khách nợ xấu không có lịch sử giao dịch)
-    const debt = totalPurchase - totalPaid + parseFloat(customer.manualDebt || 0);
+    let debt = Math.round(totalPurchase - totalPaid + parseFloat(customer.manualDebt || 0));
+    if (Math.abs(debt) < 1) {
+      debt = 0;
+    }
 
     const { transactions, payments, ...rest } = customer;
 
@@ -236,6 +253,7 @@ const createCustomer = async (req, res, next) => {
       isBadDebtBool ? 'CREATE_BAD_DEBT_CUSTOMER' : 'CREATE_CUSTOMER',
       `Tạo khách hàng mới: ${customer.name} (SĐT: ${customer.phone || 'Không'}, Nợ xấu: ${customer.isBadDebt})`
     );
+    notifyCustomerUpdate(userId, 'CREATE_CUSTOMER', { customerId: customer.id });
 
     res.status(201).json({
       success: true,
@@ -340,6 +358,7 @@ const updateCustomer = async (req, res, next) => {
       'UPDATE_CUSTOMER',
       `Cập nhật khách hàng: ${customerExists.name} (${customerExists.phone || 'Không'}) -> ${updatedCustomer.name} (${updatedCustomer.phone || 'Không'}), Nợ xấu: ${updatedCustomer.isBadDebt}`
     );
+    notifyCustomerUpdate(userId, 'UPDATE_CUSTOMER', { customerId: id });
 
     res.status(200).json({
       success: true,
@@ -408,6 +427,7 @@ const deleteCustomer = async (req, res, next) => {
       'DELETE_CUSTOMER',
       `Xóa mềm khách hàng: ${customerExists.name} (SĐT: ${customerExists.phone || 'Không'}, Nợ xấu: ${customerExists.isBadDebt})`
     );
+    notifyCustomerUpdate(userId, 'DELETE_CUSTOMER', { customerId: id });
 
     res.status(200).json({
       success: true,

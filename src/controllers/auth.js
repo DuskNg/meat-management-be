@@ -12,7 +12,7 @@ const bcrypt = require('bcryptjs');
 // 1. Đăng nhập trực tiếp bằng SĐT (Tạm thời bỏ qua xác thực OTP)
 const requestOtp = async (req, res, next) => {
   try {
-    const { phone } = req.body;
+    const { phone, name } = req.body;
 
     if (!phone) {
       throw new BadRequestError('Số điện thoại là bắt buộc.');
@@ -35,10 +35,10 @@ const requestOtp = async (req, res, next) => {
       user = await prisma.user.create({
         data: {
           phone: trimmedPhone,
-          name: 'Chủ buôn mới',
+          name: name && name.trim() ? name.trim() : 'Chủ buôn mới',
         },
       });
-      console.log(`[AUTH] Tự động tạo tài khoản chủ buôn mới qua luồng SĐT trực tiếp: ${trimmedPhone}`);
+      console.log(`[AUTH] Tự động tạo tài khoản chủ buôn mới qua luồng SĐT trực tiếp: ${trimmedPhone} với tên: ${user.name}`);
     }
 
     // Định nghĩa các Secret Key cho Tokens
@@ -62,6 +62,14 @@ const requestOtp = async (req, res, next) => {
     // Kiểm tra xem user có phải là thành viên của workspace nào không để đồng bộ phân quyền
     const membership = await prisma.workspaceMember.findFirst({
       where: { userId: user.id },
+      include: {
+        workspace: {
+          select: {
+            ownerId: true,
+            name: true,
+          },
+        },
+      },
     });
 
     const permissions = membership
@@ -96,6 +104,7 @@ const requestOtp = async (req, res, next) => {
         isAdmin: user.isAdmin,
         isWorkspaceOwner: user.isWorkspaceOwner,
         permissions,
+        workspaceMember: membership || null,
       },
       tokens: {
         accessToken,
@@ -187,6 +196,14 @@ const verifyOtp = async (req, res, next) => {
     // Kiểm tra xem user có phải là thành viên của workspace nào không để đồng bộ phân quyền
     const membership = await prisma.workspaceMember.findFirst({
       where: { userId: user.id },
+      include: {
+        workspace: {
+          select: {
+            ownerId: true,
+            name: true,
+          },
+        },
+      },
     });
 
     const permissions = membership
@@ -219,6 +236,7 @@ const verifyOtp = async (req, res, next) => {
         isAdmin: user.isAdmin,
         isWorkspaceOwner: user.isWorkspaceOwner,
         permissions,
+        workspaceMember: membership || null,
       },
       tokens: {
         accessToken,
@@ -336,6 +354,14 @@ const getProfile = async (req, res, next) => {
     // Kiểm tra xem user có phải là thành viên của workspace nào không để đồng bộ phân quyền
     const membership = await prisma.workspaceMember.findFirst({
       where: { userId },
+      include: {
+        workspace: {
+          select: {
+            ownerId: true,
+            name: true,
+          },
+        },
+      },
     });
 
     const permissions = membership
@@ -367,6 +393,7 @@ const getProfile = async (req, res, next) => {
         hasPin: !!user.pin,
         isAdmin: user.isAdmin,
         permissions,
+        workspaceMember: membership || null,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },
@@ -612,6 +639,49 @@ const adminLogin = async (req, res, next) => {
   }
 };
 
+// 11. Xác thực mã mời Workspace công khai (Không cần đăng nhập trước)
+const validateInvite = async (req, res, next) => {
+  try {
+    const { inviteCode } = req.params;
+
+    if (!inviteCode || !inviteCode.trim()) {
+      throw new BadRequestError('Mã mời là bắt buộc.');
+    }
+
+    // Tìm workspace tương ứng với mã mời
+    const workspace = await prisma.workspace.findUnique({
+      where: { inviteCode: inviteCode.trim().toUpperCase() },
+      select: {
+        id: true,
+        name: true,
+        isActive: true,
+        owner: {
+          select: { name: true },
+        },
+      },
+    });
+
+    if (!workspace) {
+      throw new BadRequestError('Mã mời Workspace không tồn tại trên hệ thống.');
+    }
+
+    if (!workspace.isActive) {
+      throw new BadRequestError('Workspace này hiện đang tạm dừng hoạt động.');
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Mã mời Workspace hợp lệ.',
+      data: {
+        workspaceName: workspace.name,
+        ownerName: workspace.owner?.name || 'Chủ workspace',
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   requestOtp,
   verifyOtp,
@@ -623,6 +693,7 @@ module.exports = {
   verifyPin,
   clearPin,
   adminLogin,
+  validateInvite,
 };
 
 // Cập nhật cấu hình để nodemon tự động khởi động lại và nhận Prisma Client mới

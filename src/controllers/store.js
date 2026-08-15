@@ -2,7 +2,19 @@
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, AppError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
+const { callGeminiWithRetry } = require('../utils/geminiHelper');
+const { emitWorkspaceEvent } = require('../utils/socket');
 const crypto = require('crypto');
+
+// Helper gửi socket event thông báo phân hệ nhà hàng / quán ăn thay đổi
+const notifyStoreUpdate = (userId, action, payload = {}) => {
+  emitWorkspaceEvent(userId, 'STORE_UPDATED', {
+    action,
+    userId,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  });
+};
 
 // Hàm hỗ trợ so khớp tên món ăn hoặc chuyển thành "Món lẻ" ảo
 const matchOrCreateStoreProducts = async (userId, items, creatorId) => {
@@ -127,6 +139,7 @@ const createTablesBulk = async (req, res, next) => {
       'CREATE_TABLES_BULK',
       `Tạo hàng loạt ${filteredTablesData.length} bàn ăn mới với tiền tố "${prefix}"`
     );
+    notifyStoreUpdate(userId, 'CREATE_TABLES_BULK');
 
     res.status(201).json({
       success: true,
@@ -326,6 +339,7 @@ const createTable = async (req, res, next) => {
     });
 
     await logActivity(userId, 'CREATE_TABLE', `Tạo bàn ăn mới: ${table.name}`);
+    notifyStoreUpdate(userId, 'CREATE_TABLE', { tableId: table.id });
 
     res.status(201).json({
       success: true,
@@ -382,6 +396,7 @@ const updateTable = async (req, res, next) => {
     });
 
     await logActivity(userId, 'UPDATE_TABLE', `Cập nhật bàn ăn: ${table.name} thành ${updatedTable.name}`);
+    notifyStoreUpdate(userId, 'UPDATE_TABLE', { tableId: id });
 
     res.status(200).json({
       success: true,
@@ -424,6 +439,7 @@ const deleteTable = async (req, res, next) => {
     });
 
     await logActivity(userId, 'DELETE_TABLE', `Xóa bàn ăn: ${table.name}`);
+    notifyStoreUpdate(userId, 'DELETE_TABLE', { tableId: id });
 
     res.status(200).json({
       success: true,
@@ -486,6 +502,7 @@ const createProduct = async (req, res, next) => {
     });
 
     await logActivity(userId, 'CREATE_STORE_PRODUCT', `Thêm món ăn: ${product.name}`);
+    notifyStoreUpdate(userId, 'CREATE_STORE_PRODUCT', { productId: product.id });
 
     res.status(201).json({
       success: true,
@@ -531,6 +548,7 @@ const updateProduct = async (req, res, next) => {
     });
 
     await logActivity(userId, 'UPDATE_STORE_PRODUCT', `Cập nhật món ăn: ${product.name}`);
+    notifyStoreUpdate(userId, 'UPDATE_STORE_PRODUCT', { productId: id });
 
     res.status(200).json({
       success: true,
@@ -572,6 +590,7 @@ const deleteProduct = async (req, res, next) => {
     });
 
     await logActivity(userId, 'DELETE_STORE_PRODUCT', `Xóa món ăn: ${product.name}`);
+    notifyStoreUpdate(userId, 'DELETE_STORE_PRODUCT', { productId: id });
 
     res.status(200).json({
       success: true,
@@ -758,6 +777,7 @@ const createTransaction = async (req, res, next) => {
       'CREATE_STORE_TRANSACTION',
       `Ghi hóa đơn gọi món cho ${table.name} tổng số tiền: ${calculatedTotal}đ`
     );
+    notifyStoreUpdate(userId, 'CREATE_STORE_TRANSACTION', { tableId: customerId, transactionId: transaction.id });
 
     res.status(201).json({
       success: true,
@@ -803,6 +823,7 @@ const deleteTransaction = async (req, res, next) => {
     ]);
 
     await logActivity(userId, 'DELETE_STORE_TRANSACTION', `Hủy hóa đơn gọi món giá trị ${transaction.totalAmount}đ`);
+    notifyStoreUpdate(userId, 'DELETE_STORE_TRANSACTION', { tableId: transaction.customerId, transactionId: id });
 
     res.status(200).json({
       success: true,
@@ -886,6 +907,7 @@ const createPayment = async (req, res, next) => {
     });
 
     await logActivity(userId, 'CREATE_STORE_PAYMENT', `Thanh toán hóa đơn cho ${table.name} số tiền: ${amount}đ`);
+    notifyStoreUpdate(userId, 'CREATE_STORE_PAYMENT', { tableId: customerId, paymentId: payment.id });
 
     res.status(201).json({
       success: true,
@@ -916,7 +938,6 @@ const scanInvoice = async (req, res, next) => {
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
-    const modelName = 'gemini-3.1-pro-preview';
 
     if (!apiKey || apiKey === 'your_gemini_api_key_here') {
       const mockItems = [
@@ -931,18 +952,13 @@ const scanInvoice = async (req, res, next) => {
       });
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `Bạn là trợ lý OCR chuyên nghiệp, chuyên trích xuất dữ liệu từ hình ảnh hóa đơn nhà hàng, tích kê thanh toán quán ăn, quán nước viết tay tiếng Việt.
+    const geminiResult = await callGeminiWithRetry({
+      apiKey,
+      contents: [
+        {
+          parts: [
+            {
+              text: `Bạn là trợ lý OCR chuyên nghiệp, chuyên trích xuất dữ liệu từ hình ảnh hóa đơn nhà hàng, tích kê thanh toán quán ăn, quán nước viết tay tiếng Việt.
 
 Hãy đọc tên khách hàng hoặc tên bàn ăn ở phía trên hóa đơn (thường ghi "Bàn 1", "Bàn 2" hoặc tên người). Trả về đúng tên viết tay đọc được vào trường customer_name. Nếu không đọc rõ, trả về customer_name = null.
 
@@ -959,57 +975,43 @@ Lưu ý quy đổi:
 - Nếu cột đơn giá trống nhưng có số lượng và thành tiền, bắt buộc phải tính: price = amount / quantity (làm tròn thành số nguyên).
 - Nếu cột số lượng trống nhưng có thành tiền, hãy để quantity = 1 và price = amount.
 - Chỉ trả về chuỗi JSON hợp lệ theo đúng cấu trúc schema yêu cầu.`,
-              },
-              {
-                inlineData: {
-                  mimeType,
-                  data: base64Data,
-                },
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0,
-          maxOutputTokens: 8192,
-          responseSchema: {
-            type: 'OBJECT',
-            properties: {
-              items: {
-                type: 'ARRAY',
-                items: {
-                  type: 'OBJECT',
-                  properties: {
-                    name: { type: 'STRING' },
-                    quantity: { type: 'NUMBER' },
-                    price: { type: 'NUMBER' },
-                    amount: { type: 'NUMBER' },
-                  },
-                  required: ['name', 'quantity'],
-                },
-              },
-              customer_name: { type: 'STRING', nullable: true },
             },
-            required: ['items', 'customer_name'],
-          },
+            {
+              inlineData: {
+                mimeType,
+                data: base64Data,
+              },
+            },
+          ],
         },
-      }),
+      ],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 8192,
+        responseSchema: {
+          type: 'OBJECT',
+          properties: {
+            items: {
+              type: 'ARRAY',
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  name: { type: 'STRING' },
+                  quantity: { type: 'NUMBER' },
+                  price: { type: 'NUMBER' },
+                  amount: { type: 'NUMBER' },
+                },
+                required: ['name', 'quantity'],
+              },
+            },
+            customer_name: { type: 'STRING', nullable: true },
+          },
+          required: ['items', 'customer_name'],
+        },
+      },
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Lỗi Gemini API: ${response.status} - ${errText}`);
-    }
-
-    const result = await response.json();
-    const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!textResponse) {
-      throw new Error('Gemini không phản hồi dữ liệu.');
-    }
-
-    const parsedJson = JSON.parse(textResponse);
+    const parsedJson = JSON.parse(geminiResult.text);
     const matchedItems = await matchOrCreateStoreProducts(userId, parsedJson.items, req.user.id);
 
     res.status(200).json({
@@ -1071,8 +1073,6 @@ Quy tắc:
 - Trích xuất tên bàn ăn/khách hàng vào trường customer_name (Ví dụ: "bàn 3", "bàn 5", "chị Hoa").
 - Trả về JSON theo schema yêu cầu.`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=${apiKey}`;
-
     let parts = [];
     if (audio) {
       let cleanBase64 = audio;
@@ -1095,57 +1095,39 @@ Hãy phân tích câu nói: "${transcript || 'Hãy nghe file ghi âm đính kèm
 
     parts.push({ text: textPrompt });
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    const geminiVoiceResult = await callGeminiWithRetry({
+      apiKey,
+      contents: [{ parts }],
+      systemInstruction: {
+        parts: [{ text: systemPrompt }],
       },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        systemInstruction: {
-          parts: [{ text: systemPrompt }],
-        },
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0,
-          responseSchema: {
-            type: 'OBJECT',
-            properties: {
-              transaction_type: { type: 'STRING' },
-              customer_name: { type: 'STRING', nullable: true },
+      generationConfig: {
+        temperature: 0,
+        responseSchema: {
+          type: 'OBJECT',
+          properties: {
+            transaction_type: { type: 'STRING' },
+            customer_name: { type: 'STRING', nullable: true },
+            items: {
+              type: 'ARRAY',
               items: {
-                type: 'ARRAY',
-                items: {
-                  type: 'OBJECT',
-                  properties: {
-                    name: { type: 'STRING' },
-                    quantity: { type: 'NUMBER' },
-                    price: { type: 'NUMBER', nullable: true },
-                    amount: { type: 'NUMBER', nullable: true },
-                  },
-                  required: ['name', 'quantity'],
+                type: 'OBJECT',
+                properties: {
+                  name: { type: 'STRING' },
+                  quantity: { type: 'NUMBER' },
+                  price: { type: 'NUMBER', nullable: true },
+                  amount: { type: 'NUMBER', nullable: true },
                 },
+                required: ['name', 'quantity'],
               },
             },
-            required: ['transaction_type', 'customer_name'],
           },
+          required: ['transaction_type', 'customer_name'],
         },
-      }),
+      },
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Lỗi Gemini API: ${response.status} - ${errText}`);
-    }
-
-    const result = await response.json();
-    const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!textResponse) {
-      throw new Error('Gemini không phản hồi dữ liệu.');
-    }
-
-    const parsedJson = JSON.parse(textResponse);
+    const parsedJson = JSON.parse(geminiVoiceResult.text);
     if (parsedJson.transaction_type === 'unrelated') {
       return res.status(200).json({
         success: true,

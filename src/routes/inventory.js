@@ -15,4 +15,8 @@ router.post('/products', inventoryController.createInventoryProduct);
 router.put('/products/:id', inventoryController.updateInventoryProduct);
 router.delete('/products/:id', inventoryController.deleteInventoryProduct);
 
+// Nghiệp vụ Nhập / Xuất / Điều chỉnh kiểm kê và Lịch sử thẻ kho
+router.post('/products/:id/adjust', inventoryController.adjustInventoryStock);
+router.get('/products/:id/logs', inventoryController.getInventoryLogs);
+
 module.exports = router;
