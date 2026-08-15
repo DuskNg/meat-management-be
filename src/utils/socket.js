@@ -13,8 +13,11 @@ const initSocket = (httpServer) => {
   });
 
   io.on('connection', (socket) => {
+    console.log(`[SOCKET] Client connected: ${socket.id}`);
+
     // Khi client kết nối và gửi yêu cầu tham gia room workspace/cửa hàng
     socket.on('join_workspace', (workspaceId) => {
+      console.log(`[SOCKET] Client ${socket.id} joined workspace_${workspaceId}`);
       if (workspaceId) {
         socket.join(`workspace_${workspaceId}`);
       }
@@ -22,9 +25,14 @@ const initSocket = (httpServer) => {
 
     // Khi client rời room
     socket.on('leave_workspace', (workspaceId) => {
+      console.log(`[SOCKET] Client ${socket.id} left workspace_${workspaceId}`);
       if (workspaceId) {
         socket.leave(`workspace_${workspaceId}`);
       }
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log(`[SOCKET] Client disconnected: ${socket.id}, reason: ${reason}`);
     });
   });
 
