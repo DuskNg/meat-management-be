@@ -8,8 +8,11 @@ const initSocket = (httpServer) => {
   io = new Server(httpServer, {
     cors: {
       origin: '*', // Cho phép kết nối từ cả Web, Expo và Mobile App
-      methods: ['GET', 'POST', 'PUT', 'DELETE'],
+      methods: ['GET', 'POST'],
+      credentials: false, // Bắt buộc false khi dùng origin: '*' để tránh lỗi CORS
     },
+    allowEIO3: true, // Hỗ trợ Socket.IO phiên bản cũ hơn nếu có
+    transports: ['polling', 'websocket'], // Cho phép cả polling và websocket
   });
 
   io.on('connection', (socket) => {
