@@ -7,6 +7,9 @@ let io = null;
 // value = { type, resourceId, workspaceId, socketId, userId, userName, userColor, lockedAt }
 const activeLocks = new Map();
 
+// Map lưu bộ đếm timeout: lockKey -> setTimeout reference để tự động mở khóa cứng (Hard Timeout)
+const lockTimeouts = new Map();
+
 // Map ngược: socketId → Set các lock keys do socket đó đang giữ (để cleanup khi disconnect)
 const socketLockKeys = new Map();
 
@@ -49,7 +52,9 @@ const initSocket = (httpServer) => {
           }
         }
         if (currentLocks.length > 0) {
+          // Gửi đồng thời cả hai sự kiện (số ít và số nhiều) để đảm bảo tương thích
           socket.emit('RESOURCE_LOCKS_SYNC', { locks: currentLocks });
+          socket.emit('RESOURCE_LOCK_SYNC', { locks: currentLocks });
         }
       }
     });
@@ -89,6 +94,32 @@ const initSocket = (httpServer) => {
 
       console.log(`[SOCKET] Resource locked: ${lockKey} by ${userName} (${socket.id})`);
 
+      // Xóa timeout cũ nếu có
+      const existingTimeout = lockTimeouts.get(lockKey);
+      if (existingTimeout) {
+        clearTimeout(existingTimeout);
+      }
+
+      // Thiết lập Hard Timeout (3 phút = 180000ms) để tự giải phóng khóa
+      const timeoutRef = setTimeout(() => {
+        if (activeLocks.has(lockKey)) {
+          const info = activeLocks.get(lockKey);
+          activeLocks.delete(lockKey);
+          lockTimeouts.delete(lockKey);
+          socketLockKeys.get(info.socketId)?.delete(lockKey);
+
+          console.log(`[SOCKET] Hard Lock Timeout released: ${lockKey}`);
+
+          // Phát sự kiện TIMEOUT_UNLOCKED để báo cho client
+          io.to(`workspace_${workspaceId}`).emit('RESOURCE_LOCK_CHANGED', {
+            action: 'TIMEOUT_UNLOCKED',
+            lockInfo: info,
+          });
+        }
+      }, 180000);
+
+      lockTimeouts.set(lockKey, timeoutRef);
+
       // Broadcast tới tất cả client trong workspace room
       io.to(`workspace_${workspaceId}`).emit('RESOURCE_LOCK_CHANGED', {
         action: 'LOCKED',
@@ -107,6 +138,13 @@ const initSocket = (httpServer) => {
       if (lockInfo && lockInfo.socketId === socket.id) {
         activeLocks.delete(lockKey);
         socketLockKeys.get(socket.id)?.delete(lockKey);
+
+        // Xóa bộ đếm timeout để tránh rò rỉ bộ nhớ
+        const timeout = lockTimeouts.get(lockKey);
+        if (timeout) {
+          clearTimeout(timeout);
+          lockTimeouts.delete(lockKey);
+        }
 
         console.log(`[SOCKET] Resource unlocked: ${lockKey} by ${socket.id}`);
 
@@ -127,6 +165,14 @@ const initSocket = (httpServer) => {
           const lockInfo = activeLocks.get(lockKey);
           if (lockInfo) {
             activeLocks.delete(lockKey);
+            
+            // Xóa bộ đếm timeout
+            const timeout = lockTimeouts.get(lockKey);
+            if (timeout) {
+              clearTimeout(timeout);
+              lockTimeouts.delete(lockKey);
+            }
+
             console.log(`[SOCKET] Auto-released lock on disconnect: ${lockKey}`);
 
             // Thông báo tới workspace room về việc lock được giải phóng

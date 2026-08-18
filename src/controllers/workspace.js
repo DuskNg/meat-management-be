@@ -2,6 +2,7 @@
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError, ConflictError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
+const { emitWorkspaceEvent } = require('../utils/socket');
 const crypto = require('crypto');
 
 // Tạo mã mời ngẫu nhiên 8 ký tự (chữ hoa + số)
@@ -476,6 +477,20 @@ const updateMemberPermissions = async (req, res, next) => {
       },
     });
 
+    // Phát sự kiện socket cập nhật quyền realtime cho thành viên
+    emitWorkspaceEvent(ownerId, 'MEMBER_PERMISSIONS_UPDATED', {
+      memberId: member.userId,
+      permissions: {
+        canManageCustomers: updated.canManageCustomers,
+        canManageDebt: updated.canManageDebt,
+        canManageBadDebt: updated.canManageBadDebt,
+        canManageEmployees: updated.canManageEmployees,
+        canManageStore: updated.canManageStore,
+        canManageInventory: updated.canManageInventory,
+        canManageShop: updated.canManageShop,
+      },
+    });
+
     await logActivity(
       ownerId,
       'UPDATE_WORKSPACE_MEMBER_PERMISSIONS',
@@ -533,6 +548,13 @@ const kickMember = async (req, res, next) => {
         data: resetPermissions,
       }),
     ]);
+
+    // Phát sự kiện socket thông báo thành viên bị xóa khỏi Workspace
+    emitWorkspaceEvent(ownerId, 'MEMBER_PERMISSIONS_UPDATED', {
+      memberId: member.userId,
+      permissions: resetPermissions,
+      kicked: true,
+    });
 
     await logActivity(
       ownerId,

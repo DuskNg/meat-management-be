@@ -249,15 +249,47 @@ const createTransaction = async (req, res, next) => {
   }
 };
 
-// 2. Lấy danh sách hóa đơn giao dịch (có thể lọc theo khách hàng)
+// 2. Lấy danh sách hóa đơn giao dịch (có thể lọc theo khách hàng, người tạo, ngày hôm nay hoặc ngày cụ thể)
 const getTransactions = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId } = req.query;
+    const { customerId, createdBy, todayOnly, date } = req.query;
 
     const whereClause = { userId };
     if (customerId) {
       whereClause.customerId = customerId;
+    }
+
+    // Lọc theo người tạo đơn (dùng cho nhân viên xem đơn của mình)
+    if (createdBy) {
+      whereClause.createdBy = createdBy;
+    }
+
+    // Lọc theo ngày cụ thể (YYYY-MM-DD) hoặc ngày hôm nay (theo múi giờ UTC+7)
+    if (date) {
+      const dateParts = date.split('-');
+      if (dateParts.length === 3) {
+        const year = parseInt(dateParts[0], 10);
+        const month = parseInt(dateParts[1], 10) - 1; // Tháng tính từ 0
+        const dayVal = parseInt(dateParts[2], 10);
+
+        // Đầu ngày và cuối ngày theo giờ Việt Nam, quy đổi sang UTC
+        const startUTC = new Date(Date.UTC(year, month, dayVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+        const endUTC = new Date(Date.UTC(year, month, dayVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+        whereClause.createdAt = { gte: startUTC, lte: endUTC };
+      }
+    } else if (todayOnly === 'true') {
+      const now = new Date();
+      // Tính thời gian hiện tại theo múi giờ Việt Nam (UTC+7)
+      const nowVN = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+      const year = nowVN.getUTCFullYear();
+      const month = nowVN.getUTCMonth();
+      const dateVal = nowVN.getUTCDate();
+
+      // Đầu ngày và cuối ngày theo giờ Việt Nam, quy đổi sang UTC
+      const startUTC = new Date(Date.UTC(year, month, dateVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+      const endUTC = new Date(Date.UTC(year, month, dateVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+      whereClause.createdAt = { gte: startUTC, lte: endUTC };
     }
 
     const transactions = await prisma.transaction.findMany({
