@@ -14,7 +14,7 @@ const notifyInventoryUpdate = (userId, action, payload = {}) => {
   });
 };
 
-// 1. Lấy danh sách sản phẩm trong kho và tổng giá trị kho
+// 1. Lấy danh sách sản phẩm trong kho và tổng giá trị kho, doanh thu dự kiến, lợi nhuận
 const getInventoryProducts = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
@@ -34,20 +34,46 @@ const getInventoryProducts = async (req, res, next) => {
       },
     });
 
-    // Tính toán thành tiền của từng sản phẩm và tổng giá trị kho, trạng thái cảnh báo tồn
-    let totalValue = 0;
+    // Tính toán tổng vốn kho, tổng doanh thu dự kiến, tổng lợi nhuận dự kiến và lợi nhuận thực tế (đã tiêu thụ)
+    let totalImportValue = 0;
+    let totalSellingValue = 0;
+    let totalProfit = 0;
+    let totalRealizedProfit = 0;
+    let totalRealizedRevenue = 0;
+    let totalRealizedCost = 0;
+
     const formattedProducts = products.map((p) => {
       const qty = parseFloat(p.quantity || 0);
       const minQty = parseFloat(p.minQuantity || 0);
-      const price = parseFloat(p.price || 0);
-      const amount = Math.round(qty * price);
-      totalValue += amount;
+
+      // Lấy giá nhập (vốn) và giá bán ra
+      const importPrice = parseFloat(p.importPrice || 0) > 0 ? parseFloat(p.importPrice) : parseFloat(p.price || 0);
+      const sellingPrice = parseFloat(p.sellingPrice || 0);
+      const unitProfit = sellingPrice - importPrice;
+      const profitMargin = importPrice > 0 ? ((sellingPrice - importPrice) / importPrice) * 100 : 0;
+
+      const amount = Math.round(qty * importPrice);
+      const sellingAmount = Math.round(qty * sellingPrice);
+      const profitAmount = Math.round(qty * unitProfit);
+
+      totalImportValue += amount;
+      totalSellingValue += sellingAmount;
+      totalProfit += profitAmount;
 
       // Tính tổng số lượng đã sử dụng / xuất kho
       const usedQuantity = (p.logs || []).reduce(
         (sum, log) => sum + parseFloat(log.quantity || 0),
         0
       );
+
+      // Tính doanh thu, vốn và lợi nhuận thực tế từ số lượng đã tiêu thụ
+      const realizedRevenue = Math.round(usedQuantity * sellingPrice);
+      const realizedCost = Math.round(usedQuantity * importPrice);
+      const realizedProfit = Math.round(usedQuantity * unitProfit);
+
+      totalRealizedRevenue += realizedRevenue;
+      totalRealizedCost += realizedCost;
+      totalRealizedProfit += realizedProfit;
 
       const isOutOfStock = qty <= 0;
       const isLowStock = !isOutOfStock && minQty > 0 && qty <= minQty;
@@ -59,8 +85,17 @@ const getInventoryProducts = async (req, res, next) => {
         quantity: qty,
         usedQuantity,
         minQuantity: minQty,
-        price,
+        price: importPrice, // Giữ tương thích FE cũ
+        importPrice,
+        sellingPrice,
+        unitProfit,
+        profitMargin: Math.round(profitMargin * 100) / 100,
         amount,
+        sellingAmount,
+        profitAmount,
+        realizedRevenue,
+        realizedCost,
+        realizedProfit,
         isOutOfStock,
         isLowStock,
       };
@@ -70,7 +105,13 @@ const getInventoryProducts = async (req, res, next) => {
       success: true,
       data: {
         products: formattedProducts,
-        totalValue,
+        totalValue: totalImportValue, // Tương thích FE cũ
+        totalImportValue,
+        totalSellingValue,
+        totalProfit,
+        totalRealizedProfit,
+        totalRealizedRevenue,
+        totalRealizedCost,
       },
     });
   } catch (error) {
@@ -78,11 +119,11 @@ const getInventoryProducts = async (req, res, next) => {
   }
 };
 
-// 2. Thêm sản phẩm mới vào kho
+// 2. Thêm sản phẩm mới vào kho (hỗ trợ giá nhập & giá bán)
 const createInventoryProduct = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { name, quantity, minQuantity, price, unit } = req.body;
+    const { name, quantity, minQuantity, price, importPrice, sellingPrice, unit } = req.body;
 
     if (!name || !name.trim()) {
       throw new BadRequestError('Tên sản phẩm là bắt buộc.');
@@ -98,9 +139,16 @@ const createInventoryProduct = async (req, res, next) => {
       throw new BadRequestError('Định mức tồn tối thiểu không hợp lệ.');
     }
 
-    const prc = parseFloat(price);
-    if (isNaN(prc) || prc < 0) {
+    // Xác định giá nhập (vốn)
+    const impPrc = importPrice !== undefined ? parseFloat(importPrice) : (price !== undefined ? parseFloat(price) : 0);
+    if (isNaN(impPrc) || impPrc < 0) {
       throw new BadRequestError('Giá nhập sản phẩm không hợp lệ.');
+    }
+
+    // Xác định giá bán
+    const sellPrc = sellingPrice !== undefined ? parseFloat(sellingPrice) : 0;
+    if (isNaN(sellPrc) || sellPrc < 0) {
+      throw new BadRequestError('Giá bán sản phẩm không hợp lệ.');
     }
 
     const product = await prisma.inventoryProduct.create({
@@ -110,7 +158,9 @@ const createInventoryProduct = async (req, res, next) => {
         name: name.trim(),
         quantity: qty,
         minQuantity: minQty,
-        price: prc,
+        price: impPrc,
+        importPrice: impPrc,
+        sellingPrice: sellPrc,
         unit: unit?.trim() || 'cái',
       },
     });
@@ -124,7 +174,7 @@ const createInventoryProduct = async (req, res, next) => {
           createdBy: req.user.id,
           type: 'IN',
           quantity: qty,
-          price: prc,
+          price: impPrc,
           previousQty: 0,
           newQty: qty,
           reason: 'Khởi tạo sản phẩm ban đầu',
@@ -132,7 +182,7 @@ const createInventoryProduct = async (req, res, next) => {
       });
     }
 
-    await logActivity(userId, 'CREATE_INVENTORY_PRODUCT', `Thêm sản phẩm vào kho: ${product.name} (SL: ${qty}, Giá: ${prc}đ)`);
+    await logActivity(userId, 'CREATE_INVENTORY_PRODUCT', `Thêm sản phẩm kho: ${product.name} (SL: ${qty}, Giá nhập: ${impPrc}đ, Giá bán: ${sellPrc}đ)`);
     notifyInventoryUpdate(userId, 'CREATE_INVENTORY_PRODUCT', { productId: product.id });
 
     res.status(201).json({
@@ -144,12 +194,12 @@ const createInventoryProduct = async (req, res, next) => {
   }
 };
 
-// 3. Cập nhật thông tin sản phẩm trong kho
+// 3. Cập nhật thông tin sản phẩm trong kho (hỗ trợ sửa giá nhập & giá bán)
 const updateInventoryProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.effectiveUserId;
-    const { name, quantity, minQuantity, price, unit } = req.body;
+    const { name, quantity, minQuantity, price, importPrice, sellingPrice, unit } = req.body;
 
     const product = await prisma.inventoryProduct.findFirst({
       where: {
@@ -173,9 +223,14 @@ const updateInventoryProduct = async (req, res, next) => {
       throw new BadRequestError('Định mức tồn tối thiểu không hợp lệ.');
     }
 
-    const prc = price !== undefined ? parseFloat(price) : undefined;
-    if (prc !== undefined && (isNaN(prc) || prc < 0)) {
+    const impPrc = importPrice !== undefined ? parseFloat(importPrice) : (price !== undefined ? parseFloat(price) : undefined);
+    if (impPrc !== undefined && (isNaN(impPrc) || impPrc < 0)) {
       throw new BadRequestError('Giá nhập sản phẩm không hợp lệ.');
+    }
+
+    const sellPrc = sellingPrice !== undefined ? parseFloat(sellingPrice) : undefined;
+    if (sellPrc !== undefined && (isNaN(sellPrc) || sellPrc < 0)) {
+      throw new BadRequestError('Giá bán sản phẩm không hợp lệ.');
     }
 
     const updatedProduct = await prisma.inventoryProduct.update({
@@ -184,7 +239,9 @@ const updateInventoryProduct = async (req, res, next) => {
         name: name !== undefined ? name.trim() : undefined,
         quantity: qty,
         minQuantity: minQty,
-        price: prc,
+        price: impPrc,
+        importPrice: impPrc,
+        sellingPrice: sellPrc,
         unit: unit !== undefined ? unit.trim() : undefined,
       },
     });
@@ -206,7 +263,7 @@ const adjustInventoryStock = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.effectiveUserId;
-    const { type, quantity, price, reason } = req.body;
+    const { type, quantity, price, importPrice, sellingPrice, reason } = req.body;
 
     // type phải là 'IN' (Nhập), 'OUT' (Xuất) hoặc 'ADJUST' (Kiểm kê)
     if (!['IN', 'OUT', 'ADJUST'].includes(type)) {
@@ -237,9 +294,11 @@ const adjustInventoryStock = async (req, res, next) => {
     const currentQty = parseFloat(product.quantity || 0);
     let newQty = currentQty;
     let deltaQty = inputQty;
-    let inputPrice = price !== undefined && price !== null ? parseFloat(price) : parseFloat(product.price || 0);
+
+    const currentImp = parseFloat(product.importPrice || 0) > 0 ? parseFloat(product.importPrice) : parseFloat(product.price || 0);
+    let inputPrice = importPrice !== undefined && importPrice !== null ? parseFloat(importPrice) : (price !== undefined && price !== null ? parseFloat(price) : currentImp);
     if (isNaN(inputPrice) || inputPrice < 0) {
-      inputPrice = parseFloat(product.price || 0);
+      inputPrice = currentImp;
     }
 
     let defaultReason = '';
@@ -264,12 +323,19 @@ const adjustInventoryStock = async (req, res, next) => {
 
     // Thực thi trong Transaction đảm bảo tính toàn vẹn
     const result = await prisma.$transaction(async (tx) => {
-      // 1. Cập nhật tồn kho sản phẩm (nếu nhập hàng có đơn giá mới thì cập nhật giá)
+      // 1. Cập nhật tồn kho sản phẩm (nếu nhập hàng có đơn giá mới thì cập nhật giá nhập / giá bán)
       const updateData = {
         quantity: newQty,
       };
-      if (type === 'IN' && price !== undefined && parseFloat(price) > 0) {
-        updateData.price = parseFloat(price);
+      if (type === 'IN') {
+        const impP = importPrice !== undefined ? parseFloat(importPrice) : (price !== undefined ? parseFloat(price) : undefined);
+        if (impP !== undefined && impP >= 0) {
+          updateData.importPrice = impP;
+          updateData.price = impP;
+        }
+        if (sellingPrice !== undefined && parseFloat(sellingPrice) >= 0) {
+          updateData.sellingPrice = parseFloat(sellingPrice);
+        }
       }
 
       const updatedProduct = await tx.inventoryProduct.update({

@@ -1068,6 +1068,34 @@ const getMemberActions = async (req, res, next) => {
   }
 };
 
+// Lấy thông tin debug các socket đang kết nối và room tương ứng
+const debugSockets = async (req, res, next) => {
+  try {
+    const { getIO } = require('../utils/socket');
+    const ioInstance = getIO();
+    if (!ioInstance) {
+      return res.status(200).json({ success: false, message: 'Socket.IO chưa được khởi tạo.' });
+    }
+
+    const debugInfo = [];
+    const sockets = await ioInstance.fetchSockets();
+    for (const socket of sockets) {
+      debugInfo.push({
+        id: socket.id,
+        rooms: Array.from(socket.rooms),
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      socketsCount: debugInfo.length,
+      sockets: debugInfo,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createWorkspace,
   getMyWorkspace,
@@ -1081,6 +1109,7 @@ module.exports = {
   leaveWorkspace,
   updateWorkspace,
   getMemberActions,
+  debugSockets,
 };
 
 

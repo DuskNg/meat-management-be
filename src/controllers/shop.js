@@ -335,7 +335,9 @@ const startSession = async (req, res, next) => {
           );
         }
 
-        const itemPrice = it.price !== undefined && parseFloat(it.price) >= 0 ? parseFloat(it.price) : parseFloat(product.price || 0);
+        // Ưu tiên đơn giá bán (sellingPrice), nếu không có thì mới dùng giá nhập cũ (price)
+        const defaultProdPrice = parseFloat(product.sellingPrice || 0) > 0 ? parseFloat(product.sellingPrice) : parseFloat(product.price || 0);
+        const itemPrice = it.price !== undefined && parseFloat(it.price) >= 0 ? parseFloat(it.price) : defaultProdPrice;
         processedItems.push({
           product,
           quantity: qty,
@@ -645,7 +647,9 @@ const addSessionItem = async (req, res, next) => {
         );
       }
 
-      const itemPrice = it.price !== undefined && parseFloat(it.price) >= 0 ? parseFloat(it.price) : parseFloat(product.price || 0);
+      // Ưu tiên đơn giá bán (sellingPrice), nếu không có thì mới dùng giá nhập cũ (price)
+      const defaultProdPrice = parseFloat(product.sellingPrice || 0) > 0 ? parseFloat(product.sellingPrice) : parseFloat(product.price || 0);
+      const itemPrice = it.price !== undefined && parseFloat(it.price) >= 0 ? parseFloat(it.price) : defaultProdPrice;
       processedItems.push({
         product,
         quantity: qty,

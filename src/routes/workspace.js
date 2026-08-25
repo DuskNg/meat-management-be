@@ -35,6 +35,9 @@ router.delete('/members/:memberId', workspaceController.kickMember);
 // Lấy danh sách thao tác/hành vi của các thành viên trong ngày
 router.get('/member-actions', workspaceController.getMemberActions);
 
+// Debug các socket kết nối
+router.get('/debug-sockets', workspaceController.debugSockets);
+
 // --- Route dành cho Nhân Viên ---
 // Gửi yêu cầu tham gia workspace qua mã mời
 router.post('/join', workspaceController.joinWorkspace);

@@ -343,7 +343,9 @@ model InventoryProduct {
   name         String   // Tên sản phẩm trong kho
   quantity     Decimal  @db.Decimal(12, 3) @default(0) // Số lượng tồn kho
   minQuantity  Decimal  @db.Decimal(12, 3) @default(0) // Định mức tồn tối thiểu để cảnh báo
-  price        Decimal  @db.Decimal(12, 2) @default(0) // Giá nhập hàng
+  price        Decimal  @db.Decimal(12, 2) @default(0) // Giá nhập hàng gốc (giữ tương thích)
+  importPrice  Decimal  @db.Decimal(12, 2) @default(0) // Giá nhập hàng (vốn)
+  sellingPrice Decimal  @db.Decimal(12, 2) @default(0) // Giá bán ra
   unit         String   @default("cái") // Đơn vị tính
   isActive     Boolean  @default(true) // Trạng thái hoạt động (cho phép ẩn/xóa mềm)
   createdAt    DateTime @default(now())
