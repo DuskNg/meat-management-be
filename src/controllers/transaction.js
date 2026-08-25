@@ -63,7 +63,7 @@ const calculateNameSimilarity = (name1, name2) => {
 const createTransaction = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId, date, note, items } = req.body;
+    const { customerId, date, note, items, source, isBatch } = req.body;
 
     if (!customerId || !items || !Array.isArray(items) || items.length === 0) {
       throw new BadRequestError('Khách hàng và danh sách mặt hàng thịt mua là bắt buộc.');
@@ -233,10 +233,23 @@ const createTransaction = async (req, res, next) => {
       return transaction;
     });
 
+    let methodTag = '[Ghi nợ thủ công]';
+    if (source === 'BATCH_QUICK') {
+      methodTag = '[Nhập nợ hàng loạt - Nợ nhanh]';
+    } else if (source === 'BATCH_DETAIL') {
+      methodTag = '[Nhập nợ hàng loạt - Nợ chi tiết]';
+    } else if (isBatch || (note && note.toLowerCase().includes('hàng loạt'))) {
+      methodTag = '[Nhập nợ hàng loạt]';
+    } else if (source === 'SCAN_AI' || (note && note.toLowerCase().includes('tích kê'))) {
+      methodTag = '[Chụp ảnh tích kê AI]';
+    } else if (source === 'VOICE_AI' || (note && note.toLowerCase().includes('giọng nói'))) {
+      methodTag = '[Giọng nói AI]';
+    }
+
     await logActivity(
       userId,
       'CREATE_TRANSACTION',
-      `Ghi nợ đơn hàng mới cho khách ${customer.name}: Tổng tiền ${calculatedTotal.toLocaleString('vi-VN')}đ`
+      `${methodTag} Ghi nợ đơn hàng mới cho khách ${customer.name}: Tổng tiền ${calculatedTotal.toLocaleString('vi-VN')}đ`
     );
     notifyCustomerUpdate(userId, 'CREATE_TRANSACTION', { customerId, transactionId: newTransaction.id });
 
