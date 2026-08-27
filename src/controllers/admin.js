@@ -467,6 +467,247 @@ const toggleWorkspaceOwner = async (req, res, next) => {
   }
 };
 
+// 8. Kiểm tra đối soát tài chính & chênh lệch số liệu của một tài khoản (Logic trừ tiền kiểm tra khớp số)
+const getUserReconciliation = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
+    }
+
+    // A. Khách hàng & Công nợ Khách hàng (Bóc tách rõ Active UI vs Nợ xấu vs Đã xóa tạm)
+    const customers = await prisma.customer.findMany({
+      where: { userId: id },
+      include: {
+        transactions: { select: { totalAmount: true } },
+        payments: { select: { id: true, amount: true, paidAt: true, note: true } }
+      }
+    });
+
+    // Phân loại khách hàng
+    const activeCustomers = customers.filter(c => c.isActive && !c.isBadDebt);
+    const badDebtCustomers = customers.filter(c => c.isActive && c.isBadDebt);
+    const inactiveCustomers = customers.filter(c => !c.isActive);
+
+    // Tính toán cho nhóm Khách hiển thị trên UI (Active regular)
+    let activeTxSum = 0;
+    let activeManualSum = 0;
+    let activePaidSum = 0;
+    const negativeDebtCustomers = [];
+    const duplicatePayments = [];
+
+    for (const c of activeCustomers) {
+      const purchase = Math.round(c.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0));
+      const paid = Math.round(c.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0));
+      const manual = Math.round(parseFloat(c.manualDebt || 0));
+      const debt = Math.round(purchase - paid + manual);
+
+      activeTxSum += purchase;
+      activeManualSum += manual;
+      activePaidSum += paid;
+
+      if (debt < 0) {
+        negativeDebtCustomers.push({
+          id: c.id,
+          name: c.name,
+          phone: c.phone,
+          debt,
+          purchase,
+          paid,
+          manual
+        });
+      }
+
+      // Kiểm tra nghi ngờ phiếu thu trùng
+      for (let i = 0; i < c.payments.length; i++) {
+        for (let j = i + 1; j < c.payments.length; j++) {
+          const p1 = c.payments[i];
+          const p2 = c.payments[j];
+          const sameAmount = Math.round(parseFloat(p1.amount)) === Math.round(parseFloat(p2.amount));
+          const sameDate = p1.paidAt && p2.paidAt && new Date(p1.paidAt).toISOString().split('T')[0] === new Date(p2.paidAt).toISOString().split('T')[0];
+          if (sameAmount && sameDate) {
+            duplicatePayments.push({
+              customerName: c.name,
+              amount: parseFloat(p1.amount),
+              paidAt: p1.paidAt,
+              p1Note: p1.note,
+              p2Note: p2.note
+            });
+          }
+        }
+      }
+    }
+
+    const activeObligation = activeTxSum + activeManualSum;
+    const activeDebtRemaining = activeObligation - activePaidSum;
+    const activeDiscrepancy = activeObligation - (activePaidSum + activeDebtRemaining);
+
+    // Tính toán cho nhóm Nợ xấu
+    let badTxSum = 0;
+    let badManualSum = 0;
+    let badPaidSum = 0;
+    const badDebtList = badDebtCustomers.map(c => {
+      const purchase = Math.round(c.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0));
+      const paid = Math.round(c.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0));
+      const manual = Math.round(parseFloat(c.manualDebt || 0));
+      const debt = Math.round(purchase - paid + manual);
+      badTxSum += purchase;
+      badManualSum += manual;
+      badPaidSum += paid;
+      return { id: c.id, name: c.name, phone: c.phone, debt, purchase, paid, manual };
+    });
+
+    // Tính toán cho nhóm Đã bị xóa tạm
+    let inactiveTxSum = 0;
+    let inactiveManualSum = 0;
+    let inactivePaidSum = 0;
+    const inactiveList = inactiveCustomers.map(c => {
+      const purchase = Math.round(c.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0));
+      const paid = Math.round(c.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0));
+      const manual = Math.round(parseFloat(c.manualDebt || 0));
+      const debt = Math.round(purchase - paid + manual);
+      inactiveTxSum += purchase;
+      inactiveManualSum += manual;
+      inactivePaidSum += paid;
+      return { id: c.id, name: c.name, phone: c.phone, debt, purchase, paid, manual };
+    });
+
+    // Tổng cộng toàn bộ DB
+    const totalDbTransactions = activeTxSum + badTxSum + inactiveTxSum;
+    const totalDbManual = activeManualSum + badManualSum + inactiveManualSum;
+    const totalDbObligation = totalDbTransactions + totalDbManual;
+    const totalDbCollected = activePaidSum + badPaidSum + inactivePaidSum;
+    const totalDbDebtRemaining = totalDbObligation - totalDbCollected;
+    const isCustomerBalanced = activeDiscrepancy === 0;
+
+    // B. Nhà cung cấp & Công nợ NCC
+    const suppliers = await prisma.supplier.findMany({
+      where: { userId: id },
+      include: {
+        transactions: { select: { totalAmount: true } },
+        payments: { select: { amount: true } }
+      }
+    });
+
+    let totalSupplierTransactions = 0;
+    let totalSupplierPayments = 0;
+
+    for (const s of suppliers) {
+      const importAmt = Math.round(s.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0));
+      const paidAmt = Math.round(s.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0));
+      totalSupplierTransactions += importAmt;
+      totalSupplierPayments += paidAmt;
+    }
+
+    const totalSupplierDebtRemaining = totalSupplierTransactions - totalSupplierPayments;
+    const supplierDiscrepancy = totalSupplierTransactions - (totalSupplierPayments + totalSupplierDebtRemaining);
+    const isSupplierBalanced = supplierDiscrepancy === 0;
+
+    // C. Nhân viên & Lương
+    const employees = await prisma.employee.findMany({
+      where: { userId: id },
+      include: {
+        advances: { select: { amount: true } },
+        payments: { select: { finalAmount: true } }
+      }
+    });
+
+    let totalSalaryAdvances = 0;
+    let totalSalaryPayments = 0;
+
+    for (const e of employees) {
+      totalSalaryAdvances += Math.round(e.advances.reduce((sum, a) => sum + parseFloat(a.amount || 0), 0));
+      totalSalaryPayments += Math.round(e.payments.reduce((sum, p) => sum + parseFloat(p.finalAmount || 0), 0));
+    }
+
+    const totalEmployeeExpense = totalSalaryAdvances + totalSalaryPayments;
+
+    // D. Doanh thu quán
+    const shopSessions = await prisma.shopSession.findMany({
+      where: { userId: id, isPaid: true },
+      select: { totalAmount: true }
+    });
+    const totalShopRevenue = shopSessions.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+
+    // E. Dòng tiền ròng
+    const totalCashIn = activePaidSum + badPaidSum + inactivePaidSum + totalShopRevenue;
+    const totalCashOut = totalSupplierPayments + totalEmployeeExpense;
+    const netCashFlow = totalCashIn - totalCashOut;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        user: { id: user.id, name: user.name, phone: user.phone },
+        customerModule: {
+          activeCustomers: {
+            count: activeCustomers.length,
+            totalTransactions: activeTxSum,
+            totalManualDebt: activeManualSum,
+            totalObligation: activeObligation,
+            totalCollected: activePaidSum,
+            totalDebtRemaining: activeDebtRemaining,
+            discrepancy: activeDiscrepancy,
+            isBalanced: isCustomerBalanced,
+          },
+          badDebtCustomers: {
+            count: badDebtCustomers.length,
+            totalTransactions: badTxSum,
+            totalManualDebt: badManualSum,
+            totalCollected: badPaidSum,
+            totalDebtRemaining: (badTxSum + badManualSum) - badPaidSum,
+            list: badDebtList,
+          },
+          inactiveCustomers: {
+            count: inactiveCustomers.length,
+            totalTransactions: inactiveTxSum,
+            totalManualDebt: inactiveManualSum,
+            totalCollected: inactivePaidSum,
+            totalDebtRemaining: (inactiveTxSum + inactiveManualSum) - inactivePaidSum,
+            list: inactiveList,
+          },
+          overallDbTotal: {
+            totalTransactions: totalDbTransactions,
+            totalManualDebt: totalDbManual,
+            totalObligation: totalDbObligation,
+            totalCollected: totalDbCollected,
+            totalDebtRemaining: totalDbDebtRemaining,
+          },
+          negativeDebtCustomers,
+          duplicatePayments,
+        },
+        supplierModule: {
+          totalTransactions: totalSupplierTransactions,
+          totalPaid: totalSupplierPayments,
+          totalDebtRemaining: totalSupplierDebtRemaining,
+          discrepancy: supplierDiscrepancy,
+          isBalanced: isSupplierBalanced,
+        },
+        cashFlow: {
+          totalCashIn,
+          cashInBreakdown: {
+            activeCustomerPayments: activePaidSum, // Thu tiền nợ từ Khách hàng thường
+            badCustomerPayments: badPaidSum, // Thu tiền từ Khách nợ xấu
+            inactiveCustomerPayments: inactivePaidSum, // Thu tiền từ Khách đã xóa tạm
+            shopRevenue: totalShopRevenue, // Doanh thu trực tiếp Cửa hàng tính giờ
+          },
+          totalCashOut,
+          cashOutBreakdown: {
+            supplierPayments: totalSupplierPayments, // Tiền thanh toán nhập hàng Nhà cung cấp
+            employeeAdvances: totalSalaryAdvances, // Tiền tạm ứng lương Nhân viên
+            employeeSalaryPayments: totalSalaryPayments, // Tiền thanh toán lương chính thức Nhân viên
+          },
+          netCashFlow,
+        },
+        isFullyBalanced: isCustomerBalanced && isSupplierBalanced,
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getUsers,
   softDeleteUser,
@@ -475,4 +716,5 @@ module.exports = {
   getUserLogs,
   getUserAiUsage,
   toggleWorkspaceOwner,
+  getUserReconciliation,
 };

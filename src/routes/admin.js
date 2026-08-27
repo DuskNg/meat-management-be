@@ -29,4 +29,7 @@ router.get('/users/:id/ai-usage', adminController.getUserAiUsage);
 // Bật/tắt quyền Chủ Workspace cho một tài khoản
 router.put('/users/:id/workspace-owner', adminController.toggleWorkspaceOwner);
 
+// Xem kiểm tra đối soát số liệu công nợ & dòng tiền của một tài khoản
+router.get('/users/:id/reconciliation', adminController.getUserReconciliation);
+
 module.exports = router;
