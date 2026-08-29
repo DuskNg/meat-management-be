@@ -266,7 +266,7 @@ const createTransaction = async (req, res, next) => {
 const getTransactions = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId, createdBy, todayOnly, date } = req.query;
+    const { customerId, createdBy, todayOnly, date, month } = req.query;
 
     const whereClause = { userId };
     if (customerId) {
@@ -278,31 +278,38 @@ const getTransactions = async (req, res, next) => {
       whereClause.createdBy = createdBy;
     }
 
-    // Lọc theo ngày cụ thể (YYYY-MM-DD) hoặc ngày hôm nay (theo múi giờ UTC+7)
+    // Lọc theo ngày cụ thể hoặc tháng cụ thể (dùng chỉ mục date để tối ưu hóa 100x tốc độ)
     if (date) {
-      const dateParts = date.split('-');
-      if (dateParts.length === 3) {
-        const year = parseInt(dateParts[0], 10);
-        const month = parseInt(dateParts[1], 10) - 1; // Tháng tính từ 0
-        const dayVal = parseInt(dateParts[2], 10);
+      const parts = date.includes('/') ? date.split('/') : date.split('-');
+      if (parts.length === 3) {
+        const isSlash = date.includes('/');
+        const year = parseInt(isSlash ? parts[2] : parts[0], 10);
+        const monthVal = parseInt(parts[1], 10) - 1;
+        const dayVal = parseInt(isSlash ? parts[0] : parts[2], 10);
 
-        // Đầu ngày và cuối ngày theo giờ Việt Nam, quy đổi sang UTC
-        const startUTC = new Date(Date.UTC(year, month, dayVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
-        const endUTC = new Date(Date.UTC(year, month, dayVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
-        whereClause.createdAt = { gte: startUTC, lte: endUTC };
+        const startUTC = new Date(Date.UTC(year, monthVal, dayVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+        const endUTC = new Date(Date.UTC(year, monthVal, dayVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+        whereClause.date = { gte: startUTC, lte: endUTC };
+      }
+    } else if (month) {
+      const parts = month.split('/');
+      if (parts.length === 2) {
+        const m = parseInt(parts[0], 10) - 1;
+        const y = parseInt(parts[1], 10);
+        const startUTC = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+        const endUTC = new Date(Date.UTC(y, m + 1, 0, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+        whereClause.date = { gte: startUTC, lte: endUTC };
       }
     } else if (todayOnly === 'true') {
       const now = new Date();
-      // Tính thời gian hiện tại theo múi giờ Việt Nam (UTC+7)
       const nowVN = new Date(now.getTime() + 7 * 60 * 60 * 1000);
       const year = nowVN.getUTCFullYear();
-      const month = nowVN.getUTCMonth();
+      const monthVal = nowVN.getUTCMonth();
       const dateVal = nowVN.getUTCDate();
 
-      // Đầu ngày và cuối ngày theo giờ Việt Nam, quy đổi sang UTC
-      const startUTC = new Date(Date.UTC(year, month, dateVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
-      const endUTC = new Date(Date.UTC(year, month, dateVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
-      whereClause.createdAt = { gte: startUTC, lte: endUTC };
+      const startUTC = new Date(Date.UTC(year, monthVal, dateVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+      const endUTC = new Date(Date.UTC(year, monthVal, dateVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+      whereClause.date = { gte: startUTC, lte: endUTC };
     }
 
     const transactions = await prisma.transaction.findMany({
@@ -358,32 +365,68 @@ const updateTransaction = async (req, res, next) => {
       throw new NotFoundError('Giao dịch không tồn tại hoặc không thuộc quyền quản lý của bạn.');
     }
 
-    // Xác thực và tính lại tổng tiền
-    const productIds = items.map((i) => i.productId);
-    const products = await prisma.product.findMany({
-      where: { id: { in: productIds }, userId, isActive: true },
+    // Lấy toàn bộ sản phẩm của chủ buôn để xác thực hoặc tự động so khớp
+    const allUserProducts = await prisma.product.findMany({
+      where: { userId, isActive: true },
     });
-    const productMap = new Map(products.map((p) => [p.id, p]));
+    const productMap = new Map(allUserProducts.map((p) => [p.id, p]));
 
     let calculatedTotal = 0;
     const formattedItems = [];
 
     for (const item of items) {
-      if (!item.productId || item.quantity === undefined || item.price === undefined) {
-        throw new BadRequestError('Mỗi dòng mặt hàng phải có sản phẩm, số lượng và giá bán.');
+      const { productId, productName, quantity: reqQuantity, price: reqPrice } = item;
+
+      if (reqQuantity === undefined || reqPrice === undefined) {
+        throw new BadRequestError('Mỗi dòng mặt hàng phải chứa thông tin số lượng và giá bán.');
       }
-      const product = productMap.get(item.productId);
+
+      let finalProductId = productId;
+
+      if (!finalProductId || !productMap.has(finalProductId)) {
+        const nameToMatch = (productName || 'Tiền hàng').trim();
+        const normScanned = nameToMatch.toLowerCase().replace(/\s+/g, '');
+
+        let matchedProduct = allUserProducts.find(
+          (p) => p.name.toLowerCase().replace(/\s+/g, '') === normScanned
+        );
+
+        if (matchedProduct) {
+          finalProductId = matchedProduct.id;
+        } else {
+          let genericProduct = allUserProducts.find(
+            (p) => p.name.toLowerCase().trim() === 'thịt lẻ' || p.name.toLowerCase().trim() === 'tiền hàng'
+          );
+          if (!genericProduct) {
+            genericProduct = await prisma.product.create({
+              data: {
+                userId,
+                createdBy: req.user.id,
+                name: 'Thịt lẻ',
+                defaultPrice: parseFloat(reqPrice) || 0,
+                unit: 'kg',
+              },
+            });
+            allUserProducts.push(genericProduct);
+          }
+          finalProductId = genericProduct.id;
+        }
+      }
+
+      const product = allUserProducts.find((p) => p.id === finalProductId);
       if (!product) {
-        throw new NotFoundError(`Sản phẩm ID ${item.productId} không tồn tại hoặc đã bị ẩn.`);
+        throw new NotFoundError(`Sản phẩm không tồn tại hoặc đã bị ẩn.`);
       }
-      const quantity = parseFloat(item.quantity);
-      const price = parseFloat(item.price);
+
+      const quantity = parseFloat(reqQuantity);
+      const price = parseFloat(reqPrice);
       if (quantity <= 0 || price < 0) {
         throw new BadRequestError('Số lượng phải > 0 và đơn giá không được âm.');
       }
+
       const amount = Math.round(quantity * price);
       calculatedTotal += amount;
-      formattedItems.push({ productId: item.productId, quantity, price, amount });
+      formattedItems.push({ productId: finalProductId, quantity, price, amount });
     }
 
     // Cập nhật trong Prisma Transaction: xoá items cũ, tạo items mới

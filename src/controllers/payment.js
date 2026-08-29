@@ -76,7 +76,7 @@ const createPayment = async (req, res, next) => {
 const getPayments = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId } = req.query;
+    const { customerId, date, month } = req.query;
 
     // Lọc theo khách hàng thuộc chủ buôn này
     const whereClause = {
@@ -86,6 +86,30 @@ const getPayments = async (req, res, next) => {
     };
     if (customerId) {
       whereClause.customerId = customerId;
+    }
+
+    // Lọc theo ngày hoặc tháng cụ thể
+    if (date) {
+      const parts = date.includes('/') ? date.split('/') : date.split('-');
+      if (parts.length === 3) {
+        const isSlash = date.includes('/');
+        const year = parseInt(isSlash ? parts[2] : parts[0], 10);
+        const monthVal = parseInt(parts[1], 10) - 1;
+        const dayVal = parseInt(isSlash ? parts[0] : parts[2], 10);
+
+        const startUTC = new Date(Date.UTC(year, monthVal, dayVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+        const endUTC = new Date(Date.UTC(year, monthVal, dayVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+        whereClause.paidAt = { gte: startUTC, lte: endUTC };
+      }
+    } else if (month) {
+      const parts = month.split('/');
+      if (parts.length === 2) {
+        const m = parseInt(parts[0], 10) - 1;
+        const y = parseInt(parts[1], 10);
+        const startUTC = new Date(Date.UTC(y, m, 1, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+        const endUTC = new Date(Date.UTC(y, m + 1, 0, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+        whereClause.paidAt = { gte: startUTC, lte: endUTC };
+      }
     }
 
     const payments = await prisma.payment.findMany({
