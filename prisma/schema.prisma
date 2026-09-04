@@ -47,6 +47,7 @@ model User {
   inventoryLogs     InventoryLog[]     // Lịch sử biến động nhập/xuất/điều chỉnh kho
   shopTables   ShopTable[]
   shopSessions ShopSession[]
+  recurringDebts RecurringDebt[] // Danh sách các mẫu đơn nợ cố định hàng ngày của chủ buôn
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
   workspaceMemberships WorkspaceMember[]      @relation("WorkspaceMembers")        // Các workspace mà user này là thành viên
@@ -92,6 +93,7 @@ model Customer {
   // --- VẤN ĐỀ 3: Di chuyển quan hệ Payment từ Transaction sang Customer ---
   payments     Payment[]     // Danh sách các đợt thanh toán nợ của khách hàng này
   customPrices CustomerProductPrice[] // Danh sách giá bán riêng của khách hàng này cho từng loại thịt
+  recurringDebts RecurringDebt[] // Các đơn nợ cố định hàng ngày của khách hàng này
 
   @@index([userId]) // Tối ưu hóa truy vấn tìm kiếm danh sách khách hàng của từng chủ buôn
   @@map("customers") // Đặt tên bảng trong PostgreSQL là "customers"
@@ -104,6 +106,7 @@ model Product {
   createdBy    String?           // ID của người trực tiếp tạo bản ghi này
   name         String            // Tên sản phẩm thịt (ví dụ: Ba chỉ, Sườn non, Móng giò)
   defaultPrice Decimal           @db.Decimal(12, 2) // Giá bán mặc định trên một đơn vị (VND)
+  costPrice    Decimal           @default(0) @db.Decimal(12, 2) // Giá nhập / giá vốn mặc định trên một đơn vị (VND)
   unit         String            @default("kg") // Đơn vị tính (mặc định là kg, có thể là "bộ", "cái")
   isActive     Boolean           @default(true) // Trạng thái kích hoạt (cho phép ẩn khi không còn bán nữa)
   type         String            @default("customer") // Phân loại: "customer" (Sản phẩm thịt) hoặc "store" (Món ăn thực đơn)
@@ -113,27 +116,31 @@ model Product {
   // Các quan hệ liên kết
   transactionItems TransactionItem[] // Danh sách các chi tiết dòng đơn hàng sử dụng sản phẩm này
   customPrices     CustomerProductPrice[] // Danh sách giá bán riêng của sản phẩm này cho từng khách hàng
+  recurringDebtItems RecurringDebtItem[] // Danh sách dòng đơn nợ cố định sử dụng sản phẩm này
 
   @@index([userId]) // Tối ưu hóa truy vấn danh mục sản phẩm theo chủ buôn
   @@map("products") // Đặt tên bảng trong PostgreSQL là "products"
 }
 
 model Transaction {
-  id          String   @id @default(uuid())
-  userId      String   // ID của chủ buôn tạo giao dịch
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdBy   String?  // ID của người trực tiếp tạo bản ghi này
-  customerId  String   // ID của khách hàng mua sản phẩm
+  id            String   @id @default(uuid())
+  userId        String   // ID của chủ buôn tạo giao dịch
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdBy     String?  // ID của người trực tiếp tạo bản ghi này
+  customerId    String   // ID của khách hàng mua sản phẩm
   
   // --- VẤN ĐỀ 2: Đổi onDelete: Cascade sang Restrict để chặn xóa cứng Customer khi còn đơn nợ ---
-  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Restrict) 
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Restrict) 
   
-  date        DateTime @default(now()) // Ngày thực hiện giao dịch mua bán
-  note        String?  // Ghi chú riêng cho đơn hàng này
-  totalAmount Decimal  @db.Decimal(12, 2) // Tổng giá trị đơn hàng sau khi tính tổng các dòng
-  type        String   @default("customer") // Phân loại: "customer" (Hóa đơn mua thịt) hoặc "store" (Hóa đơn cửa hàng)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  date          DateTime @default(now()) // Ngày thực hiện giao dịch mua bán
+  note          String?  // Ghi chú riêng cho đơn hàng này
+  totalAmount   Decimal  @db.Decimal(12, 2) // Tổng giá trị đơn hàng sau khi tính tổng các dòng
+  profitPercent Decimal? @db.Decimal(5, 2) // % lợi nhuận áp dụng cho đơn nợ nhanh (ví dụ: 15.00%)
+  totalCost     Decimal  @default(0) @db.Decimal(12, 2) // Tổng tiền vốn đơn hàng
+  totalProfit   Decimal  @default(0) @db.Decimal(12, 2) // Tổng tiền lãi / lợi nhuận đơn hàng
+  type          String   @default("customer") // Phân loại: "customer" (Hóa đơn mua thịt) hoặc "store" (Hóa đơn cửa hàng)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   // Các quan hệ liên kết
   items    TransactionItem[] // Danh sách chi tiết các loại thịt được bán trong giao dịch này
@@ -154,7 +161,9 @@ model TransactionItem {
   product       Product     @relation(fields: [productId], references: [id], onDelete: Restrict) // Không cho phép xoá cứng Product nếu đã có giao dịch sử dụng để bảo toàn dữ liệu lịch sử nợ
   quantity      Decimal     @db.Decimal(10, 3) // Khối lượng hoặc số lượng bán (ví dụ: 1.255 kg)
   price         Decimal     @db.Decimal(12, 2) // Giá bán thực tế lúc đó (có thể thương lượng khác giá mặc định)
+  costPrice     Decimal     @default(0) @db.Decimal(12, 2) // Giá nhập / giá vốn tại thời điểm bán
   amount        Decimal     @db.Decimal(12, 2) // Thành tiền cho dòng này (= quantity * price)
+  profit        Decimal     @default(0) @db.Decimal(12, 2) // Tiền lãi của dòng này (= amount - quantity * costPrice)
 
   @@index([transactionId])
   @@index([productId])
@@ -190,6 +199,7 @@ model CustomerProductPrice {
   productId   String   // ID của sản phẩm thịt
   product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   price       Decimal  @db.Decimal(12, 2) // Giá bán thực tế được cập nhật gần nhất cho khách hàng này
+  costPrice   Decimal? @db.Decimal(12, 2) // Giá nhập riêng cho khách hàng này nếu có
   createdAt   DateTime @default(now()) // Thời điểm tạo bản ghi
   updatedAt   DateTime @updatedAt // Thời điểm cập nhật giá lần gần nhất
 
@@ -489,4 +499,49 @@ model WorkspaceJoinRequest {
   @@unique([workspaceId, userId]) // Mỗi user chỉ có 1 yêu cầu tham gia trong 1 workspace
   @@index([workspaceId])
   @@map("workspace_join_requests")
+}
+
+// ─── ĐƠN NỢ CỐ ĐỊNH HÀNG NGÀY (TỰ ĐỘNG LÊN ĐƠN LÚC 0:30 HÀNG NGÀY) ───
+model RecurringDebt {
+  id            String   @id @default(uuid())
+  userId        String   // ID của chủ buôn sở hữu mẫu đơn nợ cố định
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdBy     String?  // ID của người trực tiếp tạo mẫu đơn này
+  customerId    String   // ID của khách hàng
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  note          String?  // Ghi chú đơn nợ cố định
+  totalAmount   Decimal  @db.Decimal(12, 2) // Tổng giá trị đơn hàng
+  profitPercent Decimal? @db.Decimal(5, 2)  // % lợi nhuận (nếu là ghi nợ nhanh)
+  totalCost     Decimal  @default(0) @db.Decimal(12, 2) // Tổng tiền vốn
+  totalProfit   Decimal  @default(0) @db.Decimal(12, 2) // Tổng tiền lãi
+  isActive      Boolean  @default(true) // Trạng thái kích hoạt (mặc định true)
+  lastGeneratedAt DateTime? // Thời điểm lần gần nhất cron tự sinh đơn nợ
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Các quan hệ liên kết
+  items         RecurringDebtItem[]
+
+  @@index([userId])
+  @@index([customerId])
+  @@map("recurring_debts")
+}
+
+model RecurringDebtItem {
+  id              String        @id @default(uuid())
+  recurringDebtId String        // ID đơn nợ cố định
+  recurringDebt   RecurringDebt @relation(fields: [recurringDebtId], references: [id], onDelete: Cascade)
+  productId       String        // ID sản phẩm thịt
+  product         Product       @relation(fields: [productId], references: [id], onDelete: Restrict)
+  quantity        Decimal       @db.Decimal(10, 3) // Số lượng bán (kg/bộ/...)
+  price           Decimal       @db.Decimal(12, 2) // Đơn giá bán
+  costPrice       Decimal       @default(0) @db.Decimal(12, 2) // Đơn giá vốn
+  amount          Decimal       @db.Decimal(12, 2) // Thành tiền
+  profit          Decimal       @default(0) @db.Decimal(12, 2) // Tiền lãi
+
+  @@index([recurringDebtId])
+  @@index([productId])
+  @@map("recurring_debt_items")
 }

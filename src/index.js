@@ -72,6 +72,7 @@ const storeRoutes = require('./routes/store');
 const inventoryRoutes = require('./routes/inventory');
 const shopRoutes = require('./routes/shop');
 const workspaceRoutes = require('./routes/workspace');
+const recurringDebtRoutes = require('./routes/recurringDebt');
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
@@ -85,6 +86,7 @@ app.use('/api/v1/store', storeRoutes);
 app.use('/api/v1/inventory', inventoryRoutes);
 app.use('/api/v1/shop', shopRoutes);
 app.use('/api/v1/workspace', workspaceRoutes);
+app.use('/api/v1/recurring-debts', recurringDebtRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {
@@ -272,6 +274,10 @@ const startCleanupScheduler = () => {
 };
 
 startCleanupScheduler();
+
+// Khởi chạy tiến trình tự động ghi nợ cố định hàng ngày lúc 00:30 sáng
+const { initRecurringDebtScheduler } = require('./schedulers/recurringDebtScheduler');
+initRecurringDebtScheduler();
 
 // Tạo HTTP server và khởi tạo Socket.IO
 const http = require('http');

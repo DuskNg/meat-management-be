@@ -28,14 +28,16 @@ const getProducts = async (req, res, next) => {
       });
 
       const priceMap = new Map(
-        customPrices.map((cp) => [cp.productId, cp.price])
+        customPrices.map((cp) => [cp.productId, { price: cp.price, costPrice: cp.costPrice }])
       );
 
       const customProducts = products.map((p) => {
         if (priceMap.has(p.id)) {
+          const cp = priceMap.get(p.id);
           return {
             ...p,
-            defaultPrice: priceMap.get(p.id),
+            defaultPrice: cp.price !== undefined && cp.price !== null ? cp.price : p.defaultPrice,
+            costPrice: cp.costPrice !== undefined && cp.costPrice !== null ? cp.costPrice : p.costPrice,
           };
         }
         return p;
@@ -59,7 +61,7 @@ const getProducts = async (req, res, next) => {
 // 2. Tạo sản phẩm mới
 const createProduct = async (req, res, next) => {
   try {
-    const { name, defaultPrice, unit } = req.body;
+    const { name, defaultPrice, costPrice, unit } = req.body;
     const userId = req.effectiveUserId;
 
     if (!name || defaultPrice === undefined) {
@@ -72,6 +74,7 @@ const createProduct = async (req, res, next) => {
         createdBy: req.user.id,
         name,
         defaultPrice: parseFloat(defaultPrice),
+        costPrice: costPrice !== undefined ? parseFloat(costPrice) : 0,
         unit: unit || 'kg',
       },
     });
@@ -80,7 +83,7 @@ const createProduct = async (req, res, next) => {
     await logActivity(
       userId,
       'CREATE_PRODUCT',
-      `Tạo sản phẩm mới: ${product.name} (Giá mặc định: ${Number(product.defaultPrice).toLocaleString('vi-VN')}đ/${product.unit})`
+      `Tạo sản phẩm mới: ${product.name} (Giá bán: ${Number(product.defaultPrice).toLocaleString('vi-VN')}đ, Giá nhập: ${Number(product.costPrice).toLocaleString('vi-VN')}đ/${product.unit})`
     );
 
     res.status(201).json({
@@ -96,7 +99,7 @@ const createProduct = async (req, res, next) => {
 const updateProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, defaultPrice, unit } = req.body;
+    const { name, defaultPrice, costPrice, unit } = req.body;
     const userId = req.effectiveUserId;
 
     // Kiểm tra sản phẩm có tồn tại và thuộc chủ buôn này không
@@ -117,6 +120,7 @@ const updateProduct = async (req, res, next) => {
       data: {
         name: name !== undefined ? name : undefined,
         defaultPrice: defaultPrice !== undefined ? parseFloat(defaultPrice) : undefined,
+        costPrice: costPrice !== undefined ? parseFloat(costPrice) : undefined,
         unit: unit !== undefined ? unit : undefined,
       },
     });
@@ -125,7 +129,7 @@ const updateProduct = async (req, res, next) => {
     await logActivity(
       userId,
       'UPDATE_PRODUCT',
-      `Cập nhật sản phẩm: ${productExists.name} (${Number(productExists.defaultPrice).toLocaleString('vi-VN')}đ/${productExists.unit}) -> ${updatedProduct.name} (${Number(updatedProduct.defaultPrice).toLocaleString('vi-VN')}đ/${updatedProduct.unit})`
+      `Cập nhật sản phẩm: ${productExists.name} (Giá bán: ${Number(productExists.defaultPrice).toLocaleString('vi-VN')}đ, Giá nhập: ${Number(productExists.costPrice).toLocaleString('vi-VN')}đ) -> ${updatedProduct.name} (Giá bán: ${Number(updatedProduct.defaultPrice).toLocaleString('vi-VN')}đ, Giá nhập: ${Number(updatedProduct.costPrice).toLocaleString('vi-VN')}đ)`
     );
 
     res.status(200).json({

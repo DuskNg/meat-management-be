@@ -63,18 +63,23 @@ const calculateNameSimilarity = (name1, name2) => {
 const createTransaction = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId, date, note, items, source, isBatch } = req.body;
+    const { customerId, date, note, items, source, isBatch, profitPercent } = req.body;
 
-    if (!customerId || !items || !Array.isArray(items) || items.length === 0) {
-      throw new BadRequestError('Khách hàng và danh sách mặt hàng thịt mua là bắt buộc.');
+    if (!customerId) {
+      throw new BadRequestError('Mã khách hàng là bắt buộc.');
+    }
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      throw new BadRequestError('Đơn hàng phải có ít nhất một dòng mặt hàng.');
     }
 
     // Kiểm tra khách hàng có tồn tại và thuộc chủ buôn này không
     const customer = await prisma.customer.findFirst({
       where: { id: customerId, userId, isActive: true },
     });
+
     if (!customer) {
-      throw new NotFoundError('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của bạn.');
+      throw new NotFoundError('Không tìm thấy khách hàng hoặc khách hàng đã bị xóa.');
     }
 
     // Lấy toàn bộ sản phẩm thịt liên quan để xác thực
@@ -89,12 +94,14 @@ const createTransaction = async (req, res, next) => {
       where: { userId, isActive: true },
     });
 
-    // Kiểm tra tính hợp lệ và tính tổng tiền của từng dòng mặt hàng
+    // Kiểm tra tính hợp lệ và tính tổng tiền, tổng vốn, tổng lãi của từng dòng mặt hàng
     let calculatedTotal = 0;
+    let calculatedTotalCost = 0;
+    let calculatedTotalProfit = 0;
     const formattedItems = [];
 
     for (const item of items) {
-      const { productId, productName, quantity: reqQuantity, price: reqPrice } = item;
+      const { productId, productName, quantity: reqQuantity, price: reqPrice, costPrice: reqCostPrice } = item;
 
       if (reqQuantity === undefined || reqPrice === undefined) {
         throw new BadRequestError('Mỗi dòng mặt hàng phải chứa thông tin số lượng và giá bán.');
@@ -111,42 +118,28 @@ const createTransaction = async (req, res, next) => {
         const currentProd = productId ? productMap.get(productId) : null;
         const currentProdNameNorm = currentProd ? currentProd.name.toLowerCase().replace(/\s+/g, '') : '';
 
-        if (currentProdNameNorm !== normScanned) {
-          // Người dùng đã sửa tên sản phẩm! Tìm sản phẩm tương ứng trong danh sách của chủ buôn
+        if (!currentProd || currentProdNameNorm !== normScanned) {
+          // Người dùng đã sửa hoặc nhập tên sản phẩm mới! Tìm sản phẩm tương ứng trong danh sách của chủ buôn
           let matchedProduct = allUserProducts.find(
             (p) => p.name.toLowerCase().replace(/\s+/g, '') === normScanned
           );
 
           if (!matchedProduct) {
-            // Tìm kiểu so khớp bán phần
-            matchedProduct = allUserProducts.find((p) => {
-              const normPName = p.name.toLowerCase().replace(/\s+/g, '');
-              return normScanned.includes(normPName) || normPName.includes(normScanned);
+            // Tạo sản phẩm mới với đúng tên người dùng nhập để lưu lại chính xác
+            matchedProduct = await prisma.product.create({
+              data: {
+                userId,
+                createdBy: req.user.id,
+                name: trimmedName,
+                defaultPrice: parseFloat(reqPrice) || 0,
+                costPrice: reqCostPrice !== undefined ? parseFloat(reqCostPrice) : 0,
+                unit: 'kg',
+              },
             });
+            allUserProducts.push(matchedProduct);
+            productMap.set(matchedProduct.id, matchedProduct);
           }
-
-          if (matchedProduct) {
-            finalProductId = matchedProduct.id;
-          } else {
-            // Không tự động tạo sản phẩm mới để tránh ô nhiễm danh mục sản phẩm của chủ buôn.
-            // Thay vào đó, tìm kiếm sản phẩm generic "Thịt lẻ" để gán, hoặc tạo nó duy nhất 1 lần nếu chưa có.
-            let genericProduct = allUserProducts.find(
-              (p) => p.name.toLowerCase().trim() === 'thịt lẻ'
-            );
-            if (!genericProduct) {
-              genericProduct = await prisma.product.create({
-                data: {
-                  userId,
-                  createdBy: req.user.id,
-                  name: 'Thịt lẻ',
-                  defaultPrice: reqPrice,
-                  unit: 'kg',
-                },
-              });
-              allUserProducts.push(genericProduct);
-            }
-            finalProductId = genericProduct.id;
-          }
+          finalProductId = matchedProduct.id;
         }
       }
 
@@ -157,7 +150,6 @@ const createTransaction = async (req, res, next) => {
       // Xác thực lại sản phẩm
       let product = productMap.get(finalProductId);
       if (!product) {
-        // Tìm trong danh mục đầy đủ (đã bao gồm các sản phẩm mới được tạo trong vòng lặp này)
         product = allUserProducts.find((p) => p.id === finalProductId);
       }
 
@@ -167,19 +159,42 @@ const createTransaction = async (req, res, next) => {
 
       const quantity = parseFloat(reqQuantity);
       const price = parseFloat(reqPrice);
+      const costPrice = reqCostPrice !== undefined ? parseFloat(reqCostPrice) : (parseFloat(product.costPrice) || 0);
+
       if (quantity <= 0 || price < 0) {
         throw new BadRequestError('Số lượng thịt phải lớn hơn 0 và đơn giá không được âm.');
       }
 
       const amount = Math.round(quantity * price);
+      const itemCost = Math.round(quantity * costPrice);
+      const itemProfit = amount - itemCost;
+
       calculatedTotal += amount;
+      calculatedTotalCost += itemCost;
+      calculatedTotalProfit += itemProfit;
 
       formattedItems.push({
         productId: finalProductId,
         quantity,
         price,
+        costPrice,
         amount,
+        profit: itemProfit,
       });
+    }
+
+    // Xử lý % lợi nhuận nếu người dùng nhập riêng (áp dụng cho nợ nhanh)
+    let finalProfitPercent = profitPercent !== undefined && profitPercent !== null && profitPercent !== '' ? parseFloat(profitPercent) : null;
+    let finalTotalCost = calculatedTotalCost;
+    let finalTotalProfit = calculatedTotalProfit;
+
+    if (finalProfitPercent !== null && !isNaN(finalProfitPercent)) {
+      finalTotalProfit = Math.round(calculatedTotal * (finalProfitPercent / 100));
+      finalTotalCost = calculatedTotal - finalTotalProfit;
+      if (formattedItems.length === 1) {
+        formattedItems[0].profit = finalTotalProfit;
+        formattedItems[0].costPrice = Math.round(finalTotalCost / formattedItems[0].quantity);
+      }
     }
 
     // Thực hiện lưu giao dịch và các chi tiết dòng vào database sử dụng Prisma Transaction
@@ -192,6 +207,9 @@ const createTransaction = async (req, res, next) => {
           date: date ? new Date(date) : new Date(),
           note: note || null,
           totalAmount: calculatedTotal,
+          profitPercent: finalProfitPercent,
+          totalCost: finalTotalCost,
+          totalProfit: finalTotalProfit,
           items: {
             create: formattedItems,
           },
@@ -327,6 +345,8 @@ const getTransactions = async (req, res, next) => {
               select: {
                 name: true,
                 unit: true,
+                defaultPrice: true,
+                costPrice: true,
               },
             },
           },
@@ -337,9 +357,52 @@ const getTransactions = async (req, res, next) => {
       },
     });
 
+    // Tự động tính toán fallback lợi nhuận cho các đơn cũ hoặc khi chủ buôn vừa cập nhật giá nhập thịt
+    const enrichedTransactions = transactions.map((t) => {
+      let totalCost = parseFloat(t.totalCost || 0);
+      let totalProfit = parseFloat(t.totalProfit || 0);
+
+      const items = (t.items || []).map((item) => {
+        const itemCostNum = parseFloat(item.costPrice || 0);
+        const prodCostNum = parseFloat(item.product?.costPrice || 0);
+        const costPrice = itemCostNum > 0 ? itemCostNum : prodCostNum;
+
+        const qty = parseFloat(item.quantity || 0);
+        const price = parseFloat(item.price || 0);
+        const amount = item.amount !== null && item.amount !== undefined ? parseFloat(item.amount) : Math.round(qty * price);
+        
+        let profit = parseFloat(item.profit || 0);
+        if (profit === 0 && costPrice > 0) {
+          profit = Math.round(amount - (qty * costPrice));
+        }
+
+        return {
+          ...item,
+          costPrice,
+          profit,
+        };
+      });
+
+      if (totalProfit === 0) {
+        const computedItemsProfit = items.reduce((sum, it) => sum + (parseFloat(it.profit) || 0), 0);
+        const computedItemsCost = items.reduce((sum, it) => sum + ((parseFloat(it.quantity) || 0) * (parseFloat(it.costPrice) || 0)), 0);
+        if (computedItemsProfit > 0) {
+          totalProfit = computedItemsProfit;
+          totalCost = computedItemsCost;
+        }
+      }
+
+      return {
+        ...t,
+        totalCost,
+        totalProfit,
+        items,
+      };
+    });
+
     res.status(200).json({
       success: true,
-      data: transactions,
+      data: enrichedTransactions,
     });
   } catch (error) {
     next(error);
@@ -351,37 +414,83 @@ const updateTransaction = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
     const { id } = req.params;
-    const { date, note, items } = req.body;
+    const { date, note, items, profitPercent } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      throw new BadRequestError('Danh sách mặt hàng thịt là bắt buộc.');
+      throw new BadRequestError('Đơn hàng phải có ít nhất một dòng mặt hàng.');
     }
 
-    // Kiểm tra giao dịch có tồn tại và thuộc chủ buôn này không
-    const existing = await prisma.transaction.findFirst({
-      where: { id, userId },
+    // Kiểm tra đơn hàng có tồn tại và thuộc quyền quản lý của chủ buôn này không
+    const existingTransaction = await prisma.transaction.findFirst({
+      where: {
+        id,
+        userId,
+      },
     });
-    if (!existing) {
-      throw new NotFoundError('Giao dịch không tồn tại hoặc không thuộc quyền quản lý của bạn.');
+
+    if (!existingTransaction) {
+      throw new NotFoundError('Không tìm thấy đơn hàng hoặc bạn không có quyền chỉnh sửa.');
     }
 
-    // Lấy toàn bộ sản phẩm của chủ buôn để xác thực hoặc tự động so khớp
+    // Lấy toàn bộ sản phẩm thịt liên quan để xác thực
+    const productIds = items.filter((i) => i.productId).map((i) => i.productId);
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds }, userId, isActive: true },
+    });
+    const productMap = new Map(products.map((p) => [p.id, p]));
+
+    // Lấy danh mục sản phẩm đầy đủ của chủ buôn này để so khớp khi sửa tên
     const allUserProducts = await prisma.product.findMany({
       where: { userId, isActive: true },
     });
-    const productMap = new Map(allUserProducts.map((p) => [p.id, p]));
 
     let calculatedTotal = 0;
+    let calculatedTotalCost = 0;
+    let calculatedTotalProfit = 0;
     const formattedItems = [];
 
     for (const item of items) {
-      const { productId, productName, quantity: reqQuantity, price: reqPrice } = item;
+      const { productId, productName, quantity: reqQuantity, price: reqPrice, costPrice: reqCostPrice } = item;
 
       if (reqQuantity === undefined || reqPrice === undefined) {
         throw new BadRequestError('Mỗi dòng mặt hàng phải chứa thông tin số lượng và giá bán.');
       }
 
       let finalProductId = productId;
+
+      // Nếu có tên sản phẩm được cung cấp (cho phép sửa hoặc tạo mới trên giao diện)
+      if (productName && productName.trim()) {
+        const trimmedName = productName.trim();
+        const normScanned = trimmedName.toLowerCase().replace(/\s+/g, '');
+
+        // Kiểm tra xem tên mới có trùng khớp với sản phẩm hiện tại của productId hay không
+        const currentProd = productId ? productMap.get(productId) : null;
+        const currentProdNameNorm = currentProd ? currentProd.name.toLowerCase().replace(/\s+/g, '') : '';
+
+        if (!currentProd || currentProdNameNorm !== normScanned) {
+          // Người dùng đã sửa hoặc nhập tên sản phẩm mới! Tìm sản phẩm tương ứng trong danh sách của chủ buôn
+          let matchedProduct = allUserProducts.find(
+            (p) => p.name.toLowerCase().replace(/\s+/g, '') === normScanned
+          );
+
+          if (!matchedProduct) {
+            // Tạo sản phẩm mới với đúng tên người dùng nhập
+            matchedProduct = await prisma.product.create({
+              data: {
+                userId,
+                createdBy: req.user.id,
+                name: trimmedName,
+                defaultPrice: parseFloat(reqPrice) || 0,
+                costPrice: reqCostPrice !== undefined ? parseFloat(reqCostPrice) : 0,
+                unit: 'kg',
+              },
+            });
+            allUserProducts.push(matchedProduct);
+            productMap.set(matchedProduct.id, matchedProduct);
+          }
+          finalProductId = matchedProduct.id;
+        }
+      }
 
       if (!finalProductId || !productMap.has(finalProductId)) {
         const nameToMatch = (productName || 'Tiền hàng').trim();
@@ -394,22 +503,19 @@ const updateTransaction = async (req, res, next) => {
         if (matchedProduct) {
           finalProductId = matchedProduct.id;
         } else {
-          let genericProduct = allUserProducts.find(
-            (p) => p.name.toLowerCase().trim() === 'thịt lẻ' || p.name.toLowerCase().trim() === 'tiền hàng'
-          );
-          if (!genericProduct) {
-            genericProduct = await prisma.product.create({
-              data: {
-                userId,
-                createdBy: req.user.id,
-                name: 'Thịt lẻ',
-                defaultPrice: parseFloat(reqPrice) || 0,
-                unit: 'kg',
-              },
-            });
-            allUserProducts.push(genericProduct);
-          }
-          finalProductId = genericProduct.id;
+          let createdProd = await prisma.product.create({
+            data: {
+              userId,
+              createdBy: req.user.id,
+              name: nameToMatch,
+              defaultPrice: parseFloat(reqPrice) || 0,
+              costPrice: reqCostPrice !== undefined ? parseFloat(reqCostPrice) : 0,
+              unit: 'kg',
+            },
+          });
+          allUserProducts.push(createdProd);
+          productMap.set(createdProd.id, createdProd);
+          finalProductId = createdProd.id;
         }
       }
 
@@ -420,13 +526,35 @@ const updateTransaction = async (req, res, next) => {
 
       const quantity = parseFloat(reqQuantity);
       const price = parseFloat(reqPrice);
+      const costPrice = reqCostPrice !== undefined ? parseFloat(reqCostPrice) : (parseFloat(product.costPrice) || 0);
+
       if (quantity <= 0 || price < 0) {
         throw new BadRequestError('Số lượng phải > 0 và đơn giá không được âm.');
       }
 
       const amount = Math.round(quantity * price);
+      const itemCost = Math.round(quantity * costPrice);
+      const itemProfit = amount - itemCost;
+
       calculatedTotal += amount;
-      formattedItems.push({ productId: finalProductId, quantity, price, amount });
+      calculatedTotalCost += itemCost;
+      calculatedTotalProfit += itemProfit;
+
+      formattedItems.push({ productId: finalProductId, quantity, price, costPrice, amount, profit: itemProfit });
+    }
+
+    // Xử lý % lợi nhuận nếu có
+    let finalProfitPercent = profitPercent !== undefined && profitPercent !== null && profitPercent !== '' ? parseFloat(profitPercent) : null;
+    let finalTotalCost = calculatedTotalCost;
+    let finalTotalProfit = calculatedTotalProfit;
+
+    if (finalProfitPercent !== null && !isNaN(finalProfitPercent)) {
+      finalTotalProfit = Math.round(calculatedTotal * (finalProfitPercent / 100));
+      finalTotalCost = calculatedTotal - finalTotalProfit;
+      if (formattedItems.length === 1) {
+        formattedItems[0].profit = finalTotalProfit;
+        formattedItems[0].costPrice = Math.round(finalTotalCost / formattedItems[0].quantity);
+      }
     }
 
     // Cập nhật trong Prisma Transaction: xoá items cũ, tạo items mới
@@ -438,22 +566,25 @@ const updateTransaction = async (req, res, next) => {
       const transaction = await tx.transaction.update({
         where: { id },
         data: {
-          date: date ? new Date(date) : existing.date,
-          note: note !== undefined ? (note || null) : existing.note,
+          date: date ? new Date(date) : existingTransaction.date,
+          note: note !== undefined ? (note || null) : existingTransaction.note,
           totalAmount: calculatedTotal,
+          profitPercent: finalProfitPercent,
+          totalCost: finalTotalCost,
+          totalProfit: finalTotalProfit,
           items: { create: formattedItems },
         },
         include: {
           items: {
             include: {
-              product: { select: { name: true, unit: true } },
+              product: { select: { name: true, unit: true, defaultPrice: true, costPrice: true } },
             },
           },
         },
       });
 
       // Cập nhật hoặc lưu mới đơn giá bán thực tế của loại thịt cho khách hàng này
-      const customerId = existing.customerId;
+      const customerId = existingTransaction.customerId;
       for (const item of formattedItems) {
         await tx.customerProductPrice.upsert({
           where: {
@@ -477,7 +608,7 @@ const updateTransaction = async (req, res, next) => {
     });
 
     const customer = await prisma.customer.findUnique({
-      where: { id: existing.customerId }
+      where: { id: existingTransaction.customerId }
     });
 
     await logActivity(
@@ -485,7 +616,7 @@ const updateTransaction = async (req, res, next) => {
       'UPDATE_TRANSACTION',
       `Cập nhật đơn nợ của khách hàng ${customer?.name || 'ẩn'}: Tổng tiền mới ${calculatedTotal.toLocaleString('vi-VN')}đ`
     );
-    notifyCustomerUpdate(userId, 'UPDATE_TRANSACTION', { customerId: existing.customerId, transactionId: id });
+    notifyCustomerUpdate(userId, 'UPDATE_TRANSACTION', { customerId: existingTransaction.customerId, transactionId: id });
 
     res.status(200).json({ success: true, data: updated });
   } catch (error) {
