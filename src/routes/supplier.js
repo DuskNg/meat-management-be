@@ -27,7 +27,19 @@ router.get('/:id/history', supplierController.getSupplierHistory);
 // Tạo giao dịch nhập hàng (ghi nhận thêm nợ của chủ sạp đối với nhà cung cấp)
 router.post('/transactions', supplierController.createSupplierTransaction);
 
+// Cập nhật giao dịch nhập hàng
+router.put('/transactions/:id', supplierController.updateSupplierTransaction);
+
+// Xóa giao dịch nhập hàng
+router.delete('/transactions/:id', supplierController.deleteSupplierTransaction);
+
 // Tạo giao dịch trả nợ (ghi nhận thanh toán cho nhà cung cấp)
 router.post('/payments', supplierController.createSupplierPayment);
+
+// Cập nhật giao dịch trả nợ
+router.put('/payments/:id', supplierController.updateSupplierPayment);
+
+// Xóa giao dịch trả nợ
+router.delete('/payments/:id', supplierController.deleteSupplierPayment);
 
 module.exports = router;

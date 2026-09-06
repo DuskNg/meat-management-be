@@ -387,12 +387,214 @@ const getSupplierHistory = async (req, res, next) => {
   }
 };
 
+// 8. Cập nhật giao dịch nhập hàng (sửa nợ phát sinh)
+const updateSupplierTransaction = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { totalAmount, note, date } = req.body;
+    const userId = req.effectiveUserId;
+
+    const transaction = await prisma.supplierTransaction.findFirst({
+      where: {
+        id,
+        supplier: { userId, isActive: true },
+      },
+      include: { supplier: true },
+    });
+
+    if (!transaction) {
+      throw new NotFoundError('Không tìm thấy giao dịch nhập hàng.');
+    }
+
+    // Bảo vệ quyền sửa dữ liệu chéo
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && transaction.createdBy && transaction.createdBy !== actorId && actorId !== transaction.supplier.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền sửa dữ liệu do người khác tạo.');
+    }
+
+    if (totalAmount !== undefined && parseFloat(totalAmount) <= 0) {
+      throw new BadRequestError('Số tiền hàng nhập phải lớn hơn 0.');
+    }
+
+    const updated = await prisma.supplierTransaction.update({
+      where: { id },
+      data: {
+        totalAmount: totalAmount !== undefined ? parseFloat(totalAmount) : undefined,
+        note: note !== undefined ? (note ? note.trim() : null) : undefined,
+        date: date !== undefined ? new Date(date) : undefined,
+      },
+    });
+
+    const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
+    await logActivity(
+      userId,
+      'UPDATE_SUPPLIER_TRANSACTION',
+      `Cập nhật đơn nhập hàng của nhà cung cấp ${transaction.supplier.name}: ${formatCurrency(updated.totalAmount)}`
+    );
+
+    res.status(200).json({
+      success: true,
+      data: updated,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 9. Xóa giao dịch nhập hàng
+const deleteSupplierTransaction = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.effectiveUserId;
+
+    const transaction = await prisma.supplierTransaction.findFirst({
+      where: {
+        id,
+        supplier: { userId, isActive: true },
+      },
+      include: { supplier: true },
+    });
+
+    if (!transaction) {
+      throw new NotFoundError('Không tìm thấy giao dịch nhập hàng.');
+    }
+
+    // Bảo vệ quyền xóa dữ liệu chéo
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && transaction.createdBy && transaction.createdBy !== actorId && actorId !== transaction.supplier.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
+    }
+
+    await prisma.supplierTransaction.delete({
+      where: { id },
+    });
+
+    const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
+    await logActivity(
+      userId,
+      'DELETE_SUPPLIER_TRANSACTION',
+      `Xóa đơn nhập hàng của nhà cung cấp ${transaction.supplier.name}: ${formatCurrency(transaction.totalAmount)}`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Xóa giao dịch nhập hàng thành công.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 10. Cập nhật giao dịch thanh toán tiền hàng
+const updateSupplierPayment = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { amount, note, paidAt } = req.body;
+    const userId = req.effectiveUserId;
+
+    const payment = await prisma.supplierPayment.findFirst({
+      where: {
+        id,
+        supplier: { userId, isActive: true },
+      },
+      include: { supplier: true },
+    });
+
+    if (!payment) {
+      throw new NotFoundError('Không tìm thấy giao dịch thanh toán.');
+    }
+
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && payment.createdBy && payment.createdBy !== actorId && actorId !== payment.supplier.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền sửa dữ liệu do người khác tạo.');
+    }
+
+    if (amount !== undefined && parseFloat(amount) <= 0) {
+      throw new BadRequestError('Số tiền thanh toán phải lớn hơn 0.');
+    }
+
+    const updated = await prisma.supplierPayment.update({
+      where: { id },
+      data: {
+        amount: amount !== undefined ? parseFloat(amount) : undefined,
+        note: note !== undefined ? (note ? note.trim() : null) : undefined,
+        paidAt: paidAt !== undefined ? new Date(paidAt) : undefined,
+      },
+    });
+
+    const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
+    await logActivity(
+      userId,
+      'UPDATE_SUPPLIER_PAYMENT',
+      `Cập nhật thanh toán cho nhà cung cấp ${payment.supplier.name}: ${formatCurrency(updated.amount)}`
+    );
+
+    res.status(200).json({
+      success: true,
+      data: updated,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 11. Xóa giao dịch thanh toán tiền hàng
+const deleteSupplierPayment = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.effectiveUserId;
+
+    const payment = await prisma.supplierPayment.findFirst({
+      where: {
+        id,
+        supplier: { userId, isActive: true },
+      },
+      include: { supplier: true },
+    });
+
+    if (!payment) {
+      throw new NotFoundError('Không tìm thấy giao dịch thanh toán.');
+    }
+
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    if (!actorIsAdmin && payment.createdBy && payment.createdBy !== actorId && actorId !== payment.supplier.userId) {
+      throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
+    }
+
+    await prisma.supplierPayment.delete({
+      where: { id },
+    });
+
+    const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
+    await logActivity(
+      userId,
+      'DELETE_SUPPLIER_PAYMENT',
+      `Xóa thanh toán cho nhà cung cấp ${payment.supplier.name}: ${formatCurrency(payment.amount)}`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Xóa giao dịch thanh toán thành công.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getSuppliers,
   createSupplier,
   updateSupplier,
   deleteSupplier,
   createSupplierTransaction,
+  updateSupplierTransaction,
+  deleteSupplierTransaction,
   createSupplierPayment,
+  updateSupplierPayment,
+  deleteSupplierPayment,
   getSupplierHistory,
 };

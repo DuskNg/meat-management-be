@@ -11,4 +11,5 @@ logs/
 
 # Bỏ qua thư mục sao lưu dữ liệu
 backups/
+scripts/backups/
 /scratch/
