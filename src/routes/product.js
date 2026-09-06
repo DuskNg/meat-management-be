@@ -12,6 +12,15 @@ router.use(requirePermission('canManageCustomers'));
 // Lấy danh sách sản phẩm hoạt động
 router.get('/', productController.getProducts);
 
+// Lấy danh sách giá thịt của các khách hàng được cập nhật trong ngày
+router.get('/daily-price-updates', productController.getDailyPriceUpdates);
+
+// Cập nhật giá thịt riêng cho khách hàng
+router.post('/customer-price', productController.updateCustomerProductPrice);
+
+// Cập nhật giá bán và giá nhập đồng loạt cho nhiều loại thịt
+router.post('/batch-update-prices', productController.batchUpdateProductPrices);
+
 // Tạo sản phẩm mới
 router.post('/', productController.createProduct);
 
