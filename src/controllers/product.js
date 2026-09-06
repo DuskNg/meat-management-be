@@ -2,6 +2,17 @@
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
+const { emitWorkspaceEvent } = require('../utils/socket');
+
+// Helper gửi socket event thông báo giao dịch / nợ khách hàng thay đổi
+const notifyCustomerUpdate = (userId, action, payload = {}) => {
+  emitWorkspaceEvent(userId, 'CUSTOMER_UPDATED', {
+    action,
+    userId,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  });
+};
 
 // 1. Lấy danh sách sản phẩm hoạt động của chủ buôn đang đăng nhập (hỗ trợ lấy giá riêng theo khách hàng)
 const getProducts = async (req, res, next) => {
@@ -192,34 +203,54 @@ const deleteProduct = async (req, res, next) => {
 };
 
 // 5. Lấy danh sách các loại thịt của từng khách hàng được cập nhật giá trong ngày
+// Helper: Chuẩn hóa chuỗi ngày (DD/MM/YYYY hoặc YYYY-MM-DD) sang YYYY-MM-DD
+const normalizeDateStr = (str) => {
+  if (!str) return null;
+  const trimmed = str.trim();
+  if (trimmed.includes('/')) {
+    const [d, m, y] = trimmed.split('/');
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+  return trimmed;
+};
+
+// Helper: Kiểm tra xem sản phẩm có phải là "Tiền hàng" (ghi nợ nhanh / tiền hàng) hay không
+const isQuickMoneyProduct = (name, note) => {
+  if (note && (note.toLowerCase().includes('ghi nợ nhanh') || note.toLowerCase().includes('nợ nhanh'))) {
+    return true;
+  }
+  if (!name) return false;
+  const n = name.trim().toLowerCase();
+  return n === 'tiền hàng' || n.startsWith('tiền') || n.includes('tiền hàng');
+};
+
+// 5. Quan sát các đơn nợ và trích xuất danh sách giá thịt được cập nhật (so sánh với đơn trước / ngày trước)
+// Hỗ trợ bộ lọc từ ngày đến ngày (fromDate / toDate)
 const getDailyPriceUpdates = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { date } = req.query; // date có thể là YYYY-MM-DD hoặc DD/MM/YYYY
+    const { date, fromDate, toDate, startDate, endDate } = req.query;
 
-    // Xác định ngày mục tiêu theo múi giờ Việt Nam (UTC+7)
-    let targetDateStr = date;
-    if (!targetDateStr) {
-      const now = new Date();
-      const vnNow = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-      targetDateStr = vnNow.toISOString().split('T')[0];
-    } else if (targetDateStr.includes('/')) {
-      const [d, m, y] = targetDateStr.split('/');
-      targetDateStr = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-    }
+    const now = new Date();
+    const vnNow = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const todayStr = vnNow.toISOString().split('T')[0];
 
-    // Khoảng thời gian từ 00:00:00 đến 23:59:59.999 theo múi giờ GMT+7
-    const [year, month, day] = targetDateStr.split('-').map(Number);
-    const startOfDayUtc = new Date(Date.UTC(year, month - 1, day, -7, 0, 0, 0));
-    const endOfDayUtc = new Date(Date.UTC(year, month - 1, day, 16, 59, 59, 999));
+    const startNorm = normalizeDateStr(fromDate || startDate) || normalizeDateStr(date) || todayStr;
+    const endNorm = normalizeDateStr(toDate || endDate) || normalizeDateStr(date) || startNorm;
 
-    // 1. Lấy tất cả giao dịch trong ngày của chủ buôn này
-    const dayTransactions = await prisma.transaction.findMany({
+    const [sYear, sMonth, sDay] = startNorm.split('-').map(Number);
+    const [eYear, eMonth, eDay] = endNorm.split('-').map(Number);
+
+    const startUtc = new Date(Date.UTC(sYear, sMonth - 1, sDay, -7, 0, 0, 0));
+    const endUtc = new Date(Date.UTC(eYear, eMonth - 1, eDay, 16, 59, 59, 999));
+
+    // 1. Lấy tất cả các giao dịch trong khoảng thời gian [startUtc, endUtc]
+    const transactions = await prisma.transaction.findMany({
       where: {
         userId,
         date: {
-          gte: startOfDayUtc,
-          lte: endOfDayUtc,
+          gte: startUtc,
+          lte: endUtc,
         },
       },
       include: {
@@ -243,164 +274,176 @@ const getDailyPriceUpdates = async (req, res, next) => {
           },
         },
       },
-      orderBy: {
-        createdAt: 'asc',
-      },
+      orderBy: [
+        { date: 'asc' },
+        { createdAt: 'asc' },
+      ],
     });
 
-    // 2. Lấy tất cả bản ghi CustomerProductPrice được cập nhật trong ngày
-    const updatedCustomPrices = await prisma.customerProductPrice.findMany({
-      where: {
-        customer: {
-          userId,
-        },
-        updatedAt: {
-          gte: startOfDayUtc,
-          lte: endOfDayUtc,
-        },
-      },
-      include: {
-        customer: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        product: {
-          select: {
-            id: true,
-            name: true,
-            unit: true,
-            defaultPrice: true,
-          },
-        },
-      },
-      orderBy: {
-        updatedAt: 'asc',
-      },
+    // Gom danh sách khách hàng và sản phẩm xuất hiện trong các đơn nợ kỳ này (Loại bỏ Tiền hàng)
+    const customerIds = new Set();
+    const productIds = new Set();
+
+    transactions.forEach((t) => {
+      if (t.customerId) customerIds.add(t.customerId);
+      (t.items || []).forEach((it) => {
+        const prodName = it.product?.name || '';
+        if (it.productId && !isQuickMoneyProduct(prodName, t.note)) {
+          productIds.add(it.productId);
+        }
+      });
     });
 
-    // 3. Tổng hợp danh sách theo từng khách hàng
-    const customerMap = new Map();
+    // 2. Gom danh sách ID các giao dịch thuộc kỳ lọc để nhận diện lần hiện tại
+    const targetTxIds = new Set(transactions.map((t) => t.id));
+    const priceChanges = [];
 
-    // Duyệt qua transactions trong ngày
-    for (const trans of dayTransactions) {
-      if (!trans.customer) continue;
-      const cId = trans.customerId;
-      if (!customerMap.has(cId)) {
-        customerMap.set(cId, {
-          customerId: cId,
-          customerName: trans.customer.name,
-          customerPhone: trans.customer.phone || '',
-          lastUpdatedAt: trans.createdAt,
-          productsMap: new Map(),
-        });
-      }
+    if (customerIds.size > 0 && productIds.size > 0) {
+      // Truy vấn toàn bộ các dòng thịt trong lịch sử giao dịch từ trước đến hết kỳ lọc
+      // Sắp xếp theo trình tự thời gian tăng dần để duyệt tuần tự
+      const allHistoricalItems = await prisma.transactionItem.findMany({
+        where: {
+          productId: { in: Array.from(productIds) },
+          transaction: {
+            userId,
+            customerId: { in: Array.from(customerIds) },
+            date: { lte: endUtc },
+          },
+        },
+        include: {
+          transaction: {
+            select: {
+              id: true,
+              customerId: true,
+              date: true,
+              createdAt: true,
+              note: true,
+              customer: {
+                select: {
+                  id: true,
+                  name: true,
+                  phone: true,
+                },
+              },
+            },
+          },
+          product: {
+            select: {
+              id: true,
+              name: true,
+              unit: true,
+            },
+          },
+        },
+        orderBy: [
+          { transaction: { date: 'asc' } },
+          { transaction: { createdAt: 'asc' } },
+          { id: 'asc' },
+        ],
+      });
 
-      const custEntry = customerMap.get(cId);
-      if (new Date(trans.createdAt) > new Date(custEntry.lastUpdatedAt)) {
-        custEntry.lastUpdatedAt = trans.createdAt;
-      }
+      // Lưu trữ đơn giá mới nhất của từng khách hàng và từng loại thịt theo dòng thời gian
+      const historyPriceMap = new Map(); // key: `${customerId}_${productId}` => { price, date, createdAt }
 
-      for (const item of (trans.items || [])) {
-        if (!item.product) continue;
+      for (const item of allHistoricalItems) {
+        if (!item.product || !item.transaction?.customer) continue;
+        // Bỏ qua Tiền hàng hoặc ghi nợ nhanh
+        if (isQuickMoneyProduct(item.product.name, item.transaction.note)) continue;
+
+        const cId = item.transaction.customerId;
         const pId = item.productId;
-        const currentPrice = parseFloat(item.price);
-        const quantity = parseFloat(item.quantity || 0);
+        const key = `${cId}_${pId}`;
+        const currentPrice = parseFloat(item.price || 0);
+        const isCurrentPeriodItem = targetTxIds.has(item.transaction.id);
 
-        if (!custEntry.productsMap.has(pId)) {
-          custEntry.productsMap.set(pId, {
-            productId: pId,
-            productName: item.product.name,
-            unit: item.product.unit || 'kg',
-            defaultPrice: parseFloat(item.product.defaultPrice || 0),
-            price: currentPrice,
-            totalQuantity: quantity,
-            updatedAt: trans.createdAt,
-            source: 'transaction',
-          });
-        } else {
-          const prodEntry = custEntry.productsMap.get(pId);
-          prodEntry.price = currentPrice;
-          prodEntry.totalQuantity += quantity;
-          if (new Date(trans.createdAt) > new Date(prodEntry.updatedAt)) {
-            prodEntry.updatedAt = trans.createdAt;
+        const prevRecord = historyPriceMap.get(key);
+
+        // Nếu dòng này thuộc kỳ lọc hiện tại và trước đó đã có giá lưu trữ
+        if (isCurrentPeriodItem && prevRecord && typeof prevRecord.price === 'number') {
+          const oldPrice = prevRecord.price;
+          // Nếu đơn giá của lần hiện tại khác với đơn giá của lần mới nhất đang lưu trữ (lệch tối thiểu 1đ)
+          if (Math.abs(currentPrice - oldPrice) > 0.01) {
+            const diff = currentPrice - oldPrice;
+            const diffPercent = oldPrice > 0 ? Math.round((diff / oldPrice) * 1000) / 10 : 0;
+
+            priceChanges.push({
+              id: `${item.transaction.id}_${item.id}`,
+              transactionId: item.transaction.id,
+              customerId: cId,
+              customerName: item.transaction.customer.name,
+              customerPhone: item.transaction.customer.phone || '',
+              productId: pId,
+              productName: item.product.name,
+              unit: item.product.unit || 'kg',
+              oldPrice,
+              newPrice: currentPrice,
+              diff,
+              diffPercent,
+              quantity: parseFloat(item.quantity || 0),
+              date: item.transaction.date,
+              createdAt: item.transaction.createdAt,
+              prevDate: prevRecord.date,
+            });
           }
         }
-      }
-    }
 
-    // Duyệt qua CustomerProductPrice được cập nhật trong ngày
-    for (const cp of updatedCustomPrices) {
-      if (!cp.customer || !cp.product) continue;
-      const cId = cp.customerId;
-      if (!customerMap.has(cId)) {
-        customerMap.set(cId, {
-          customerId: cId,
-          customerName: cp.customer.name,
-          customerPhone: cp.customer.phone || '',
-          lastUpdatedAt: cp.updatedAt,
-          productsMap: new Map(),
-        });
-      }
-
-      const custEntry = customerMap.get(cId);
-      if (new Date(cp.updatedAt) > new Date(custEntry.lastUpdatedAt)) {
-        custEntry.lastUpdatedAt = cp.updatedAt;
-      }
-
-      const pId = cp.productId;
-      const currentPrice = parseFloat(cp.price);
-
-      if (!custEntry.productsMap.has(pId)) {
-        custEntry.productsMap.set(pId, {
-          productId: pId,
-          productName: cp.product.name,
-          unit: cp.product.unit || 'kg',
-          defaultPrice: parseFloat(cp.product.defaultPrice || 0),
+        // Cập nhật giá mới nhất đang lưu trữ làm mốc so sánh cho các lần tiếp theo
+        historyPriceMap.set(key, {
           price: currentPrice,
-          totalQuantity: 0,
-          updatedAt: cp.updatedAt,
-          source: 'price_update',
+          date: item.transaction.date,
+          createdAt: item.transaction.createdAt,
         });
-      } else {
-        const prodEntry = custEntry.productsMap.get(pId);
-        if (new Date(cp.updatedAt) >= new Date(prodEntry.updatedAt)) {
-          prodEntry.price = currentPrice;
-          prodEntry.updatedAt = cp.updatedAt;
-        }
       }
     }
 
-    // Chuyển Map thành Array
-    const result = Array.from(customerMap.values()).map((cust) => ({
-      customerId: cust.customerId,
-      customerName: cust.customerName,
-      customerPhone: cust.customerPhone,
-      lastUpdatedAt: cust.lastUpdatedAt,
-      products: Array.from(cust.productsMap.values()).sort((a, b) => a.productName.localeCompare(b.productName)),
-    }));
+    // 4. Nhóm theo khách hàng để hiển thị trực quan
+    const customerGroupMap = new Map();
+    for (const change of priceChanges) {
+      const cId = change.customerId;
+      if (!customerGroupMap.has(cId)) {
+        customerGroupMap.set(cId, {
+          customerId: cId,
+          customerName: change.customerName,
+          customerPhone: change.customerPhone,
+          lastUpdatedAt: change.createdAt,
+          changes: [],
+        });
+      }
 
-    // Sắp xếp khách hàng theo thời gian cập nhật mới nhất lên đầu
-    result.sort((a, b) => new Date(b.lastUpdatedAt) - new Date(a.lastUpdatedAt));
+      const group = customerGroupMap.get(cId);
+      group.changes.push(change);
+      if (new Date(change.createdAt) > new Date(group.lastUpdatedAt)) {
+        group.lastUpdatedAt = change.createdAt;
+      }
+    }
+
+    const groupedCustomers = Array.from(customerGroupMap.values());
+    groupedCustomers.sort((a, b) => new Date(b.lastUpdatedAt) - new Date(a.lastUpdatedAt));
 
     // Thống kê tổng hợp
-    let totalPriceUpdates = 0;
+    let increasedCount = 0;
+    let decreasedCount = 0;
     const uniqueProducts = new Set();
-    result.forEach((c) => {
-      totalPriceUpdates += c.products.length;
-      c.products.forEach((p) => uniqueProducts.add(p.productId));
+
+    priceChanges.forEach((c) => {
+      if (c.diff > 0) increasedCount++;
+      else if (c.diff < 0) decreasedCount++;
+      uniqueProducts.add(c.productName);
     });
 
     res.status(200).json({
       success: true,
       data: {
-        date: targetDateStr,
-        totalCustomers: result.length,
-        totalUpdates: totalPriceUpdates,
+        fromDate: startNorm,
+        toDate: endNorm,
+        totalUpdates: priceChanges.length,
+        totalCustomers: groupedCustomers.length,
+        increasedCount,
+        decreasedCount,
         uniqueProductsCount: uniqueProducts.size,
-        customers: result,
+        uniqueProductsList: Array.from(uniqueProducts),
+        customers: groupedCustomers,
+        allChanges: priceChanges.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
       },
     });
   } catch (error) {
@@ -408,11 +451,11 @@ const getDailyPriceUpdates = async (req, res, next) => {
   }
 };
 
-// 6. Cập nhật hoặc lưu mới đơn giá thịt riêng cho khách hàng
+// 6. Cập nhật đơn giá thịt cho khách hàng VÀ nhân lại đơn hàng với giá mới
 const updateCustomerProductPrice = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId, productId, price } = req.body;
+    const { customerId, productId, price, transactionId, recalculateOrder } = req.body;
 
     if (!customerId || !productId || price === undefined) {
       throw new BadRequestError('customerId, productId và price là bắt buộc.');
@@ -440,35 +483,140 @@ const updateCustomerProductPrice = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy sản phẩm thịt.');
     }
 
-    // Upsert CustomerProductPrice
-    const updatedPrice = await prisma.customerProductPrice.upsert({
-      where: {
-        customerId_productId: {
+    // Thực hiện cập nhật giá riêng và nhân lại đơn hàng trong Prisma Transaction
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Cập nhật hoặc lưu mới đơn giá bán riêng cho khách hàng
+      const updatedPrice = await tx.customerProductPrice.upsert({
+        where: {
+          customerId_productId: {
+            customerId,
+            productId,
+          },
+        },
+        update: {
+          price: numericPrice,
+        },
+        create: {
           customerId,
           productId,
+          price: numericPrice,
         },
-      },
-      update: {
-        price: numericPrice,
-      },
-      create: {
-        customerId,
-        productId,
-        price: numericPrice,
-      },
+      });
+
+      // 2. Nhân lại đơn hàng với giá mới
+      let affectedTransactions = [];
+
+      if (transactionId) {
+        // Nếu có chỉ định đơn hàng cụ thể
+        const targetTx = await tx.transaction.findFirst({
+          where: { id: transactionId, userId, customerId },
+          include: { items: true },
+        });
+        if (targetTx) {
+          affectedTransactions.push(targetTx);
+        }
+      } else if (recalculateOrder) {
+        // Nếu không chỉ định đơn hàng cụ thể, tìm đơn hàng gần nhất có mặt hàng này
+        const recentTxs = await tx.transaction.findMany({
+          where: {
+            userId,
+            customerId,
+            items: {
+              some: { productId },
+            },
+          },
+          include: { items: true },
+          orderBy: { date: 'desc' },
+          take: 1,
+        });
+        affectedTransactions = recentTxs;
+      }
+
+      // Duyệt và tính lại từng đơn hàng bị ảnh hưởng
+      for (const trans of affectedTransactions) {
+        let hasItemUpdated = false;
+
+        for (const it of trans.items) {
+          if (it.productId === productId) {
+            const qty = parseFloat(it.quantity || 0);
+            const cost = parseFloat(it.costPrice || 0);
+            const newAmount = Math.round(qty * numericPrice);
+            const newProfit = newAmount - Math.round(qty * cost);
+
+            await tx.transactionItem.update({
+              where: { id: it.id },
+              data: {
+                price: numericPrice,
+                amount: newAmount,
+                profit: newProfit,
+              },
+            });
+            hasItemUpdated = true;
+          }
+        }
+
+        if (hasItemUpdated) {
+          // Lấy lại danh sách mặt hàng sau cập nhật để tính tổng tiền đơn hàng
+          const allItems = await tx.transactionItem.findMany({
+            where: { transactionId: trans.id },
+          });
+
+          let newTotalAmount = 0;
+          let newTotalCost = 0;
+          let newTotalProfit = 0;
+
+          for (const it of allItems) {
+            const a = parseFloat(it.amount || 0);
+            const q = parseFloat(it.quantity || 0);
+            const c = parseFloat(it.costPrice || 0);
+            const p = parseFloat(it.profit || 0);
+
+            newTotalAmount += a;
+            newTotalCost += Math.round(q * c);
+            newTotalProfit += p;
+          }
+
+          // Xử lý tỉ lệ % lợi nhuận nếu đơn nợ có cấu hình riêng
+          if (trans.profitPercent !== null && !isNaN(parseFloat(trans.profitPercent))) {
+            const pct = parseFloat(trans.profitPercent);
+            newTotalProfit = Math.round(newTotalAmount * (pct / 100));
+            newTotalCost = newTotalAmount - newTotalProfit;
+          }
+
+          await tx.transaction.update({
+            where: { id: trans.id },
+            data: {
+              totalAmount: newTotalAmount,
+              totalCost: newTotalCost,
+              totalProfit: newTotalProfit,
+            },
+          });
+        }
+      }
+
+      return {
+        updatedPrice,
+        recalculatedCount: affectedTransactions.length,
+      };
     });
 
     // Ghi log hoạt động
     await logActivity(
       userId,
       'UPDATE_CUSTOMER_PRICE',
-      `Cập nhật giá thịt: Khách hàng "${customer.name}" - Mặt hàng "${product.name}" = ${Number(numericPrice).toLocaleString('vi-VN')}đ/${product.unit}`
+      `Cập nhật giá thịt & nhân lại đơn: Khách "${customer.name}" - Thịt "${product.name}" = ${Number(numericPrice).toLocaleString('vi-VN')}đ/${product.unit}`
     );
+
+    // Bắn socket thông báo cập nhật đơn nợ và công nợ khách hàng
+    if (transactionId) {
+      notifyCustomerUpdate(userId, 'UPDATE_TRANSACTION', { customerId, transactionId });
+    }
+    notifyCustomerUpdate(userId, 'UPDATE_CUSTOMER', { customerId });
 
     res.status(200).json({
       success: true,
-      message: 'Đã cập nhật giá thịt cho khách hàng thành công.',
-      data: updatedPrice,
+      message: 'Đã cập nhật giá thịt và nhân lại đơn hàng thành công.',
+      data: result,
     });
   } catch (error) {
     next(error);
