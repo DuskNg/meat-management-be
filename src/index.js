@@ -35,15 +35,28 @@ const logger = winston.createLogger({
   ],
 });
 
-// Middleware Bảo mật (Helmet)
-app.use(helmet());
+const fs = require('fs');
+
+// Đảm bảo thư mục lưu trữ ảnh hóa đơn uploads/invoices tồn tại
+const uploadsDir = path.join(__dirname, '../uploads/invoices');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Middleware Bảo mật (Helmet) - cho phép tải tài nguyên hình ảnh Cross-Origin
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 
 // Middleware CORS - cho phép Mobile và Web Client gọi API
 app.use(cors());
 
-// Middleware đọc JSON Body (Tăng giới hạn lên 10mb để nhận diện ảnh tích kê base64 lớn)
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+// Phục vụ thư mục static files uploads (ảnh hóa đơn, hình ảnh hệ thống)
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
+// Middleware đọc JSON Body (Tăng giới hạn lên 50mb để nhận diện ảnh và tải ảnh hóa đơn hàng loạt)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Cấu hình Rate Limiter chung cho toàn bộ ứng dụng (chặn Spam)
 const globalLimiter = rateLimit({
@@ -73,6 +86,7 @@ const inventoryRoutes = require('./routes/inventory');
 const shopRoutes = require('./routes/shop');
 const workspaceRoutes = require('./routes/workspace');
 const recurringDebtRoutes = require('./routes/recurringDebt');
+const portalRoutes = require('./routes/portal');
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
@@ -87,6 +101,7 @@ app.use('/api/v1/inventory', inventoryRoutes);
 app.use('/api/v1/shop', shopRoutes);
 app.use('/api/v1/workspace', workspaceRoutes);
 app.use('/api/v1/recurring-debts', recurringDebtRoutes);
+app.use('/api/v1/portal', portalRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {

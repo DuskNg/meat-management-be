@@ -37,13 +37,25 @@ const createPayment = async (req, res, next) => {
       throw new NotFoundError('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của bạn.');
     }
 
+    // Tính toán ngày thanh toán: nếu ghi chú chỉ định rõ tháng nợ mà không truyền paidAt thì tự động đưa về cuối tháng nợ đó
+    let paymentPaidAt = paidAt ? new Date(paidAt) : new Date();
+    if (!paidAt && note) {
+      const monthMatch = note.match(/Thanh toán (?:nợ|hóa đơn) [Tt]háng (\d{2})\/(\d{4})/i);
+      if (monthMatch) {
+        const targetM = parseInt(monthMatch[1], 10);
+        const targetY = parseInt(monthMatch[2], 10);
+        const lastDay = new Date(targetY, targetM, 0).getDate();
+        paymentPaidAt = new Date(Date.UTC(targetY, targetM - 1, lastDay, 5, 0, 0, 0));
+      }
+    }
+
     // Lưu lượt trả nợ vào database
     const payment = await prisma.payment.create({
       data: {
         customerId,
         createdBy: req.user.id,
         amount: payAmount,
-        paidAt: paidAt ? new Date(paidAt) : new Date(),
+        paidAt: paymentPaidAt,
         note: note || null,
       },
       include: {

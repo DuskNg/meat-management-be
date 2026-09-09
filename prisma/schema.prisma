@@ -48,6 +48,8 @@ model User {
   shopTables   ShopTable[]
   shopSessions ShopSession[]
   recurringDebts RecurringDebt[] // Danh sách các mẫu đơn nợ cố định hàng ngày của chủ buôn
+  portalLinks    PortalLink[]    // Danh sách các link ghim Zalo của chủ buôn này
+  transactionInvoices TransactionInvoice[] // Danh sách các ảnh hóa đơn do chủ buôn này quản lý
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
   workspaceMemberships WorkspaceMember[]      @relation("WorkspaceMembers")        // Các workspace mà user này là thành viên
@@ -94,6 +96,9 @@ model Customer {
   payments     Payment[]     // Danh sách các đợt thanh toán nợ của khách hàng này
   customPrices CustomerProductPrice[] // Danh sách giá bán riêng của khách hàng này cho từng loại thịt
   recurringDebts RecurringDebt[] // Các đơn nợ cố định hàng ngày của khách hàng này
+  portalLinkCustomers PortalLinkCustomer[] // Các liên kết link ghim Zalo tới khách hàng này
+  portalFeedbacks     PortalFeedback[]     // Các phản hồi khiếu nại liên quan đến khách hàng này
+  invoices            TransactionInvoice[] // Các ảnh hóa đơn đính kèm của khách hàng này
 
   @@index([userId]) // Tối ưu hóa truy vấn tìm kiếm danh sách khách hàng của từng chủ buôn
   @@map("customers") // Đặt tên bảng trong PostgreSQL là "customers"
@@ -144,6 +149,7 @@ model Transaction {
 
   // Các quan hệ liên kết
   items    TransactionItem[] // Danh sách chi tiết các loại thịt được bán trong giao dịch này
+  invoices TransactionInvoice[] // Danh sách ảnh chụp hóa đơn đính kèm đơn nợ này
   
   // --- VẤN ĐỀ 3: Đã bỏ quan hệ trực tiếp "payments" tại đây ---
 
@@ -224,6 +230,7 @@ model Supplier {
 
   transactions SupplierTransaction[] // Các giao dịch nhập hàng nợ phát sinh
   payments     SupplierPayment[]     // Các giao dịch thanh toán trả nợ
+  portalLinks  PortalLink[]          // Các link ghim Zalo dành cho nhà cung cấp này
 
   @@index([userId])
   @@map("suppliers")
@@ -545,3 +552,100 @@ model RecurringDebtItem {
   @@index([productId])
   @@map("recurring_debt_items")
 }
+
+// ─── CỔNG TRA CỨU CÔNG NỢ & BẢNG GIÁ QUA LINK GHIM ZALO (PORTAL) ───
+model PortalLink {
+  id           String   @id @default(uuid())
+  userId       String   // ID của chủ buôn sở hữu link này
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  name         String   // Tên nhóm Zalo hiển thị (VD: "Nhóm Trường Hoàng", "Bún riêu Ngọc Lâm")
+  token        String   @unique // Mã token ngẫu nhiên không thể đoán trước để truy cập link
+  type         String   @default("customer") // "customer" (Xem đơn nợ/giá bán ra) hoặc "supplier" (Xem tiền hàng mua nợ NCC)
+  
+  pin          String?  // Mã PIN bảo mật (nếu có, 4 số)
+  isActive     Boolean  @default(true) // Bật / Tắt hiệu lực của link
+  
+  // Liên kết nhiều khách hàng (dành cho nhóm chuỗi như Trường Hoàng)
+  customers    PortalLinkCustomer[]
+  
+  // Liên kết nhà cung cấp (nếu type == "supplier")
+  supplierId   String?
+  supplier     Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  
+  note         String?  // Ghi chú nội bộ của chủ buôn
+  viewCount    Int      @default(0) // Số lượt mở link
+  lastViewedAt DateTime? // Thời điểm xem gần nhất
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  feedbacks    PortalFeedback[]
+
+  @@index([userId])
+  @@index([token])
+  @@map("portal_links")
+}
+
+model PortalLinkCustomer {
+  id           String     @id @default(uuid())
+  portalLinkId String     // ID của link ghim Zalo
+  portalLink   PortalLink @relation(fields: [portalLinkId], references: [id], onDelete: Cascade)
+  customerId   String     // ID của khách hàng thuộc nhóm này
+  customer     Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  createdAt    DateTime   @default(now())
+
+  @@unique([portalLinkId, customerId])
+  @@index([portalLinkId])
+  @@index([customerId])
+  @@map("portal_link_customers")
+}
+
+model PortalFeedback {
+  id           String     @id @default(uuid())
+  portalLinkId String     // ID của link phát sinh phản hồi
+  portalLink   PortalLink @relation(fields: [portalLinkId], references: [id], onDelete: Cascade)
+  
+  customerId   String?    // Cơ sở phát sinh phản hồi (nếu là nhóm chuỗi)
+  customer     Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  
+  senderName   String?    // Tên người gửi phản hồi (thu ngân, kế toán, quản lý quán)
+  phone        String?    // SĐT liên hệ của người gửi
+  type         String     @default("DISCREPANCY") // "DISCREPANCY" (Lệch tiền/cân), "PRICE_INQUIRY" (Hỏi giá), "PAYMENT_CONFIRM" (Báo đã CK), "OTHER" (Góp ý)
+  content      String     // Nội dung phản hồi chi tiết
+  imageUrls    String?    // Chuỗi JSON danh sách link ảnh hoặc base64 (ảnh chụp cân, bill chuyển khoản)
+  
+  status       String     @default("pending") // "pending" (Chờ duyệt), "resolved" (Đã xử lý), "rejected" (Bác bỏ)
+  adminNote    String?    // Ghi chú xử lý của chủ buôn
+  resolvedAt   DateTime?  // Thời điểm giải quyết
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([portalLinkId])
+  @@index([customerId])
+  @@index([status])
+  @@map("portal_feedbacks")
+}
+
+model TransactionInvoice {
+  id            String       @id @default(uuid())
+  userId        String       // ID của chủ buôn quản lý
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactionId String?      // ID của đơn nợ được đính kèm (nếu đã có đơn nợ trong ngày)
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  customerId    String       // ID của khách hàng
+  customer      Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  date          DateTime     // Ngày của hóa đơn (dùng để đối chiếu với ngày của đơn nợ)
+  imageUrl      String       // Đường dẫn ảnh hóa đơn (/uploads/invoices/...)
+  note          String?      // Ghi chú thêm cho ảnh hóa đơn
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([userId])
+  @@index([transactionId])
+  @@index([customerId])
+  @@index([date])
+  @@map("transaction_invoices")
+}
+

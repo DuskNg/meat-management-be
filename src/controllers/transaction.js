@@ -248,6 +248,25 @@ const createTransaction = async (req, res, next) => {
         });
       }
 
+      // Tự động gắn các ảnh hóa đơn chưa được liên kết của khách này trong cùng ngày vào đơn nợ vừa tạo
+      try {
+        const txDateVN = new Date(transaction.date.getTime() + 7 * 60 * 60 * 1000);
+        const startDayUTC = new Date(Date.UTC(txDateVN.getUTCFullYear(), txDateVN.getUTCMonth(), txDateVN.getUTCDate(), 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+        const endDayUTC = new Date(Date.UTC(txDateVN.getUTCFullYear(), txDateVN.getUTCMonth(), txDateVN.getUTCDate(), 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+
+        await tx.transactionInvoice.updateMany({
+          where: {
+            userId,
+            customerId,
+            transactionId: null,
+            date: { gte: startDayUTC, lte: endDayUTC },
+          },
+          data: {
+            transactionId: transaction.id,
+          },
+        });
+      } catch (_) {}
+
       return transaction;
     });
 
@@ -351,6 +370,7 @@ const getTransactions = async (req, res, next) => {
             },
           },
         },
+        invoices: true, // Bao gồm danh sách ảnh hóa đơn đính kèm đơn nợ
       },
       orderBy: {
         date: 'desc', // Đơn hàng mới nhất hiển thị lên đầu
@@ -1261,6 +1281,184 @@ const parseTranscript = async (req, res, next) => {
   return voiceToText(req, res, next);
 };
 
+// 8. Tải lên hàng loạt ảnh hóa đơn, lưu đĩa và tự động đính kèm vào đơn công nợ trong ngày của từng khách hàng
+const uploadBatchInvoices = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { items } = req.body; // Mảng: [{ customerId, date, imageBase64, note }]
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      throw new BadRequestError('Vui lòng gửi danh sách ảnh hóa đơn hợp lệ.');
+    }
+
+    const fs = require('fs');
+    const path = require('path');
+    const crypto = require('crypto');
+
+    // Đường dẫn thư mục lưu trữ file ảnh hóa đơn uploads/invoices
+    const uploadsDir = path.join(__dirname, '../../uploads/invoices');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    const savedInvoices = [];
+
+    for (let index = 0; index < items.length; index++) {
+      const item = items[index];
+      const { customerId, date, imageBase64, note } = item;
+
+      if (!customerId) {
+        throw new BadRequestError(`Ảnh số ${index + 1} chưa được chọn khách hàng.`);
+      }
+      if (!imageBase64) {
+        throw new BadRequestError(`Ảnh số ${index + 1} không có dữ liệu hình ảnh.`);
+      }
+
+      // Xác thực khách hàng tồn tại trong danh bạ
+      const customer = await prisma.customer.findFirst({
+        where: { id: customerId, userId, isActive: true },
+      });
+      if (!customer) {
+        throw new NotFoundError(`Không tìm thấy khách hàng cho ảnh số ${index + 1}.`);
+      }
+
+      // Tách đuôi file và dữ liệu base64 sạch
+      let fileExt = 'jpg';
+      let cleanBase64 = imageBase64;
+      if (typeof imageBase64 === 'string' && imageBase64.startsWith('data:image/')) {
+        const matches = imageBase64.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+        if (matches && matches.length === 3) {
+          fileExt = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+          cleanBase64 = matches[2];
+        } else {
+          cleanBase64 = imageBase64.split(',')[1] || imageBase64;
+        }
+      }
+
+      // Tạo tên tệp độc nhất và lưu file ảnh vào thư mục máy chủ
+      const fileName = `inv_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${fileExt}`;
+      const filePath = path.join(uploadsDir, fileName);
+      const buffer = Buffer.from(cleanBase64, 'base64');
+      fs.writeFileSync(filePath, buffer);
+
+      const imageUrl = `/uploads/invoices/${fileName}`;
+
+      // Xử lý ngày hóa đơn
+      let invoiceDate = date ? new Date(date) : new Date();
+      if (isNaN(invoiceDate.getTime())) {
+        invoiceDate = new Date();
+      }
+
+      // Tính khoảng thời gian 00:00:00 - 23:59:59 của ngày theo giờ Việt Nam
+      const dateVN = new Date(invoiceDate.getTime() + 7 * 60 * 60 * 1000);
+      const year = dateVN.getUTCFullYear();
+      const monthVal = dateVN.getUTCMonth();
+      const dayVal = dateVN.getUTCDate();
+
+      const startUTC = new Date(Date.UTC(year, monthVal, dayVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+      const endUTC = new Date(Date.UTC(year, monthVal, dayVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+
+      // Tìm đơn nợ Transaction của khách này trong ngày để đính kèm
+      const existingTransaction = await prisma.transaction.findFirst({
+        where: {
+          userId,
+          customerId,
+          date: { gte: startUTC, lte: endUTC },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const invoiceRecord = await prisma.transactionInvoice.create({
+        data: {
+          userId,
+          customerId,
+          date: invoiceDate,
+          imageUrl,
+          note: note || null,
+          transactionId: existingTransaction ? existingTransaction.id : null,
+        },
+        include: {
+          customer: { select: { id: true, name: true } },
+          transaction: { select: { id: true, totalAmount: true, date: true } },
+        },
+      });
+
+      savedInvoices.push(invoiceRecord);
+    }
+
+    // Ghi log nhật ký hoạt động
+    await logActivity(
+      userId,
+      'UPLOAD_INVOICE_IMAGES',
+      `Tải lên ${savedInvoices.length} ảnh hóa đơn đính kèm đơn nợ khách hàng.`
+    );
+
+    // Thông báo sự kiện socket cập nhật danh sách
+    notifyCustomerUpdate(userId, 'INVOICES_UPLOADED', {
+      count: savedInvoices.length,
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: `Đã lưu thành công ${savedInvoices.length} ảnh hóa đơn.`,
+      data: savedInvoices,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 9. Xóa một ảnh hóa đơn đã lưu
+const deleteInvoiceImage = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { id } = req.params;
+
+    const invoice = await prisma.transactionInvoice.findFirst({
+      where: { id, userId },
+      include: { customer: { select: { name: true } } },
+    });
+
+    if (!invoice) {
+      throw new NotFoundError('Không tìm thấy ảnh hóa đơn hoặc bạn không có quyền xóa.');
+    }
+
+    // Xóa file ảnh vật lý trên ổ đĩa
+    const fs = require('fs');
+    const path = require('path');
+    try {
+      const filePath = path.join(__dirname, '../../', invoice.imageUrl);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (_) {}
+
+    // Xóa bản ghi trong database
+    await prisma.transactionInvoice.delete({
+      where: { id },
+    });
+
+    await logActivity(
+      userId,
+      'DELETE_INVOICE_IMAGE',
+      `Xóa ảnh hóa đơn của khách hàng ${invoice.customer?.name || 'ẩn'}`
+    );
+
+    notifyCustomerUpdate(userId, 'INVOICE_DELETED', {
+      invoiceId: id,
+      customerId: invoice.customerId,
+      transactionId: invoice.transactionId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Đã xóa ảnh hóa đơn thành công.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createTransaction,
   getTransactions,
@@ -1269,4 +1467,7 @@ module.exports = {
   voiceToText,
   deleteTransaction,
   parseTranscript,
+  uploadBatchInvoices,
+  deleteInvoiceImage,
 };
+

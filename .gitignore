@@ -13,3 +13,6 @@ logs/
 backups/
 scripts/backups/
 /scratch/
+
+# Bỏ qua thư mục upload ảnh người dùng
+uploads/

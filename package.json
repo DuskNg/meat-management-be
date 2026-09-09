@@ -12,7 +12,9 @@
     "prisma:studio:prod": "cross-env NODE_ENV=production npx prisma studio",
     "prisma:studio:local": "cross-env NODE_ENV=development npx prisma studio",
     "prisma:migrate:prod": "cross-env NODE_ENV=production npx prisma migrate dev",
-    "prisma:migrate:local": "cross-env NODE_ENV=development npx prisma migrate dev"
+    "prisma:migrate:local": "cross-env NODE_ENV=development npx prisma migrate dev",
+    "prisma:push:prod": "cross-env NODE_ENV=production npx prisma db push --accept-data-loss",
+    "prisma:generate": "npx prisma generate"
   },
   "keywords": [],
   "author": "",

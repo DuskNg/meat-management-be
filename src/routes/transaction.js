@@ -30,4 +30,11 @@ router.post('/voice-to-text', transactionController.voiceToText);
 // Phân tích câu thoại/transcript sang dữ liệu cấu trúc
 router.post('/parse-transcript', transactionController.parseTranscript);
 
+// Tải lên hàng loạt ảnh hóa đơn và tự động đính kèm vào đơn công nợ
+router.post('/invoices/batch', transactionController.uploadBatchInvoices);
+
+// Xóa một ảnh hóa đơn
+router.delete('/invoices/:id', transactionController.deleteInvoiceImage);
+
 module.exports = router;
+
