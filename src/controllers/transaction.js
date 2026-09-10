@@ -5,6 +5,7 @@ const { logActivity } = require('../utils/activityLogger');
 const { recordAiUsage } = require('../utils/aiUsage');
 const { callGeminiWithRetry } = require('../utils/geminiHelper');
 const { emitWorkspaceEvent } = require('../utils/socket');
+const { isCloudinaryConfigured, uploadToCloudinary } = require('../utils/cloudinary');
 
 // Helper gửi socket event thông báo giao dịch / nợ khách hàng thay đổi
 const notifyCustomerUpdate = (userId, action, payload = {}) => {
@@ -1335,13 +1336,29 @@ const uploadBatchInvoices = async (req, res, next) => {
         }
       }
 
-      // Tạo tên tệp độc nhất và lưu file ảnh vào thư mục máy chủ
+      // Lưu file ảnh vào thư mục máy chủ uploads/invoices
       const fileName = `inv_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${fileExt}`;
       const filePath = path.join(uploadsDir, fileName);
       const buffer = Buffer.from(cleanBase64, 'base64');
       fs.writeFileSync(filePath, buffer);
 
-      const imageUrl = `/uploads/invoices/${fileName}`;
+      let imageUrl = `/uploads/invoices/${fileName}`;
+
+      // Nếu đã cấu hình Cloudinary, tải ảnh lên đám mây và lưu link Cloudinary vĩnh viễn (res.cloudinary.com)
+      if (isCloudinaryConfigured()) {
+        try {
+          const mimeType = fileExt === 'png' ? 'image/png' : 'image/jpeg';
+          const dataUri = `data:${mimeType};base64,${cleanBase64}`;
+          const uploadRes = await uploadToCloudinary(dataUri, {
+            folder: 'meat_invoices',
+          });
+          if (uploadRes && uploadRes.secure_url) {
+            imageUrl = uploadRes.secure_url;
+          }
+        } catch (cloudErr) {
+          console.warn('[UPLOAD] Lỗi tải lên Cloudinary, giữ đường dẫn file máy chủ:', cloudErr.message);
+        }
+      }
 
       // Xử lý ngày hóa đơn
       let invoiceDate = date ? new Date(date) : new Date();
