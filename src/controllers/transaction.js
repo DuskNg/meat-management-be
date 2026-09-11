@@ -5,7 +5,7 @@ const { logActivity } = require('../utils/activityLogger');
 const { recordAiUsage } = require('../utils/aiUsage');
 const { callGeminiWithRetry } = require('../utils/geminiHelper');
 const { emitWorkspaceEvent } = require('../utils/socket');
-const { isCloudinaryConfigured, uploadToCloudinary } = require('../utils/cloudinary');
+const { isCloudinaryConfigured, uploadToCloudinary, deleteFromCloudinary } = require('../utils/cloudinary');
 
 // Helper gửi socket event thông báo giao dịch / nợ khách hàng thay đổi
 const notifyCustomerUpdate = (userId, action, payload = {}) => {
@@ -1323,34 +1323,61 @@ const uploadBatchInvoices = async (req, res, next) => {
         throw new NotFoundError(`Không tìm thấy khách hàng cho ảnh số ${index + 1}.`);
       }
 
-      // Tách đuôi file và dữ liệu base64 sạch
+      // Nhận diện loại tệp: Video hoặc Hình ảnh
       let fileExt = 'jpg';
+      let isVideo = false;
+      let mimeType = 'image/jpeg';
       let cleanBase64 = imageBase64;
-      if (typeof imageBase64 === 'string' && imageBase64.startsWith('data:image/')) {
-        const matches = imageBase64.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
-        if (matches && matches.length === 3) {
-          fileExt = matches[1] === 'jpeg' ? 'jpg' : matches[1];
-          cleanBase64 = matches[2];
-        } else {
-          cleanBase64 = imageBase64.split(',')[1] || imageBase64;
+
+      if (typeof imageBase64 === 'string') {
+        if (imageBase64.startsWith('data:video/')) {
+          isVideo = true;
+          const match = imageBase64.match(/^data:video\/([a-zA-Z0-9+.\-_]+);base64,(.+)$/);
+          if (match && match.length === 3) {
+            const subType = match[1].toLowerCase();
+            fileExt = subType === 'quicktime' ? 'mov' : subType.split('+')[0];
+            mimeType = `video/${match[1]}`;
+            cleanBase64 = match[2];
+          } else {
+            fileExt = 'mp4';
+            mimeType = 'video/mp4';
+            cleanBase64 = imageBase64.split(',')[1] || imageBase64;
+          }
+        } else if (imageBase64.startsWith('data:image/')) {
+          const match = imageBase64.match(/^data:image\/([a-zA-Z0-9+.\-_]+);base64,(.+)$/);
+          if (match && match.length === 3) {
+            const subType = match[1].toLowerCase();
+            fileExt = subType === 'jpeg' ? 'jpg' : subType;
+            mimeType = `image/${match[1]}`;
+            cleanBase64 = match[2];
+          } else {
+            fileExt = 'jpg';
+            mimeType = 'image/jpeg';
+            cleanBase64 = imageBase64.split(',')[1] || imageBase64;
+          }
+        } else if (item.mediaType === 'video') {
+          isVideo = true;
+          fileExt = item.fileExt || 'mp4';
+          mimeType = `video/${fileExt}`;
         }
       }
 
-      // Lưu file ảnh vào thư mục máy chủ uploads/invoices
-      const fileName = `inv_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${fileExt}`;
+      // Lưu file dự phòng vào thư mục máy chủ uploads/invoices
+      const prefix = isVideo ? 'vid' : 'inv';
+      const fileName = `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${fileExt}`;
       const filePath = path.join(uploadsDir, fileName);
       const buffer = Buffer.from(cleanBase64, 'base64');
       fs.writeFileSync(filePath, buffer);
 
       let imageUrl = `/uploads/invoices/${fileName}`;
 
-      // Nếu đã cấu hình Cloudinary, tải ảnh lên đám mây và lưu link Cloudinary vĩnh viễn (res.cloudinary.com)
+      // Nếu đã cấu hình Cloudinary, tải ảnh/video lên đám mây và lưu link Cloudinary vĩnh viễn (res.cloudinary.com)
       if (isCloudinaryConfigured()) {
         try {
-          const mimeType = fileExt === 'png' ? 'image/png' : 'image/jpeg';
           const dataUri = `data:${mimeType};base64,${cleanBase64}`;
           const uploadRes = await uploadToCloudinary(dataUri, {
-            folder: 'meat_invoices',
+            folder: isVideo ? 'meat_invoices/videos' : 'meat_invoices',
+            resource_type: isVideo ? 'video' : 'image',
           });
           if (uploadRes && uploadRes.secure_url) {
             imageUrl = uploadRes.secure_url;
@@ -1440,7 +1467,7 @@ const deleteInvoiceImage = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy ảnh hóa đơn hoặc bạn không có quyền xóa.');
     }
 
-    // Xóa file ảnh vật lý trên ổ đĩa
+    // Xóa file vật lý trên ổ đĩa máy chủ (nếu có)
     const fs = require('fs');
     const path = require('path');
     try {
@@ -1449,6 +1476,22 @@ const deleteInvoiceImage = async (req, res, next) => {
         fs.unlinkSync(filePath);
       }
     } catch (_) {}
+
+    // Xóa file trên đám mây Cloudinary nếu được lưu trữ qua Cloudinary
+    if (isCloudinaryConfigured() && invoice.imageUrl && invoice.imageUrl.includes('res.cloudinary.com')) {
+      try {
+        const urlParts = invoice.imageUrl.split('/upload/');
+        if (urlParts.length === 2) {
+          const pathAfterUpload = urlParts[1].replace(/^v\d+\//, '');
+          const lastDotIdx = pathAfterUpload.lastIndexOf('.');
+          const publicId = lastDotIdx !== -1 ? pathAfterUpload.substring(0, lastDotIdx) : pathAfterUpload;
+          const isVideo = invoice.imageUrl.includes('/video/') || /\.(mp4|mov|webm|m4v)($|\?)/i.test(invoice.imageUrl);
+          await deleteFromCloudinary(publicId, { resource_type: isVideo ? 'video' : 'image' });
+        }
+      } catch (cErr) {
+        console.warn('[CLOUDINARY DELETE ERROR]', cErr.message);
+      }
+    }
 
     // Xóa bản ghi trong database
     await prisma.transactionInvoice.delete({
@@ -1476,6 +1519,142 @@ const deleteInvoiceImage = async (req, res, next) => {
   }
 };
 
+// 10. Lấy danh sách ảnh hóa đơn đã lưu của chủ buôn (hỗ trợ lọc theo khách hàng, khoảng ngày, tìm kiếm)
+const getInvoiceImages = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { customerId, fromDate, toDate, search } = req.query;
+
+    const where = {
+      userId,
+    };
+
+    if (customerId) {
+      where.customerId = customerId;
+    }
+
+    const parseParamDate = (str, isEnd = false) => {
+      if (!str) return null;
+      if (str.includes('/')) {
+        const parts = str.split('/');
+        if (parts.length === 3) {
+          const [d, m, y] = parts.map(Number);
+          return new Date(y, m - 1, d, isEnd ? 23 : 0, isEnd ? 59 : 0, isEnd ? 59 : 0, isEnd ? 999 : 0);
+        }
+      }
+      const dt = new Date(str);
+      if (!isNaN(dt.getTime())) {
+        if (isEnd) dt.setHours(23, 59, 59, 999);
+        else dt.setHours(0, 0, 0, 0);
+        return dt;
+      }
+      return null;
+    };
+
+    if (fromDate || toDate) {
+      where.date = {};
+      const fromD = parseParamDate(fromDate, false);
+      if (fromD) {
+        where.date.gte = fromD;
+      }
+      const toD = parseParamDate(toDate, true);
+      if (toD) {
+        where.date.lte = toD;
+      }
+    }
+
+    if (search && search.trim()) {
+      where.customer = {
+        name: {
+          contains: search.trim(),
+          mode: 'insensitive',
+        },
+      };
+    }
+
+    const invoices = await prisma.transactionInvoice.findMany({
+      where,
+      include: {
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+          },
+        },
+        transaction: {
+          select: {
+            id: true,
+            totalAmount: true,
+          },
+        },
+      },
+      orderBy: [
+        { date: 'desc' },
+        { createdAt: 'desc' },
+      ],
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: invoices,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Kiểm tra danh sách cặp (customerId, date) — có công nợ ghi nợ nào trong ngày đó không
+ * POST /api/v1/transactions/check-debt-existence
+ * Body: { pairs: [{ customerId, date }] }
+ * Response: { data: { "customerId_YYYY-MM-DD": true/false, ... } }
+ */
+const checkDebtExistence = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { pairs } = req.body;
+
+    if (!Array.isArray(pairs) || pairs.length === 0) {
+      return res.status(400).json({ success: false, message: 'Danh sách pairs không hợp lệ.' });
+    }
+
+    const result = {};
+
+    for (const pair of pairs) {
+      const { customerId, date } = pair;
+      if (!customerId || !date) continue;
+
+      // Xác định khoảng ngày: từ 00:00 đến 23:59:59 của ngày đó
+      const dayStart = new Date(date);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(date);
+      dayEnd.setHours(23, 59, 59, 999);
+
+      const isoKey = `${customerId}_${dayStart.toISOString().split('T')[0]}`;
+
+      // Kiểm tra có bất kỳ giao dịch ghi nợ nào trong ngày đó không
+      const count = await prisma.transaction.count({
+        where: {
+          userId,
+          customerId,
+          type: 'DEBT',
+          date: {
+            gte: dayStart,
+            lte: dayEnd,
+          },
+        },
+      });
+
+      result[isoKey] = count > 0;
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createTransaction,
   getTransactions,
@@ -1486,5 +1665,6 @@ module.exports = {
   parseTranscript,
   uploadBatchInvoices,
   deleteInvoiceImage,
+  getInvoiceImages,
+  checkDebtExistence,
 };
-

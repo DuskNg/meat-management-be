@@ -30,11 +30,17 @@ router.post('/voice-to-text', transactionController.voiceToText);
 // Phân tích câu thoại/transcript sang dữ liệu cấu trúc
 router.post('/parse-transcript', transactionController.parseTranscript);
 
+// Lấy danh sách ảnh hóa đơn (lọc theo ngày, khách hàng, tìm kiếm)
+router.get('/invoices', transactionController.getInvoiceImages);
+
 // Tải lên hàng loạt ảnh hóa đơn và tự động đính kèm vào đơn công nợ
 router.post('/invoices/batch', transactionController.uploadBatchInvoices);
 
 // Xóa một ảnh hóa đơn
 router.delete('/invoices/:id', transactionController.deleteInvoiceImage);
+
+// Kiểm tra từng cặp (khách hàng + ngày) có giao dịch công nợ nào không — để cảnh báo sót công nợ khi lưu ảnh
+router.post('/check-debt-existence', transactionController.checkDebtExistence);
 
 module.exports = router;
 

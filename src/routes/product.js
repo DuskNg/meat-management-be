@@ -21,6 +21,12 @@ router.post('/customer-price', productController.updateCustomerProductPrice);
 // Cập nhật giá bán và giá nhập đồng loạt cho nhiều loại thịt
 router.post('/batch-update-prices', productController.batchUpdateProductPrices);
 
+// Cập nhật giá thịt riêng đồng loạt cho một hoặc nhiều khách hàng / nhóm khách
+router.post('/batch-customer-prices', productController.batchUpdateCustomerProductPrices);
+
+// Phân tích giá phổ biến nhất của từng sản phẩm theo nhóm cửa hàng
+router.post('/group-price-analysis', productController.analyzeGroupPrices);
+
 // Tạo sản phẩm mới
 router.post('/', productController.createProduct);
 

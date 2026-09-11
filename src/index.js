@@ -54,9 +54,9 @@ app.use(cors());
 // Phục vụ thư mục static files uploads (ảnh hóa đơn, hình ảnh hệ thống)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
-// Middleware đọc JSON Body (Tăng giới hạn lên 50mb để nhận diện ảnh và tải ảnh hóa đơn hàng loạt)
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// Middleware đọc JSON Body (Tăng giới hạn lên 100mb để nhận diện ảnh và tải ảnh, video hóa đơn hàng loạt)
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 // Cấu hình Rate Limiter chung cho toàn bộ ứng dụng (chặn Spam)
 const globalLimiter = rateLimit({

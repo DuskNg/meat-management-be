@@ -47,11 +47,19 @@ const getProducts = async (req, res, next) => {
           const cp = priceMap.get(p.id);
           return {
             ...p,
+            baseDefaultPrice: p.defaultPrice,
+            hasCustomPrice: true,
+            customPrice: cp.price,
             defaultPrice: cp.price !== undefined && cp.price !== null ? cp.price : p.defaultPrice,
             costPrice: cp.costPrice !== undefined && cp.costPrice !== null ? cp.costPrice : p.costPrice,
           };
         }
-        return p;
+        return {
+          ...p,
+          baseDefaultPrice: p.defaultPrice,
+          hasCustomPrice: false,
+          customPrice: null,
+        };
       });
 
       return res.status(200).json({
@@ -688,6 +696,243 @@ const batchUpdateProductPrices = async (req, res, next) => {
   }
 };
 
+// 8. Cập nhật giá thịt riêng cho một hoặc nhiều khách hàng (theo từng khách hoặc theo nhóm)
+const batchUpdateCustomerProductPrices = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { customerIds, items } = req.body; // customerIds: string[], items: [{ productId, price, costPrice, resetToDefault }]
+
+    if (!Array.isArray(customerIds) || customerIds.length === 0) {
+      throw new BadRequestError('Danh sách khách hàng (customerIds) không được để trống.');
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new BadRequestError('Danh sách giá sản phẩm (items) không được để trống.');
+    }
+
+    // Xác thực danh sách khách hàng thuộc chủ buôn này
+    const validCustomers = await prisma.customer.findMany({
+      where: {
+        id: { in: customerIds },
+        userId,
+        isActive: true,
+      },
+      select: { id: true, name: true },
+    });
+
+    if (validCustomers.length === 0) {
+      throw new NotFoundError('Không tìm thấy khách hàng hợp lệ nào.');
+    }
+
+    const validCustomerIds = validCustomers.map(c => c.id);
+
+    // Xác thực danh sách sản phẩm thuộc chủ buôn này
+    const productIds = items.map(it => it.productId).filter(Boolean);
+    const validProducts = await prisma.product.findMany({
+      where: {
+        id: { in: productIds },
+        userId,
+        isActive: true,
+      },
+      select: { id: true, name: true, defaultPrice: true },
+    });
+    const validProductMap = new Map(validProducts.map(p => [p.id, p]));
+
+    let totalUpdated = 0;
+
+    await prisma.$transaction(async (tx) => {
+      for (const cId of validCustomerIds) {
+        for (const item of items) {
+          if (!item.productId || !validProductMap.has(item.productId)) continue;
+
+          // Nếu có yêu cầu khôi phục giá mặc định, xóa bản ghi giá riêng
+          if (item.resetToDefault || item.price === null) {
+            await tx.customerProductPrice.deleteMany({
+              where: {
+                customerId: cId,
+                productId: item.productId,
+              },
+            });
+            totalUpdated++;
+            continue;
+          }
+
+          const numPrice = parseFloat(item.price);
+          if (isNaN(numPrice) || numPrice < 0) continue;
+
+          const numCostPrice = item.costPrice !== undefined && item.costPrice !== null
+            ? parseFloat(item.costPrice)
+            : undefined;
+
+          await tx.customerProductPrice.upsert({
+            where: {
+              customerId_productId: {
+                customerId: cId,
+                productId: item.productId,
+              },
+            },
+            update: {
+              price: numPrice,
+              ...(numCostPrice !== undefined && !isNaN(numCostPrice) ? { costPrice: numCostPrice } : {}),
+            },
+            create: {
+              customerId: cId,
+              productId: item.productId,
+              price: numPrice,
+              ...(numCostPrice !== undefined && !isNaN(numCostPrice) ? { costPrice: numCostPrice } : {}),
+            },
+          });
+          totalUpdated++;
+        }
+      }
+    });
+
+    // Ghi log hoạt động
+    const customerNames = validCustomers.map(c => c.name).slice(0, 3).join(', ');
+    const moreCust = validCustomers.length > 3 ? ` và ${validCustomers.length - 3} khách khác` : '';
+    await logActivity(
+      userId,
+      'BATCH_UPDATE_CUSTOMER_PRICES',
+      `Cập nhật giá riêng cho ${validCustomers.length} khách (${customerNames}${moreCust}): ${items.length} loại thịt`
+    );
+
+    // Bắn socket thông báo đồng bộ realtime cho từng khách hàng
+    validCustomerIds.forEach(cId => {
+      notifyCustomerUpdate(userId, 'UPDATE_CUSTOMER', { customerId: cId });
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Đã cập nhật giá riêng thành công cho ${validCustomers.length} cửa hàng.`,
+      data: {
+        customerCount: validCustomers.length,
+        totalUpdated,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Phân tích giá nhóm cửa hàng: với mỗi sản phẩm, tính giá phổ biến nhất
+ * trong nhóm (mode) và xác định cửa hàng nào đang có giá khác số đông
+ * POST /api/v1/products/group-price-analysis
+ * Body: { customerIds: string[] }
+ */
+const analyzeGroupPrices = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { customerIds } = req.body;
+
+    if (!Array.isArray(customerIds) || customerIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'Danh sách customerIds không hợp lệ.' });
+    }
+
+    // Xác thực các customerId thuộc workspace này
+    const validCustomers = await prisma.customer.findMany({
+      where: { id: { in: customerIds }, userId },
+      select: { id: true, name: true },
+    });
+    const validCustomerIds = validCustomers.map(c => c.id);
+    const customerMap = Object.fromEntries(validCustomers.map(c => [c.id, c.name]));
+
+    if (validCustomerIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'Không tìm thấy cửa hàng hợp lệ.' });
+    }
+
+    // Lấy danh sách sản phẩm đang hoạt động
+    const products = await prisma.product.findMany({
+      where: { userId, isActive: true },
+      orderBy: { name: 'asc' },
+    });
+
+    // Lấy toàn bộ giá riêng của tất cả khách trong nhóm
+    const allCustomPrices = await prisma.customerProductPrice.findMany({
+      where: {
+        customerId: { in: validCustomerIds },
+        productId: { in: products.map(p => p.id) },
+      },
+    });
+
+    // Tổ chức lại: map productId -> customerId -> price
+    const priceByProductCustomer = {};
+    for (const cp of allCustomPrices) {
+      if (!priceByProductCustomer[cp.productId]) {
+        priceByProductCustomer[cp.productId] = {};
+      }
+      priceByProductCustomer[cp.productId][cp.customerId] = cp.price;
+    }
+
+    // Tính giá phổ biến nhất (mode) cho từng sản phẩm
+    const result = products
+      .filter(p => p.name !== 'Tiền hàng' && !p.name.toLowerCase().startsWith('tiền'))
+      .map(p => {
+        // Tập hợp giá của từng cửa hàng trong nhóm (nếu không có giá riêng thì dùng giá chung)
+        const pricePerCustomer = validCustomerIds.map(cId => ({
+          customerId: cId,
+          customerName: customerMap[cId] || cId,
+          price: priceByProductCustomer[p.id]?.[cId] ?? p.defaultPrice,
+          hasCustomPrice: priceByProductCustomer[p.id]?.[cId] !== undefined,
+        }));
+
+        // Đếm tần suất xuất hiện của từng mức giá
+        const priceFrequency = {};
+        for (const pc of pricePerCustomer) {
+          const key = String(pc.price);
+          if (!priceFrequency[key]) priceFrequency[key] = { price: pc.price, count: 0, customerIds: [] };
+          priceFrequency[key].count++;
+          priceFrequency[key].customerIds.push(pc.customerId);
+        }
+
+        // Tìm giá phổ biến nhất (mode) - nếu hòa thì ưu tiên giá chung mặc định
+        const freqEntries = Object.values(priceFrequency).sort((a, b) => {
+          if (b.count !== a.count) return b.count - a.count;
+          // Nếu count bằng nhau: ưu tiên giá chung mặc định
+          if (a.price === p.defaultPrice) return -1;
+          if (b.price === p.defaultPrice) return 1;
+          return 0;
+        });
+
+        const majorityPrice = freqEntries[0]?.price ?? p.defaultPrice;
+        const majorityCount = freqEntries[0]?.count ?? 0;
+
+        // Xác định outliers: cửa hàng có giá khác với giá phổ biến nhất
+        const outliers = pricePerCustomer
+          .filter(pc => pc.price !== majorityPrice)
+          .map(pc => ({
+            customerId: pc.customerId,
+            customerName: pc.customerName,
+            currentPrice: pc.price,
+            hasCustomPrice: pc.hasCustomPrice,
+          }));
+
+        return {
+          id: p.id,
+          name: p.name,
+          unit: p.unit,
+          baseDefaultPrice: p.defaultPrice,
+          costPrice: p.costPrice,
+          majorityPrice,
+          majorityCount,
+          totalCount: validCustomerIds.length,
+          outlierCount: outliers.length,
+          outliers,
+          priceBreakdown: freqEntries,
+        };
+      });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        customers: validCustomers,
+        products: result,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getProducts,
   createProduct,
@@ -696,4 +941,8 @@ module.exports = {
   getDailyPriceUpdates,
   updateCustomerProductPrice,
   batchUpdateProductPrices,
+  batchUpdateCustomerProductPrices,
+  analyzeGroupPrices,
 };
+
+

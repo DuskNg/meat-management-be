@@ -32,10 +32,10 @@ const isCloudinaryConfigured = () => {
 };
 
 /**
- * Tải ảnh lên Cloudinary từ chuỗi Base64 hoặc URL
- * @param {string} fileData - Chuỗi data URI base64 hoặc URL ảnh
- * @param {Object} [options] - Tùy chọn bổ sung (folder, public_id, v.v.)
- * @returns {Promise<{ secure_url: string, public_id: string }>}
+ * Tải ảnh hoặc video lên Cloudinary từ chuỗi Base64 hoặc URL
+ * @param {string} fileData - Chuỗi data URI base64 hoặc URL ảnh/video
+ * @param {Object} [options] - Tùy chọn bổ sung (folder, public_id, resource_type, v.v.)
+ * @returns {Promise<{ secure_url: string, public_id: string, resource_type: string }>}
  */
 const uploadToCloudinary = async (fileData, options = {}) => {
   if (!isCloudinaryConfigured()) {
@@ -44,40 +44,62 @@ const uploadToCloudinary = async (fileData, options = {}) => {
   }
 
   try {
-    const uploadOptions = {
+    const isVideo =
+      options.resource_type === 'video' ||
+      (typeof fileData === 'string' && (
+        fileData.startsWith('data:video/') ||
+        /\.(mp4|mov|webm|m4v|avi|mkv)($|\?)/i.test(fileData)
+      ));
+
+    let uploadOptions = {
       folder: options.folder || 'meat_invoices',
-      resource_type: 'image',
-      format: 'jpg',
-      quality: 'auto:good', // Tối ưu chất lượng tự động để giữ dung lượng nhẹ
-      fetch_format: 'auto',
       ...options,
     };
+
+    if (isVideo) {
+      uploadOptions = {
+        ...uploadOptions,
+        resource_type: 'video',
+      };
+    } else {
+      uploadOptions = {
+        resource_type: 'image',
+        format: 'jpg',
+        quality: 'auto:good', // Tối ưu chất lượng tự động để giữ dung lượng nhẹ
+        fetch_format: 'auto',
+        ...uploadOptions,
+      };
+    }
 
     const result = await cloudinary.uploader.upload(fileData, uploadOptions);
     return {
       secure_url: result.secure_url,
       public_id: result.public_id,
+      resource_type: result.resource_type || (isVideo ? 'video' : 'image'),
       bytes: result.bytes,
       width: result.width,
       height: result.height,
+      duration: result.duration, // Thời lượng video (nếu là video)
     };
   } catch (error) {
-    console.error('[CLOUDINARY] Lỗi tải ảnh lên Cloudinary:', error.message);
+    console.error('[CLOUDINARY] Lỗi tải file lên Cloudinary:', error.message);
     throw error;
   }
 };
 
 /**
- * Xóa ảnh trên Cloudinary theo publicId
+ * Xóa ảnh hoặc video trên Cloudinary theo publicId
  * @param {string} publicId
+ * @param {Object} [options] - { resource_type: 'image' | 'video' }
  * @returns {Promise<any>}
  */
-const deleteFromCloudinary = async (publicId) => {
+const deleteFromCloudinary = async (publicId, options = {}) => {
   if (!isCloudinaryConfigured() || !publicId) return null;
   try {
-    return await cloudinary.uploader.destroy(publicId);
+    const resource_type = options.resource_type || (publicId.includes('/video/') || options.isVideo ? 'video' : 'image');
+    return await cloudinary.uploader.destroy(publicId, { resource_type });
   } catch (error) {
-    console.error('[CLOUDINARY] Lỗi xóa ảnh trên Cloudinary:', error.message);
+    console.error('[CLOUDINARY] Lỗi xóa file trên Cloudinary:', error.message);
     return null;
   }
 };
