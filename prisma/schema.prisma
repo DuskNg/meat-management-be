@@ -50,6 +50,8 @@ model User {
   recurringDebts RecurringDebt[] // Danh sách các mẫu đơn nợ cố định hàng ngày của chủ buôn
   portalLinks    PortalLink[]    // Danh sách các link ghim Zalo của chủ buôn này
   transactionInvoices TransactionInvoice[] // Danh sách các ảnh hóa đơn do chủ buôn này quản lý
+  staffSubmissionLinks StaffSubmissionLink[] // Danh sách link Zalo nhân viên gửi hóa đơn
+  staffSubmissions     StaffSubmission[]     // Danh sách các lượt nộp hóa đơn/video của nhân viên
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
   workspaceMemberships WorkspaceMember[]      @relation("WorkspaceMembers")        // Các workspace mà user này là thành viên
@@ -99,6 +101,7 @@ model Customer {
   portalLinkCustomers PortalLinkCustomer[] // Các liên kết link ghim Zalo tới khách hàng này
   portalFeedbacks     PortalFeedback[]     // Các phản hồi khiếu nại liên quan đến khách hàng này
   invoices            TransactionInvoice[] // Các ảnh hóa đơn đính kèm của khách hàng này
+  staffSubmissions    StaffSubmission[]    // Các hóa đơn/video AI nhận diện của khách hàng này
 
   @@index([userId]) // Tối ưu hóa truy vấn tìm kiếm danh sách khách hàng của từng chủ buôn
   @@map("customers") // Đặt tên bảng trong PostgreSQL là "customers"
@@ -647,5 +650,91 @@ model TransactionInvoice {
   @@index([customerId])
   @@index([date])
   @@map("transaction_invoices")
+}
+
+// ─── LINK DÀNH CHO NHÓM NHÂN VIÊN GỬI HÓA ĐƠN & VIDEO QUA ZALO ───
+model StaffSubmissionLink {
+  id           String   @id @default(uuid())
+  userId       String   // ID của chủ buôn sở hữu link
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  name         String   // Tên nhóm/link hiển thị (VD: "Nhóm giao hàng chợ Sáng", "Nhân viên sạp A")
+  token        String   @unique // Mã token ngẫu nhiên không thể đoán trước để truy cập link
+  pin          String?  // Mã PIN bảo mật (nếu có)
+  isActive     Boolean  @default(true) // Bật / Tắt hiệu lực link
+  note         String?  // Ghi chú nội bộ
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  submissions  StaffSubmission[]
+
+  @@index([userId])
+  @@index([token])
+  @@map("staff_submission_links")
+}
+
+// ─── TỪNG HÓA ĐƠN / VIDEO DO NHÂN VIÊN GỬI LÊN ───
+model StaffSubmission {
+  id              String               @id @default(uuid())
+  userId          String               // ID của chủ buôn
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  linkId          String?              // Thuộc link nào
+  link            StaffSubmissionLink? @relation(fields: [linkId], references: [id], onDelete: SetNull)
+
+  senderName      String?              // Tên người gửi (nhân viên)
+  note            String?              // Ghi chú đợt gửi
+  fileUrl         String               // Link Cloudinary hoặc đường dẫn ảnh/video
+  fileType        String               @default("IMAGE") // "IMAGE" | "VIDEO"
+  date            DateTime             @default(now()) // Ngày của hóa đơn
+
+  // Trạng thái xử lý:
+  // "PENDING": Đã nhận file, chờ đưa vào hàng đợi AI
+  // "ANALYZING": Đang gọi Gemini AI phân tích
+  // "READY_FOR_REVIEW": Đã phân tích xong, đang chờ chủ buôn kiểm tra duyệt
+  // "APPROVED": Chủ buôn đã duyệt thành công thành đơn nợ
+  // "REJECTED": Chủ buôn bác bỏ / xóa bỏ
+  status          String               @default("PENDING")
+
+  // Kết quả nhận diện sơ bộ của AI
+  detectedCustomerName String?         // Tên khách AI đọc được trên hóa đơn
+  matchedCustomerId    String?         // ID khách hàng so khớp được trong danh bạ
+  matchedCustomer      Customer?       @relation(fields: [matchedCustomerId], references: [id], onDelete: SetNull)
+  rawAiResponse        String?         // JSON kết quả trả về từ Gemini AI
+  aiError              String?         // Lỗi nếu Gemini không phân tích được
+
+  // Liên kết đơn nợ sau khi duyệt
+  transactionId   String?              // ID giao dịch được tạo sau khi duyệt
+  approvedAt      DateTime?            // Thời điểm chủ buôn duyệt
+  
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  items           StaffSubmissionItem[]
+
+  @@index([userId])
+  @@index([linkId])
+  @@index([status])
+  @@index([date])
+  @@map("staff_submissions")
+}
+
+// ─── CHI TIẾT CÁC MÓN THỊT DO AI PHÂN TÍCH TRONG TỪNG HÓA ĐƠN ───
+model StaffSubmissionItem {
+  id              String          @id @default(uuid())
+  submissionId    String          // Thuộc đợt gửi nào
+  submission      StaffSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  rawName         String          // Tên món gốc AI đọc được từ tích kê
+  matchedProductId String?        // ID sản phẩm thịt so khớp được trong danh mục
+  quantity        Decimal?        @db.Decimal(10, 3) // Khối lượng (kg)
+  price           Decimal?        @db.Decimal(12, 2) // Đơn giá
+  amount          Decimal?        @db.Decimal(12, 2) // Thành tiền
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([submissionId])
+  @@map("staff_submission_items")
 }
 

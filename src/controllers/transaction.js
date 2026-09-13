@@ -1302,17 +1302,15 @@ const uploadBatchInvoices = async (req, res, next) => {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
 
-    const savedInvoices = [];
-
-    for (let index = 0; index < items.length; index++) {
-      const item = items[index];
+    // Xử lý song song các tệp trong lô để tối ưu thời gian tải lên Cloudinary
+    const uploadPromises = items.map(async (item, index) => {
       const { customerId, date, imageBase64, note } = item;
 
       if (!customerId) {
-        throw new BadRequestError(`Ảnh số ${index + 1} chưa được chọn khách hàng.`);
+        throw new BadRequestError(`Tệp số ${index + 1} chưa được chọn khách hàng.`);
       }
       if (!imageBase64) {
-        throw new BadRequestError(`Ảnh số ${index + 1} không có dữ liệu hình ảnh.`);
+        throw new BadRequestError(`Tệp số ${index + 1} không có dữ liệu hình ảnh hoặc video.`);
       }
 
       // Xác thực khách hàng tồn tại trong danh bạ
@@ -1320,7 +1318,7 @@ const uploadBatchInvoices = async (req, res, next) => {
         where: { id: customerId, userId, isActive: true },
       });
       if (!customer) {
-        throw new NotFoundError(`Không tìm thấy khách hàng cho ảnh số ${index + 1}.`);
+        throw new NotFoundError(`Không tìm thấy khách hàng cho tệp số ${index + 1}.`);
       }
 
       // Nhận diện loại tệp: Video hoặc Hình ảnh
@@ -1427,8 +1425,10 @@ const uploadBatchInvoices = async (req, res, next) => {
         },
       });
 
-      savedInvoices.push(invoiceRecord);
-    }
+      return invoiceRecord;
+    });
+
+    const savedInvoices = await Promise.all(uploadPromises);
 
     // Ghi log nhật ký hoạt động
     await logActivity(
@@ -1620,25 +1620,47 @@ const checkDebtExistence = async (req, res, next) => {
     }
 
     const result = {};
+    const invoiceCounts = {};
 
     for (const pair of pairs) {
-      const { customerId, date } = pair;
-      if (!customerId || !date) continue;
+      const { customerId, date, dateStr } = pair;
+      if (!customerId) continue;
 
-      // Xác định khoảng ngày: từ 00:00 đến 23:59:59 của ngày đó
-      const dayStart = new Date(date);
-      dayStart.setHours(0, 0, 0, 0);
-      const dayEnd = new Date(date);
-      dayEnd.setHours(23, 59, 59, 999);
+      // Xác định khoảng thời gian theo chuẩn múi giờ Việt Nam (UTC+7)
+      let dayStart;
+      let dayEnd;
+      let effectiveDateStr = dateStr;
 
+      if (dateStr && typeof dateStr === 'string' && dateStr.includes('/')) {
+        const parts = dateStr.trim().split('/');
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        const year = parseInt(parts[2], 10);
+        // Bắt đầu ngày theo giờ VN (00:00:00 UTC+7 = 17:00:00 UTC ngày hôm trước)
+        dayStart = new Date(Date.UTC(year, month - 1, day, 0, 0, 0) - 7 * 3600 * 1000);
+        // Kết thúc ngày theo giờ VN (23:59:59.999 UTC+7 = 16:59:59.999 UTC)
+        dayEnd = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999) - 7 * 3600 * 1000);
+      } else if (date) {
+        const d = new Date(date);
+        const dateVN = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+        const year = dateVN.getUTCFullYear();
+        const monthVal = dateVN.getUTCMonth();
+        const dayVal = dateVN.getUTCDate();
+        dayStart = new Date(Date.UTC(year, monthVal, dayVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+        dayEnd = new Date(Date.UTC(year, monthVal, dayVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+      } else {
+        continue;
+      }
+
+      // Các key định danh để đảm bảo Frontend luôn tìm thấy dù tra cứu theo dateStr hay isoDate
       const isoKey = `${customerId}_${dayStart.toISOString().split('T')[0]}`;
+      const pairKey = effectiveDateStr ? `${customerId}_${effectiveDateStr}` : null;
 
-      // Kiểm tra có bất kỳ giao dịch ghi nợ nào trong ngày đó không
+      // Kiểm tra có bất kỳ giao dịch ghi nợ (Transaction) nào của khách trong ngày đó không
       const count = await prisma.transaction.count({
         where: {
           userId,
           customerId,
-          type: 'DEBT',
           date: {
             gte: dayStart,
             lte: dayEnd,
@@ -1646,10 +1668,27 @@ const checkDebtExistence = async (req, res, next) => {
         },
       });
 
-      result[isoKey] = count > 0;
+      const hasDebt = count > 0;
+      result[isoKey] = hasDebt;
+      if (pairKey) result[pairKey] = hasDebt;
+
+      // Đếm số lượng ảnh/video hóa đơn đã lưu trong ngày của khách hàng này để kiểm tra trùng lặp
+      const invCount = await prisma.transactionInvoice.count({
+        where: {
+          userId,
+          customerId,
+          date: {
+            gte: dayStart,
+            lte: dayEnd,
+          },
+        },
+      });
+
+      invoiceCounts[isoKey] = invCount;
+      if (pairKey) invoiceCounts[pairKey] = invCount;
     }
 
-    return res.status(200).json({ success: true, data: result });
+    return res.status(200).json({ success: true, data: result, invoiceCounts });
   } catch (error) {
     next(error);
   }
