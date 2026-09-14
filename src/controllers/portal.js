@@ -156,6 +156,103 @@ const verifyPortalPin = async (req, res, next) => {
   }
 };
 
+/**
+ * Helper xác định request có phải từ localhost / môi trường dev không
+ */
+const isRequestFromLocalhost = (req) => {
+  if (req.headers['x-portal-env'] === 'development') return true;
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || req.hostname || '');
+  const origin = String(req.headers.origin || '');
+  const referer = String(req.headers.referer || '');
+  return (
+    host.includes('localhost') ||
+    host.includes('127.0.0.1') ||
+    origin.includes('localhost') ||
+    origin.includes('127.0.0.1') ||
+    referer.includes('localhost') ||
+    referer.includes('127.0.0.1') ||
+    process.env.NODE_ENV === 'development'
+  );
+};
+
+/**
+ * Lịch đồng bộ Portal: chỉ cập nhật sau 16h, sau 19h, sau 22h hàng ngày (theo giờ Việt Nam UTC+7).
+ * Tránh trường hợp chủ buôn đang thao tác/sửa dở đơn trong ngày làm khách hàng thấy số liệu thay đổi đột ngột.
+ */
+const getPortalCutoffInfo = () => {
+  const now = new Date();
+  const vnFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const parts = vnFormatter.formatToParts(now);
+  const p = {};
+  parts.forEach(({ type, value }) => { p[type] = value; });
+
+  const year = parseInt(p.year, 10);
+  const month = parseInt(p.month, 10);
+  const day = parseInt(p.day, 10);
+  const hour = parseInt(p.hour, 10);
+
+  let cutoffYear = year;
+  let cutoffMonth = month;
+  let cutoffDay = day;
+  let cutoffHour = 22;
+  let windowKey = '';
+  let lastUpdateLabel = '';
+  let nextUpdateLabel = '';
+
+  const pad = (n) => String(n).padStart(2, '0');
+
+  if (hour >= 22) {
+    cutoffHour = 22;
+    windowKey = `${year}${pad(month)}${pad(day)}_22`;
+    lastUpdateLabel = '22:00 hôm nay';
+    nextUpdateLabel = '16:00 ngày mai';
+  } else if (hour >= 19) {
+    cutoffHour = 19;
+    windowKey = `${year}${pad(month)}${pad(day)}_19`;
+    lastUpdateLabel = '19:00 hôm nay';
+    nextUpdateLabel = '22:00 hôm nay';
+  } else if (hour >= 16) {
+    cutoffHour = 16;
+    windowKey = `${year}${pad(month)}${pad(day)}_16`;
+    lastUpdateLabel = '16:00 hôm nay';
+    nextUpdateLabel = '19:00 hôm nay';
+  } else {
+    // Trước 16h hôm nay -> Lấy mốc chốt 22h hôm qua
+    const prevDate = new Date(Date.UTC(year, month - 1, day - 1));
+    cutoffYear = prevDate.getUTCFullYear();
+    cutoffMonth = prevDate.getUTCMonth() + 1;
+    cutoffDay = prevDate.getUTCDate();
+    cutoffHour = 22;
+    windowKey = `${cutoffYear}${pad(cutoffMonth)}${pad(cutoffDay)}_22`;
+    lastUpdateLabel = '22:00 hôm qua';
+    nextUpdateLabel = '16:00 hôm nay';
+  }
+
+  const cutoffIsoStr = `${cutoffYear}-${pad(cutoffMonth)}-${pad(cutoffDay)}T${pad(cutoffHour)}:00:00+07:00`;
+  const cutoffDate = new Date(cutoffIsoStr);
+
+  return {
+    cutoffDate,
+    windowKey,
+    lastUpdateLabel,
+    nextUpdateLabel,
+    schedule: '16h, 19h, 22h hàng ngày',
+  };
+};
+
+// In-memory cache cho snapshot dữ liệu portal theo từng khung giờ
+const portalSnapshotCache = new Map();
+const MAX_PORTAL_CACHE_SIZE = 500;
+
 // [GET] /api/v1/portal/data/:token
 // Lấy dữ liệu công nợ, đơn hàng, bảng giá thịt an toàn (Zero-leakage)
 const getPublicPortalData = async (req, res, next) => {
@@ -186,13 +283,36 @@ const getPublicPortalData = async (req, res, next) => {
       });
     }
 
+    // Kiểm tra môi trường: Localhost update ngay lập tức, Production chốt theo mốc 16h, 19h, 22h
+    const isLocalhost = isRequestFromLocalhost(req);
+    const cutoffInfo = getPortalCutoffInfo();
+    const cutoffDate = isLocalhost ? null : cutoffInfo.cutoffDate;
+
+    // Kiểm tra cache snapshot trên production (không cache localhost)
+    const cacheKey = `${portalLink.id}_${customerId || 'all'}_${from || ''}_${to || ''}_${cutoffInfo.windowKey}`;
+    if (!isLocalhost && portalSnapshotCache.has(cacheKey)) {
+      return res.status(200).json(portalSnapshotCache.get(cacheKey));
+    }
+
     // ─── A. CASE: KHÁCH HÀNG / NHÀ HÀNG (BÁN THỊT RA) ───
     if (portalLink.type === 'customer') {
       const allowedCustomerIds = portalLink.customers.map(c => c.customerId);
       if (allowedCustomerIds.length === 0) {
         return res.status(200).json({
           success: true,
-          data: { type: 'customer', customers: [], summary: { totalDebt: 0 }, transactions: [] }
+          data: {
+            type: 'customer',
+            customers: [],
+            summary: { totalDebt: 0 },
+            transactions: [],
+            syncSchedule: {
+              isLocalhost,
+              lastUpdateLabel: isLocalhost ? 'Tức thì (localhost)' : cutoffInfo.lastUpdateLabel,
+              nextUpdateLabel: isLocalhost ? 'Thời gian thực' : cutoffInfo.nextUpdateLabel,
+              schedule: '16h, 19h, 22h hàng ngày',
+              cutoffDate: cutoffDate ? cutoffDate.toISOString() : null
+            }
+          }
         });
       }
 
@@ -222,11 +342,17 @@ const getPublicPortalData = async (req, res, next) => {
           const c = item.customer;
           const [purchases, payments] = await Promise.all([
             prisma.transaction.aggregate({
-              where: { customerId: c.id },
+              where: {
+                customerId: c.id,
+                ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+              },
               _sum: { totalAmount: true }
             }),
             prisma.payment.aggregate({
-              where: { customerId: c.id },
+              where: {
+                customerId: c.id,
+                ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+              },
               _sum: { amount: true }
             })
           ]);
@@ -251,11 +377,12 @@ const getPublicPortalData = async (req, res, next) => {
           });
         }
 
-        // Lấy 30 giao dịch gần nhất của toàn chuỗi
+        // Lấy 50 giao dịch gần nhất của toàn chuỗi
         const recentTxs = await prisma.transaction.findMany({
           where: {
             customerId: { in: allowedCustomerIds },
-            ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {})
+            ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
           },
           include: {
             customer: { select: { id: true, name: true } },
@@ -289,21 +416,32 @@ const getPublicPortalData = async (req, res, next) => {
           }))
         }));
 
-        return res.status(200).json({
-          success: true,
-          data: {
-            type: 'customer',
-            isChainOverview: true,
-            summary: {
-              totalDebt: grandTotalDebt,
-              totalPurchase: grandTotalPurchase,
-              totalPaid: grandTotalPaid,
-              branchCount: allowedCustomerIds.length
-            },
-            branches: allCustomersData,
-            transactions: safeTxs
+        const chainData = {
+          type: 'customer',
+          isChainOverview: true,
+          summary: {
+            totalDebt: grandTotalDebt,
+            totalPurchase: grandTotalPurchase,
+            totalPaid: grandTotalPaid,
+            branchCount: allowedCustomerIds.length
+          },
+          branches: allCustomersData,
+          transactions: safeTxs,
+          syncSchedule: {
+            isLocalhost,
+            lastUpdateLabel: isLocalhost ? 'Tức thì (localhost)' : cutoffInfo.lastUpdateLabel,
+            nextUpdateLabel: isLocalhost ? 'Thời gian thực' : cutoffInfo.nextUpdateLabel,
+            schedule: '16h, 19h, 22h hàng ngày',
+            cutoffDate: cutoffDate ? cutoffDate.toISOString() : null
           }
-        });
+        };
+
+        const chainRes = { success: true, data: chainData };
+        if (!isLocalhost) {
+          if (portalSnapshotCache.size > MAX_PORTAL_CACHE_SIZE) portalSnapshotCache.clear();
+          portalSnapshotCache.set(cacheKey, chainRes);
+        }
+        return res.status(200).json(chainRes);
       }
 
       // Xử lý xem cụ thể 1 khách hàng / chi nhánh (nếu truyền 'all' mà chỉ có 1 quán thì lấy quán đó)
@@ -319,17 +457,24 @@ const getPublicPortalData = async (req, res, next) => {
       // Tính công nợ thực tế
       const [purchases, paymentsTotal, transactions, payments, customPrices] = await Promise.all([
         prisma.transaction.aggregate({
-          where: { customerId: targetCustomerId },
+          where: {
+            customerId: targetCustomerId,
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          },
           _sum: { totalAmount: true }
         }),
         prisma.payment.aggregate({
-          where: { customerId: targetCustomerId },
+          where: {
+            customerId: targetCustomerId,
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          },
           _sum: { amount: true }
         }),
         prisma.transaction.findMany({
           where: {
             customerId: targetCustomerId,
-            ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {})
+            ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
           },
           include: {
             items: {
@@ -344,7 +489,8 @@ const getPublicPortalData = async (req, res, next) => {
         prisma.payment.findMany({
           where: {
             customerId: targetCustomerId,
-            ...(Object.keys(dateFilter).length > 0 ? { paidAt: dateFilter } : {})
+            ...(Object.keys(dateFilter).length > 0 ? { paidAt: dateFilter } : {}),
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
           },
           orderBy: { paidAt: 'desc' },
           take: 100
@@ -394,32 +540,43 @@ const getPublicPortalData = async (req, res, next) => {
         note: p.note
       }));
 
-      return res.status(200).json({
-        success: true,
-        data: {
-          type: 'customer',
-          isChainOverview: false,
-          currentCustomer: {
-            id: targetCustomer.id,
-            name: targetCustomer.name,
-            phone: targetCustomer.phone,
-            address: targetCustomer.address
-          },
-          summary: {
-            debt,
-            totalPurchase,
-            totalPaid
-          },
-          transactions: safeTxs,
-          prices: safePrices,
-          payments: safePayments,
-          branches: portalLink.customers.map((item) => ({
-            id: item.customer.id,
-            name: item.customer.name,
-            phone: item.customer.phone
-          }))
+      const singleCustomerData = {
+        type: 'customer',
+        isChainOverview: false,
+        currentCustomer: {
+          id: targetCustomer.id,
+          name: targetCustomer.name,
+          phone: targetCustomer.phone,
+          address: targetCustomer.address
+        },
+        summary: {
+          debt,
+          totalPurchase,
+          totalPaid
+        },
+        transactions: safeTxs,
+        prices: safePrices,
+        payments: safePayments,
+        branches: portalLink.customers.map((item) => ({
+          id: item.customer.id,
+          name: item.customer.name,
+          phone: item.customer.phone
+        })),
+        syncSchedule: {
+          isLocalhost,
+          lastUpdateLabel: isLocalhost ? 'Tức thì (localhost)' : cutoffInfo.lastUpdateLabel,
+          nextUpdateLabel: isLocalhost ? 'Thời gian thực' : cutoffInfo.nextUpdateLabel,
+          schedule: '16h, 19h, 22h hàng ngày',
+          cutoffDate: cutoffDate ? cutoffDate.toISOString() : null
         }
-      });
+      };
+
+      const singleCustomerRes = { success: true, data: singleCustomerData };
+      if (!isLocalhost) {
+        if (portalSnapshotCache.size > MAX_PORTAL_CACHE_SIZE) portalSnapshotCache.clear();
+        portalSnapshotCache.set(cacheKey, singleCustomerRes);
+      }
+      return res.status(200).json(singleCustomerRes);
     }
 
     // ─── B. CASE: NHÀ CUNG CẤP (TIỀN MUA HÀNG NỢ NCC) ───
@@ -586,6 +743,15 @@ const getBranchesDebtByMonth = async (req, res, next) => {
       });
     }
 
+    const isLocalhost = isRequestFromLocalhost(req);
+    const cutoffInfo = getPortalCutoffInfo();
+    const cutoffDate = isLocalhost ? null : cutoffInfo.cutoffDate;
+
+    const branchesCacheKey = `branches_${portalLink.id}_${month || 'current'}_${cutoffInfo.windowKey}`;
+    if (!isLocalhost && portalSnapshotCache.has(branchesCacheKey)) {
+      return res.status(200).json(portalSnapshotCache.get(branchesCacheKey));
+    }
+
     const now = new Date();
     let targetMonth = now.getMonth() + 1;
     let targetYear = now.getFullYear();
@@ -619,22 +785,32 @@ const getBranchesDebtByMonth = async (req, res, next) => {
       // 1. Toàn bộ lịch sử mua và trả của khách hàng
       const [allPurchases, allPayments, monthPurchases, customerPayments] = await Promise.all([
         prisma.transaction.aggregate({
-          where: { customerId: c.id },
+          where: {
+            customerId: c.id,
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          },
           _sum: { totalAmount: true }
         }),
         prisma.payment.aggregate({
-          where: { customerId: c.id },
+          where: {
+            customerId: c.id,
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          },
           _sum: { amount: true }
         }),
         prisma.transaction.aggregate({
           where: {
             customerId: c.id,
-            date: { gte: startOfMonth, lte: endOfMonth }
+            date: { gte: startOfMonth, lte: endOfMonth },
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
           },
           _sum: { totalAmount: true }
         }),
         prisma.payment.findMany({
-          where: { customerId: c.id }
+          where: {
+            customerId: c.id,
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          }
         })
       ]);
 
@@ -687,7 +863,7 @@ const getBranchesDebtByMonth = async (req, res, next) => {
       });
     }
 
-    res.status(200).json({
+    const branchesRes = {
       success: true,
       data: {
         month: formattedMonth,
@@ -700,9 +876,23 @@ const getBranchesDebtByMonth = async (req, res, next) => {
           totalDebt: grandTotalDebt,
           branchCount: branchesData.length
         },
-        branches: branchesData
+        branches: branchesData,
+        syncSchedule: {
+          isLocalhost,
+          lastUpdateLabel: isLocalhost ? 'Tức thì (localhost)' : cutoffInfo.lastUpdateLabel,
+          nextUpdateLabel: isLocalhost ? 'Thời gian thực' : cutoffInfo.nextUpdateLabel,
+          schedule: '16h, 19h, 22h hàng ngày',
+          cutoffDate: cutoffDate ? cutoffDate.toISOString() : null
+        }
       }
-    });
+    };
+
+    if (!isLocalhost) {
+      if (portalSnapshotCache.size > MAX_PORTAL_CACHE_SIZE) portalSnapshotCache.clear();
+      portalSnapshotCache.set(branchesCacheKey, branchesRes);
+    }
+
+    res.status(200).json(branchesRes);
   } catch (err) {
     next(err);
   }
