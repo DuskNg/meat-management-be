@@ -176,7 +176,7 @@ const isRequestFromLocalhost = (req) => {
 };
 
 /**
- * Lịch đồng bộ Portal: chỉ cập nhật sau 16h, sau 19h, sau 22h hàng ngày (theo giờ Việt Nam UTC+7).
+ * Lịch đồng bộ Portal: chỉ cập nhật sau 12h, sau 16h, sau 19h, sau 22h hàng ngày (theo giờ Việt Nam UTC+7).
  * Tránh trường hợp chủ buôn đang thao tác/sửa dở đơn trong ngày làm khách hàng thấy số liệu thay đổi đột ngột.
  */
 const getPortalCutoffInfo = () => {
@@ -214,7 +214,7 @@ const getPortalCutoffInfo = () => {
     cutoffHour = 22;
     windowKey = `${year}${pad(month)}${pad(day)}_22`;
     lastUpdateLabel = '22:00 hôm nay';
-    nextUpdateLabel = '16:00 ngày mai';
+    nextUpdateLabel = '12:00 ngày mai';
   } else if (hour >= 19) {
     cutoffHour = 19;
     windowKey = `${year}${pad(month)}${pad(day)}_19`;
@@ -225,8 +225,13 @@ const getPortalCutoffInfo = () => {
     windowKey = `${year}${pad(month)}${pad(day)}_16`;
     lastUpdateLabel = '16:00 hôm nay';
     nextUpdateLabel = '19:00 hôm nay';
+  } else if (hour >= 12) {
+    cutoffHour = 12;
+    windowKey = `${year}${pad(month)}${pad(day)}_12`;
+    lastUpdateLabel = '12:00 hôm nay';
+    nextUpdateLabel = '16:00 hôm nay';
   } else {
-    // Trước 16h hôm nay -> Lấy mốc chốt 22h hôm qua
+    // Trước 12h trưa hôm nay -> Lấy mốc chốt 22h hôm qua
     const prevDate = new Date(Date.UTC(year, month - 1, day - 1));
     cutoffYear = prevDate.getUTCFullYear();
     cutoffMonth = prevDate.getUTCMonth() + 1;
@@ -234,7 +239,7 @@ const getPortalCutoffInfo = () => {
     cutoffHour = 22;
     windowKey = `${cutoffYear}${pad(cutoffMonth)}${pad(cutoffDay)}_22`;
     lastUpdateLabel = '22:00 hôm qua';
-    nextUpdateLabel = '16:00 hôm nay';
+    nextUpdateLabel = '12:00 hôm nay';
   }
 
   const cutoffIsoStr = `${cutoffYear}-${pad(cutoffMonth)}-${pad(cutoffDay)}T${pad(cutoffHour)}:00:00+07:00`;
@@ -245,7 +250,7 @@ const getPortalCutoffInfo = () => {
     windowKey,
     lastUpdateLabel,
     nextUpdateLabel,
-    schedule: '16h, 19h, 22h hàng ngày',
+    schedule: '12h, 16h, 19h, 22h hàng ngày',
   };
 };
 
@@ -283,7 +288,7 @@ const getPublicPortalData = async (req, res, next) => {
       });
     }
 
-    // Kiểm tra môi trường: Localhost update ngay lập tức, Production chốt theo mốc 16h, 19h, 22h
+    // Kiểm tra môi trường: Localhost update ngay lập tức, Production chốt theo mốc 12h, 16h, 19h, 22h
     const isLocalhost = isRequestFromLocalhost(req);
     const cutoffInfo = getPortalCutoffInfo();
     const cutoffDate = isLocalhost ? null : cutoffInfo.cutoffDate;
@@ -309,7 +314,7 @@ const getPublicPortalData = async (req, res, next) => {
               isLocalhost,
               lastUpdateLabel: isLocalhost ? 'Tức thì (localhost)' : cutoffInfo.lastUpdateLabel,
               nextUpdateLabel: isLocalhost ? 'Thời gian thực' : cutoffInfo.nextUpdateLabel,
-              schedule: '16h, 19h, 22h hàng ngày',
+              schedule: cutoffInfo.schedule,
               cutoffDate: cutoffDate ? cutoffDate.toISOString() : null
             }
           }
@@ -431,7 +436,7 @@ const getPublicPortalData = async (req, res, next) => {
             isLocalhost,
             lastUpdateLabel: isLocalhost ? 'Tức thì (localhost)' : cutoffInfo.lastUpdateLabel,
             nextUpdateLabel: isLocalhost ? 'Thời gian thực' : cutoffInfo.nextUpdateLabel,
-            schedule: '16h, 19h, 22h hàng ngày',
+            schedule: cutoffInfo.schedule,
             cutoffDate: cutoffDate ? cutoffDate.toISOString() : null
           }
         };
@@ -566,7 +571,7 @@ const getPublicPortalData = async (req, res, next) => {
           isLocalhost,
           lastUpdateLabel: isLocalhost ? 'Tức thì (localhost)' : cutoffInfo.lastUpdateLabel,
           nextUpdateLabel: isLocalhost ? 'Thời gian thực' : cutoffInfo.nextUpdateLabel,
-          schedule: '16h, 19h, 22h hàng ngày',
+          schedule: cutoffInfo.schedule,
           cutoffDate: cutoffDate ? cutoffDate.toISOString() : null
         }
       };
@@ -881,7 +886,7 @@ const getBranchesDebtByMonth = async (req, res, next) => {
           isLocalhost,
           lastUpdateLabel: isLocalhost ? 'Tức thì (localhost)' : cutoffInfo.lastUpdateLabel,
           nextUpdateLabel: isLocalhost ? 'Thời gian thực' : cutoffInfo.nextUpdateLabel,
-          schedule: '16h, 19h, 22h hàng ngày',
+          schedule: cutoffInfo.schedule,
           cutoffDate: cutoffDate ? cutoffDate.toISOString() : null
         }
       }
