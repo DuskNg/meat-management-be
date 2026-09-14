@@ -24,13 +24,14 @@ const signPortalSession = (portalLinkId, token) => {
 // Helper xác thực session token của portal
 const verifyPortalSession = (req, portalLink) => {
   if (!portalLink.pin) return true; // Không cài PIN thì luôn hợp lệ
+  if (checkIsOwner(req, portalLink)) return true; // Chủ buôn luôn được phép truy cập không cần PIN
 
   const headers = req.headers || {};
   const query = req.query || {};
 
   const authHeader = headers['authorization'];
-  let sessionToken = null;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
+  let sessionToken = headers['x-portal-session'] || null;
+  if (!sessionToken && authHeader && authHeader.startsWith('Bearer ')) {
     sessionToken = authHeader.split(' ')[1];
   } else if (query.session) {
     sessionToken = query.session;
@@ -175,50 +176,25 @@ const isRequestFromLocalhost = (req) => {
   );
 };
 
-/**
- * Lịch đồng bộ Portal: tự động gọi API ngầm cập nhật lúc 12h, 16h, 19h, 22h hàng ngày (giờ Việt Nam UTC+7).
- */
-const getPortalCutoffInfo = () => {
-  const now = new Date();
-  const vnFormatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-  const parts = vnFormatter.formatToParts(now);
-  const p = {};
-  parts.forEach(({ type, value }) => { p[type] = value; });
-
-  const hour = parseInt(p.hour, 10);
-  let nextUpdateLabel = '';
-
-  if (hour >= 22) {
-    nextUpdateLabel = '12:00 ngày mai';
-  } else if (hour >= 19) {
-    nextUpdateLabel = '22:00 hôm nay';
-  } else if (hour >= 16) {
-    nextUpdateLabel = '19:00 hôm nay';
-  } else if (hour >= 12) {
-    nextUpdateLabel = '16:00 hôm nay';
-  } else {
-    nextUpdateLabel = '12:00 hôm nay';
+// Helper xác thực xem người gọi request có phải là chủ buôn sở hữu link này không
+const checkIsOwner = (req, portalLink) => {
+  if (req.user && (req.user.id === portalLink.userId || req.effectiveUserId === portalLink.userId)) {
+    return true;
   }
-
-  return {
-    lastUpdateLabel: `${p.hour}:${p.minute}`,
-    nextUpdateLabel,
-    schedule: '12h, 16h, 19h, 22h hàng ngày',
-  };
+  const authHeader = req.headers['authorization'];
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      if (decoded && (decoded.userId === portalLink.userId || decoded.id === portalLink.userId)) {
+        return true;
+      }
+    } catch (e) {
+      // Bỏ qua nếu không phải JWT token của chủ buôn
+    }
+  }
+  return false;
 };
-
-// In-memory cache cho snapshot dữ liệu portal theo từng khung giờ
-const portalSnapshotCache = new Map();
-const MAX_PORTAL_CACHE_SIZE = 500;
 
 // [GET] /api/v1/portal/data/:token
 // Lấy dữ liệu công nợ, đơn hàng, bảng giá thịt an toàn (Zero-leakage)
@@ -251,7 +227,23 @@ const getPublicPortalData = async (req, res, next) => {
     }
 
     const isLocalhost = isRequestFromLocalhost(req);
-    const cutoffInfo = getPortalCutoffInfo();
+    // Chủ buôn xem Real-time tức thì, Khách hàng xem theo mốc đã công bố (lastPublishedAt)
+    const isOwner = isLocalhost || checkIsOwner(req, portalLink);
+    const cutoffDate = isOwner ? null : (portalLink.lastPublishedAt || null);
+
+    // Đếm số đơn nợ mới phát sinh chưa công bố (dành riêng cho chủ buôn)
+    let unpublishedCount = 0;
+    if (isOwner && portalLink.lastPublishedAt) {
+      const allowedIds = portalLink.customers.map(c => c.customerId);
+      if (allowedIds.length > 0) {
+        unpublishedCount = await prisma.transaction.count({
+          where: {
+            customerId: { in: allowedIds },
+            createdAt: { gt: portalLink.lastPublishedAt }
+          }
+        });
+      }
+    }
 
     // ─── A. CASE: KHÁCH HÀNG / NHÀ HÀNG (BÁN THỊT RA) ───
     if (portalLink.type === 'customer') {
@@ -264,11 +256,10 @@ const getPublicPortalData = async (req, res, next) => {
             customers: [],
             summary: { totalDebt: 0 },
             transactions: [],
-            syncSchedule: {
-              isLocalhost,
-              lastUpdateLabel: cutoffInfo.lastUpdateLabel,
-              nextUpdateLabel: cutoffInfo.nextUpdateLabel,
-              schedule: cutoffInfo.schedule,
+            publishInfo: {
+              isOwner,
+              lastPublishedAt: portalLink.lastPublishedAt ? portalLink.lastPublishedAt.toISOString() : null,
+              unpublishedCount: 0,
             }
           }
         });
@@ -300,11 +291,17 @@ const getPublicPortalData = async (req, res, next) => {
           const c = item.customer;
           const [purchases, payments] = await Promise.all([
             prisma.transaction.aggregate({
-              where: { customerId: c.id },
+              where: {
+                customerId: c.id,
+                ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+              },
               _sum: { totalAmount: true }
             }),
             prisma.payment.aggregate({
-              where: { customerId: c.id },
+              where: {
+                customerId: c.id,
+                ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+              },
               _sum: { amount: true }
             })
           ]);
@@ -333,7 +330,8 @@ const getPublicPortalData = async (req, res, next) => {
         const recentTxs = await prisma.transaction.findMany({
           where: {
             customerId: { in: allowedCustomerIds },
-            ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {})
+            ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
           },
           include: {
             customer: { select: { id: true, name: true } },
@@ -378,11 +376,10 @@ const getPublicPortalData = async (req, res, next) => {
           },
           branches: allCustomersData,
           transactions: safeTxs,
-          syncSchedule: {
-            isLocalhost,
-            lastUpdateLabel: cutoffInfo.lastUpdateLabel,
-            nextUpdateLabel: cutoffInfo.nextUpdateLabel,
-            schedule: cutoffInfo.schedule,
+          publishInfo: {
+            isOwner,
+            lastPublishedAt: portalLink.lastPublishedAt ? portalLink.lastPublishedAt.toISOString() : null,
+            unpublishedCount,
           }
         };
 
@@ -402,17 +399,24 @@ const getPublicPortalData = async (req, res, next) => {
       // Tính công nợ thực tế
       const [purchases, paymentsTotal, transactions, payments, customPrices] = await Promise.all([
         prisma.transaction.aggregate({
-          where: { customerId: targetCustomerId },
+          where: {
+            customerId: targetCustomerId,
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          },
           _sum: { totalAmount: true }
         }),
         prisma.payment.aggregate({
-          where: { customerId: targetCustomerId },
+          where: {
+            customerId: targetCustomerId,
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          },
           _sum: { amount: true }
         }),
         prisma.transaction.findMany({
           where: {
             customerId: targetCustomerId,
-            ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {})
+            ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
           },
           include: {
             items: {
@@ -427,7 +431,8 @@ const getPublicPortalData = async (req, res, next) => {
         prisma.payment.findMany({
           where: {
             customerId: targetCustomerId,
-            ...(Object.keys(dateFilter).length > 0 ? { paidAt: dateFilter } : {})
+            ...(Object.keys(dateFilter).length > 0 ? { paidAt: dateFilter } : {}),
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
           },
           orderBy: { paidAt: 'desc' },
           take: 100
@@ -499,11 +504,10 @@ const getPublicPortalData = async (req, res, next) => {
           name: item.customer.name,
           phone: item.customer.phone
         })),
-        syncSchedule: {
-          isLocalhost,
-          lastUpdateLabel: cutoffInfo.lastUpdateLabel,
-          nextUpdateLabel: cutoffInfo.nextUpdateLabel,
-          schedule: cutoffInfo.schedule,
+        publishInfo: {
+          isOwner,
+          lastPublishedAt: portalLink.lastPublishedAt ? portalLink.lastPublishedAt.toISOString() : null,
+          unpublishedCount,
         }
       };
 
@@ -675,7 +679,8 @@ const getBranchesDebtByMonth = async (req, res, next) => {
     }
 
     const isLocalhost = isRequestFromLocalhost(req);
-    const cutoffInfo = getPortalCutoffInfo();
+    const isOwner = isLocalhost || checkIsOwner(req, portalLink);
+    const cutoffDate = isOwner ? null : (portalLink.lastPublishedAt || null);
 
     const now = new Date();
     let targetMonth = now.getMonth() + 1;
@@ -710,22 +715,32 @@ const getBranchesDebtByMonth = async (req, res, next) => {
       // 1. Toàn bộ lịch sử mua và trả của khách hàng
       const [allPurchases, allPayments, monthPurchases, customerPayments] = await Promise.all([
         prisma.transaction.aggregate({
-          where: { customerId: c.id },
+          where: {
+            customerId: c.id,
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          },
           _sum: { totalAmount: true }
         }),
         prisma.payment.aggregate({
-          where: { customerId: c.id },
+          where: {
+            customerId: c.id,
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          },
           _sum: { amount: true }
         }),
         prisma.transaction.aggregate({
           where: {
             customerId: c.id,
-            date: { gte: startOfMonth, lte: endOfMonth }
+            date: { gte: startOfMonth, lte: endOfMonth },
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
           },
           _sum: { totalAmount: true }
         }),
         prisma.payment.findMany({
-          where: { customerId: c.id }
+          where: {
+            customerId: c.id,
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          }
         })
       ]);
 
@@ -792,11 +807,9 @@ const getBranchesDebtByMonth = async (req, res, next) => {
           branchCount: branchesData.length
         },
         branches: branchesData,
-        syncSchedule: {
-          isLocalhost,
-          lastUpdateLabel: cutoffInfo.lastUpdateLabel,
-          nextUpdateLabel: cutoffInfo.nextUpdateLabel,
-          schedule: cutoffInfo.schedule,
+        publishInfo: {
+          isOwner,
+          lastPublishedAt: portalLink.lastPublishedAt ? portalLink.lastPublishedAt.toISOString() : null,
         }
       }
     };
@@ -837,20 +850,34 @@ const getPortalLinks = async (req, res, next) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    const formatted = links.map(l => ({
-      id: l.id,
-      name: l.name,
-      token: l.token,
-      type: l.type,
-      pin: l.pin,
-      isActive: l.isActive,
-      note: l.note,
-      viewCount: l.viewCount,
-      lastViewedAt: l.lastViewedAt,
-      createdAt: l.createdAt,
-      customers: l.customers.map(c => c.customer),
-      supplier: l.supplier,
-      pendingFeedbacksCount: l._count.feedbacks
+    const formatted = await Promise.all(links.map(async (l) => {
+      let unpublishedCount = 0;
+      if (l.type === 'customer' && l.customers.length > 0) {
+        const cIds = l.customers.map(c => c.customer.id);
+        unpublishedCount = await prisma.transaction.count({
+          where: {
+            customerId: { in: cIds },
+            ...(l.lastPublishedAt ? { createdAt: { gt: l.lastPublishedAt } } : {})
+          }
+        });
+      }
+      return {
+        id: l.id,
+        name: l.name,
+        token: l.token,
+        type: l.type,
+        pin: l.pin,
+        isActive: l.isActive,
+        note: l.note,
+        viewCount: l.viewCount,
+        lastViewedAt: l.lastViewedAt,
+        lastPublishedAt: l.lastPublishedAt,
+        unpublishedCount,
+        createdAt: l.createdAt,
+        customers: l.customers.map(c => c.customer),
+        supplier: l.supplier,
+        pendingFeedbacksCount: l._count.feedbacks
+      };
     }));
 
     res.status(200).json({
@@ -1111,6 +1138,102 @@ const resolvePortalFeedback = async (req, res, next) => {
   }
 };
 
+// [POST] /api/v1/portal/manage/links/:id/publish
+// Chủ buôn bấm công bố số liệu mới cho 1 link ghim Zalo
+const publishPortalData = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { id } = req.params;
+
+    const link = await prisma.portalLink.findFirst({
+      where: { id, userId, isActive: true }
+    });
+
+    if (!link) {
+      throw new NotFoundError('Không tìm thấy link nhóm Zalo hoặc link đã bị khóa.');
+    }
+
+    const now = new Date();
+    const updated = await prisma.portalLink.update({
+      where: { id },
+      data: { lastPublishedAt: now }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Đã công bố số liệu mới nhất cho khách hàng xem thành công!',
+      data: {
+        id: updated.id,
+        lastPublishedAt: updated.lastPublishedAt
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [POST] /api/v1/portal/manage/links/publish-all
+// Chủ buôn bấm công bố số liệu mới cho TẤT CẢ các link ghim Zalo
+const publishAllPortalData = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const now = new Date();
+
+    const result = await prisma.portalLink.updateMany({
+      where: { userId, isActive: true },
+      data: { lastPublishedAt: now }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Đã công bố số liệu mới cho toàn bộ ${result.count} nhóm Zalo!`,
+      data: {
+        count: result.count,
+        lastPublishedAt: now
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [POST] /api/v1/portal/publish/:token
+// Cho phép chủ buôn bấm nút công bố trực tiếp ngay trên giao diện Portal
+const publishByToken = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token }
+    });
+
+    if (!portalLink || !portalLink.isActive) {
+      throw new NotFoundError('Đường dẫn không tồn tại hoặc đã bị thu hồi.');
+    }
+
+    const isOwner = checkIsOwner(req, portalLink);
+    if (!isOwner) {
+      throw new ForbiddenError('Chỉ có chủ buôn mới có quyền bấm công bố số liệu mới.');
+    }
+
+    const now = new Date();
+    const updated = await prisma.portalLink.update({
+      where: { id: portalLink.id },
+      data: { lastPublishedAt: now }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Đã công bố số liệu mới nhất cho khách hàng xem thành công!',
+      data: {
+        id: updated.id,
+        lastPublishedAt: updated.lastPublishedAt
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   // Public
   getPublicPortalInfo,
@@ -1118,6 +1241,7 @@ module.exports = {
   getPublicPortalData,
   getBranchesDebtByMonth,
   submitPortalFeedback,
+  publishByToken,
   // Private Manage
   getPortalLinks,
   createPortalLink,
@@ -1125,5 +1249,7 @@ module.exports = {
   regeneratePortalToken,
   deletePortalLink,
   getPortalFeedbacks,
-  resolvePortalFeedback
+  resolvePortalFeedback,
+  publishPortalData,
+  publishAllPortalData
 };

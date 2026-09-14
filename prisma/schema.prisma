@@ -578,9 +578,10 @@ model PortalLink {
   
   note         String?  // Ghi chú nội bộ của chủ buôn
   viewCount    Int      @default(0) // Số lượt mở link
-  lastViewedAt DateTime? // Thời điểm xem gần nhất
+  lastViewedAt    DateTime? // Thời điểm xem gần nhất
+  lastPublishedAt DateTime? @default(now()) // Thời điểm chủ buôn bấm công bố số liệu mới cho khách xem
   
-  createdAt    DateTime @default(now())
+  createdAt       DateTime  @default(now())
   updatedAt    DateTime @updatedAt
 
   feedbacks    PortalFeedback[]

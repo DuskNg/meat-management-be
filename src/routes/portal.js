@@ -20,9 +20,18 @@ router.get('/branches-debt/:token', portalController.getBranchesDebtByMonth);
 // Gửi phản hồi / khiếu nại / báo lệch từ cổng portal
 router.post('/feedback/:token', portalController.submitPortalFeedback);
 
+// Công bố số liệu mới trực tiếp bằng token (yêu cầu là chủ buôn)
+router.post('/publish/:token', portalController.publishByToken);
+
 // ─── 2. CÁC TUYẾN ĐƯỜNG QUẢN LÝ DÀNH CHO CHỦ BUÔN TRÊN APP ───
 // Lấy danh sách link ghim Zalo
 router.get('/manage/links', authenticateToken, resolveWorkspace, portalController.getPortalLinks);
+
+// Công bố số liệu mới cho TOÀN BỘ các link nhóm Zalo
+router.post('/manage/links/publish-all', authenticateToken, resolveWorkspace, portalController.publishAllPortalData);
+
+// Công bố số liệu mới cho 1 link nhóm Zalo cụ thể
+router.post('/manage/links/:id/publish', authenticateToken, resolveWorkspace, portalController.publishPortalData);
 
 // Tạo link ghim Zalo mới (cho 1 hoặc chuỗi nhiều quán / NCC)
 router.post('/manage/links', authenticateToken, resolveWorkspace, portalController.createPortalLink);
