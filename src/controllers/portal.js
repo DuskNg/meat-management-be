@@ -5,7 +5,8 @@ const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError, UnauthorizedError } = require('../utils/errors');
 const { emitWorkspaceEvent } = require('../utils/socket');
 
-const JWT_SECRET = process.env.JWT_ACCESS_SECRET || 'meat_manager_portal_secret_key_2026';
+const JWT_SECRET = process.env.JWT_ACCESS_SECRET || 'default_access_secret';
+const PORTAL_SESSION_SECRET = process.env.JWT_PORTAL_SECRET || process.env.JWT_ACCESS_SECRET || 'meat_manager_portal_secret_key_2026';
 
 // Helper sinh chuỗi token URL-safe ngẫu nhiên 16 ký tự
 const generatePortalToken = () => {
@@ -16,7 +17,7 @@ const generatePortalToken = () => {
 const signPortalSession = (portalLinkId, token) => {
   return jwt.sign(
     { portalLinkId, token, type: 'PORTAL_SESSION' },
-    JWT_SECRET,
+    PORTAL_SESSION_SECRET,
     { expiresIn: '60d' }
   );
 };
@@ -46,7 +47,7 @@ const verifyPortalSession = (req, portalLink) => {
   if (!sessionToken) return false;
 
   try {
-    const decoded = jwt.verify(sessionToken, JWT_SECRET);
+    const decoded = jwt.verify(sessionToken, PORTAL_SESSION_SECRET);
     return decoded.portalLinkId === portalLink.id && decoded.token === portalLink.token;
   } catch (err) {
     return false;
