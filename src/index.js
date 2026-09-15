@@ -88,6 +88,7 @@ const workspaceRoutes = require('./routes/workspace');
 const recurringDebtRoutes = require('./routes/recurringDebt');
 const portalRoutes = require('./routes/portal');
 const staffSubmissionRoutes = require('./routes/staffSubmission');
+const quickPriceRoutes = require('./routes/quickPrice');
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
@@ -104,6 +105,7 @@ app.use('/api/v1/workspace', workspaceRoutes);
 app.use('/api/v1/recurring-debts', recurringDebtRoutes);
 app.use('/api/v1/portal', portalRoutes);
 app.use('/api/v1/staff-submissions', staffSubmissionRoutes);
+app.use('/api/v1/quick-price', quickPriceRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {

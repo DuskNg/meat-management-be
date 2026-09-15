@@ -52,6 +52,7 @@ model User {
   transactionInvoices TransactionInvoice[] // Danh sách các ảnh hóa đơn do chủ buôn này quản lý
   staffSubmissionLinks StaffSubmissionLink[] // Danh sách link Zalo nhân viên gửi hóa đơn
   staffSubmissions     StaffSubmission[]     // Danh sách các lượt nộp hóa đơn/video của nhân viên
+  quickPriceLinks      QuickPriceLink[]      // Danh sách link Zalo cho chủ cập nhật giá nhanh
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
   workspaceMemberships WorkspaceMember[]      @relation("WorkspaceMembers")        // Các workspace mà user này là thành viên
@@ -737,5 +738,25 @@ model StaffSubmissionItem {
 
   @@index([submissionId])
   @@map("staff_submission_items")
+}
+
+// ─── LINK DÀNH CHO ANH CHỦ CẬP NHẬT GIÁ BÁN RIÊNG QUA ZALO ───
+model QuickPriceLink {
+  id        String   @id @default(uuid())
+  userId    String   // ID của chủ buôn sở hữu link
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  name      String   @default("Link Zalo Cập Nhật Giá Bán") // Tên gợi nhớ
+  token     String   @unique // Mã token ngẫu nhiên không thể đoán trước để truy cập link
+  pin       String?  // Mã PIN bảo mật (nếu có, 4 số)
+  isActive  Boolean  @default(true) // Bật / Tắt hiệu lực link
+  note      String?  // Ghi chú nội bộ
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([token])
+  @@map("quick_price_links")
 }
 
