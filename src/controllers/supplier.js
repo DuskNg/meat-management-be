@@ -154,10 +154,28 @@ const updateSupplier = async (req, res, next) => {
       },
     });
 
+    const changes = [];
+    if (supplierExists.name !== updated.name) {
+      changes.push(`Tên: "${supplierExists.name}" ➔ "${updated.name}"`);
+    }
+    if ((supplierExists.phone || '') !== (updated.phone || '')) {
+      changes.push(`SĐT: "${supplierExists.phone || 'Không'}" ➔ "${updated.phone || 'Không'}"`);
+    }
+    if ((supplierExists.address || '') !== (updated.address || '')) {
+      changes.push(`Địa chỉ: "${supplierExists.address || 'Không'}" ➔ "${updated.address || 'Không'}"`);
+    }
+    if ((supplierExists.note || '') !== (updated.note || '')) {
+      changes.push(`Ghi chú: "${supplierExists.note || 'Không'}" ➔ "${updated.note || 'Không'}"`);
+    }
+
+    const logDetail = changes.length > 0
+      ? `Cập nhật nhà cung cấp "${supplierExists.name}":\n• ${changes.join('\n• ')}`
+      : `Cập nhật nhà cung cấp "${supplierExists.name}" (Không có thay đổi)`;
+
     await logActivity(
       userId,
       'UPDATE_SUPPLIER',
-      `Cập nhật thông tin nhà cung cấp: ${updated.name}`
+      logDetail
     );
 
     res.status(200).json({
@@ -426,11 +444,32 @@ const updateSupplierTransaction = async (req, res, next) => {
       },
     });
 
-    const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
+    const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + 'đ';
+    const oldAmountStr = formatCurrency(transaction.totalAmount);
+    const newAmountStr = formatCurrency(updated.totalAmount);
+
+    const oldDateStr = transaction.date
+      ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(transaction.date))
+      : '';
+    const newDateStr = updated.date
+      ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(updated.date))
+      : oldDateStr;
+
+    const changes = [];
+    changes.push(`Số tiền: ${oldAmountStr} ➔ ${newAmountStr}`);
+    if (oldDateStr !== newDateStr) {
+      changes.push(`Ngày nhập: ${oldDateStr} ➔ ${newDateStr}`);
+    }
+    if ((transaction.note || '') !== (updated.note || '')) {
+      changes.push(`Ghi chú: "${transaction.note || 'Không'}" ➔ "${updated.note || 'Không'}"`);
+    }
+
+    const logDetail = `Cập nhật đơn nhập hàng của nhà cung cấp ${transaction.supplier.name}:\n• ${changes.join('\n• ')}`;
+
     await logActivity(
       userId,
       'UPDATE_SUPPLIER_TRANSACTION',
-      `Cập nhật đơn nhập hàng của nhà cung cấp ${transaction.supplier.name}: ${formatCurrency(updated.totalAmount)}`
+      logDetail
     );
 
     res.status(200).json({
@@ -525,11 +564,32 @@ const updateSupplierPayment = async (req, res, next) => {
       },
     });
 
-    const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
+    const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + 'đ';
+    const oldAmountStr = formatCurrency(payment.amount);
+    const newAmountStr = formatCurrency(updated.amount);
+
+    const oldDateStr = payment.paidAt
+      ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(payment.paidAt))
+      : '';
+    const newDateStr = updated.paidAt
+      ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(updated.paidAt))
+      : oldDateStr;
+
+    const changes = [];
+    changes.push(`Số tiền: ${oldAmountStr} ➔ ${newAmountStr}`);
+    if (oldDateStr !== newDateStr) {
+      changes.push(`Ngày thanh toán: ${oldDateStr} ➔ ${newDateStr}`);
+    }
+    if ((payment.note || '') !== (updated.note || '')) {
+      changes.push(`Ghi chú: "${payment.note || 'Không'}" ➔ "${updated.note || 'Không'}"`);
+    }
+
+    const logDetail = `Cập nhật thanh toán cho nhà cung cấp ${payment.supplier.name}:\n• ${changes.join('\n• ')}`;
+
     await logActivity(
       userId,
       'UPDATE_SUPPLIER_PAYMENT',
-      `Cập nhật thanh toán cho nhà cung cấp ${payment.supplier.name}: ${formatCurrency(updated.amount)}`
+      logDetail
     );
 
     res.status(200).json({

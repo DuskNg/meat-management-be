@@ -215,10 +215,32 @@ const applyQuickPriceUpdate = async (req, res, next) => {
     const changedProductIds = [];
     const changedPriceMap = new Map(); // productId -> newPrice
 
+    const prodIds = items.map((it) => it.productId).filter(Boolean);
+    const existingCustomPrices = await prisma.customerProductPrice.findMany({
+      where: { customerId, productId: { in: prodIds } },
+    });
+    const allProds = await prisma.product.findMany({
+      where: { id: { in: prodIds }, userId },
+      select: { id: true, name: true, defaultPrice: true },
+    });
+    const prodMap = new Map(allProds.map((p) => [p.id, p]));
+    const oldPriceMap = new Map(existingCustomPrices.map((cp) => [cp.productId, cp.price]));
+    const priceDiffs = [];
+
     const result = await prisma.$transaction(async (tx) => {
       // 1. Cập nhật tên thịt và giá riêng vào bảng CustomerProductPrice
       for (const item of items) {
         if (!item.productId) continue;
+
+        const prod = prodMap.get(item.productId);
+        const oldPriceVal = oldPriceMap.get(item.productId);
+        const oldPriceStr = oldPriceVal !== undefined && oldPriceVal !== null
+          ? `${Number(oldPriceVal).toLocaleString('vi-VN')}đ`
+          : `Mặc định (${Number(prod?.defaultPrice || 0).toLocaleString('vi-VN')}đ)`;
+        const newPriceStr = item.resetToDefault || item.price === null
+          ? `Về mặc định (${Number(prod?.defaultPrice || 0).toLocaleString('vi-VN')}đ)`
+          : `${Number(item.price).toLocaleString('vi-VN')}đ`;
+        priceDiffs.push(`${prod?.name || 'Thịt'} (Trước: ${oldPriceStr} ➔ Sau: ${newPriceStr})`);
 
         // Nếu có sửa tên thịt, cập nhật trực tiếp tên sản phẩm Product
         if (item.productName && typeof item.productName === 'string') {
@@ -366,10 +388,14 @@ const applyQuickPriceUpdate = async (req, res, next) => {
     const formattedDate = new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(
       startOfEffectiveDate
     );
+    const changesSummary = priceDiffs.slice(0, 5).join('; ');
+    const moreDiffs = priceDiffs.length > 5 ? `... (+${priceDiffs.length - 5} loại)` : '';
+    const logDetail = `Cập nhật giá qua Zalo cho "${customer.name}" từ ngày ${formattedDate} (tính lại ${result.recalculatedCount} đơn nợ):\n• ${changesSummary}${moreDiffs}`;
+
     await logActivity(
       userId,
       'QUICK_PRICE_APPLY',
-      `Anh chủ cập nhật giá riêng cho "${customer.name}" từ ngày ${formattedDate} (${result.updatedPricesCount} loại thịt, tự động tính lại ${result.recalculatedCount} đơn nợ).`
+      logDetail
     );
 
     // 4. Phát socket realtime để dashboard của app tự động reload số liệu

@@ -447,6 +447,14 @@ const updateTransaction = async (req, res, next) => {
         id,
         userId,
       },
+      include: {
+        customer: { select: { id: true, name: true } },
+        items: {
+          include: {
+            product: { select: { name: true, unit: true } },
+          },
+        },
+      },
     });
 
     if (!existingTransaction) {
@@ -628,14 +636,41 @@ const updateTransaction = async (req, res, next) => {
       return transaction;
     });
 
-    const customer = await prisma.customer.findUnique({
-      where: { id: existingTransaction.customerId }
-    });
+    const customerName = existingTransaction.customer?.name || 'ẩn';
+
+    // Xây dựng chuỗi tóm tắt món trước và sau khi sửa
+    const oldItemsSummary = (existingTransaction.items || [])
+      .map((it) => `${it.product?.name || 'Món'}: ${it.quantity}${it.product?.unit || 'kg'} x ${Number(it.price).toLocaleString('vi-VN')}đ`)
+      .join(', ');
+    const newItemsSummary = (updated.items || [])
+      .map((it) => `${it.product?.name || 'Món'}: ${it.quantity}${it.product?.unit || 'kg'} x ${Number(it.price).toLocaleString('vi-VN')}đ`)
+      .join(', ');
+
+    const oldTotalStr = `${Number(existingTransaction.totalAmount).toLocaleString('vi-VN')}đ`;
+    const newTotalStr = `${Number(calculatedTotal).toLocaleString('vi-VN')}đ`;
+
+    const oldDateStr = existingTransaction.date
+      ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(existingTransaction.date))
+      : '';
+    const newDateStr = date
+      ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(date))
+      : oldDateStr;
+
+    const extraChanges = [];
+    if (date && oldDateStr !== newDateStr) {
+      extraChanges.push(`Ngày: ${oldDateStr} ➔ ${newDateStr}`);
+    }
+    if (note !== undefined && (note || '') !== (existingTransaction.note || '')) {
+      extraChanges.push(`Ghi chú: "${existingTransaction.note || 'Không'}" ➔ "${note || 'Không'}"`);
+    }
+    const extraInfoStr = extraChanges.length > 0 ? ` (${extraChanges.join(' | ')})` : '';
+
+    const logDetail = `Cập nhật đơn nợ của khách hàng ${customerName}${extraInfoStr}:\n• Trước: ${oldTotalStr} [${oldItemsSummary || 'Trống'}]\n• Sau: ${newTotalStr} [${newItemsSummary || 'Trống'}]`;
 
     await logActivity(
       userId,
       'UPDATE_TRANSACTION',
-      `Cập nhật đơn nợ của khách hàng ${customer?.name || 'ẩn'}: Tổng tiền mới ${calculatedTotal.toLocaleString('vi-VN')}đ`
+      logDetail
     );
     notifyCustomerUpdate(userId, 'UPDATE_TRANSACTION', { customerId: existingTransaction.customerId, transactionId: id });
 

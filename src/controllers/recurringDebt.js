@@ -235,7 +235,14 @@ const updateRecurringDebt = async (req, res, next) => {
 
     const existingDebt = await prisma.recurringDebt.findFirst({
       where: { id, userId },
-      include: { items: true },
+      include: {
+        customer: { select: { name: true } },
+        items: {
+          include: {
+            product: { select: { name: true, unit: true } },
+          },
+        },
+      },
     });
 
     if (!existingDebt) {
@@ -380,10 +387,22 @@ const updateRecurringDebt = async (req, res, next) => {
       });
     });
 
+    const oldItemsSummary = (existingDebt.items || [])
+      .map((it) => `${it.product?.name || 'Món'}: ${it.quantity}${it.product?.unit || 'kg'} x ${Number(it.price).toLocaleString('vi-VN')}đ`)
+      .join(', ');
+    const newItemsSummary = (updated.items || [])
+      .map((it) => `${it.product?.name || 'Món'}: ${it.quantity}${it.product?.unit || 'kg'} x ${Number(it.price).toLocaleString('vi-VN')}đ`)
+      .join(', ');
+
+    const oldTotalStr = `${Number(existingDebt.totalAmount).toLocaleString('vi-VN')}đ`;
+    const newTotalStr = `${Number(calculatedTotal).toLocaleString('vi-VN')}đ`;
+
+    const logDetail = `Cập nhật đơn nợ cố định của khách hàng ${customer.name}:\n• Trước: ${oldTotalStr} [${oldItemsSummary || 'Trống'}]\n• Sau: ${newTotalStr} [${newItemsSummary || 'Trống'}]`;
+
     await logActivity(
       userId,
       'UPDATE_RECURRING_DEBT',
-      `Cập nhật mẫu đơn nợ cố định của khách hàng ${customer.name}: ${calculatedTotal.toLocaleString('vi-VN')}đ`
+      logDetail
     );
     notifyRecurringDebtUpdate(userId, 'UPDATE_RECURRING_DEBT', { recurringDebtId: id });
 

@@ -18,7 +18,31 @@ const notifyCustomerUpdate = (userId, action, payload = {}) => {
 const getCustomers = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { isBadDebt } = req.query;
+    const { isBadDebt, month } = req.query;
+
+    // Xử lý bộ lọc theo tháng nếu có truyền (định dạng MM/YYYY hoặc YYYY-MM)
+    let targetMonth = null;
+    let targetYear = null;
+    let startOfMonth = null;
+    let endOfMonth = null;
+
+    if (month && String(month).trim() !== '' && String(month).trim().toLowerCase() !== 'all') {
+      const mStr = String(month).trim();
+      if (mStr.includes('/')) {
+        const parts = mStr.split('/');
+        targetMonth = parseInt(parts[0], 10);
+        targetYear = parseInt(parts[1], 10);
+      } else if (mStr.includes('-')) {
+        const parts = mStr.split('-');
+        targetYear = parseInt(parts[0], 10);
+        targetMonth = parseInt(parts[1], 10);
+      }
+      if (targetMonth && targetYear && !isNaN(targetMonth) && !isNaN(targetYear)) {
+        // Khung thời gian theo múi giờ Việt Nam (UTC+7)
+        startOfMonth = new Date(Date.UTC(targetYear, targetMonth - 1, 1, -7, 0, 0, 0));
+        endOfMonth = new Date(Date.UTC(targetYear, targetMonth, 0, 16, 59, 59, 999));
+      }
+    }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
@@ -55,11 +79,14 @@ const getCustomers = async (req, res, next) => {
         transactions: {
           select: {
             totalAmount: true,
+            date: true,
           },
         },
         payments: {
           select: {
             amount: true,
+            paidAt: true,
+            note: true,
           },
         },
       },
@@ -78,11 +105,57 @@ const getCustomers = async (req, res, next) => {
         debt = 0;
       }
 
+      let monthDebt = debt;
+      let monthPurchase = totalPurchase;
+      let monthPaid = totalPaid;
+
+      // Nếu có yêu cầu lọc nợ theo tháng mục tiêu cụ thể
+      if (targetMonth && targetYear && startOfMonth && endOfMonth) {
+        // Tiền hàng phát sinh trong tháng
+        const monthTx = c.transactions.filter((t) => {
+          if (!t.date) return false;
+          const d = new Date(t.date);
+          return d >= startOfMonth && d <= endOfMonth;
+        });
+        monthPurchase = Math.round(monthTx.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0));
+
+        // Tiền đã thanh toán được ghi nhận cho tháng đó (theo ghi chú hoặc ngày thanh toán)
+        let paidForMonth = 0;
+        for (const pm of c.payments) {
+          const amt = parseFloat(pm.amount) || 0;
+          const note = (pm.note || '').trim();
+          const monthMatch = note.match(/Thanh toán (?:nợ|hóa đơn)?\s*[Tt]háng (\d{2})\/(\d{4})/i);
+
+          if (monthMatch) {
+            const pM = parseInt(monthMatch[1], 10);
+            const pY = parseInt(monthMatch[2], 10);
+            if (pM === targetMonth && pY === targetYear) {
+              paidForMonth += amt;
+            }
+          } else if (pm.paidAt) {
+            const pDate = new Date(pm.paidAt);
+            if (pDate >= startOfMonth && pDate <= endOfMonth) {
+              paidForMonth += amt;
+            }
+          }
+        }
+        monthPaid = Math.round(paidForMonth);
+
+        // Công nợ tháng = Mua trong tháng - Đã trả cho tháng
+        let rawMonthDebt = Math.round(monthPurchase - monthPaid);
+        if (rawMonthDebt < 0) rawMonthDebt = 0;
+        // Nợ tháng không vượt quá tổng nợ tích lũy thực tế của khách hàng
+        monthDebt = Math.min(rawMonthDebt, Math.max(0, debt));
+      }
+
       // Loại bỏ danh sách giao dịch con để giảm tải dung lượng mạng
       const { transactions, payments, ...rest } = c;
       return {
         ...rest,
         debt,
+        monthDebt,
+        monthPurchase,
+        monthPaid,
       };
     });
 
@@ -353,10 +426,31 @@ const updateCustomer = async (req, res, next) => {
     });
 
     // Ghi log hoạt động
+    const changes = [];
+    if (customerExists.name !== updatedCustomer.name) {
+      changes.push(`Tên: "${customerExists.name}" ➔ "${updatedCustomer.name}"`);
+    }
+    if ((customerExists.phone || '') !== (updatedCustomer.phone || '')) {
+      changes.push(`SĐT: "${customerExists.phone || 'Không'}" ➔ "${updatedCustomer.phone || 'Không'}"`);
+    }
+    if ((customerExists.address || '') !== (updatedCustomer.address || '')) {
+      changes.push(`Địa chỉ: "${customerExists.address || 'Không'}" ➔ "${updatedCustomer.address || 'Không'}"`);
+    }
+    if (customerExists.isBadDebt !== updatedCustomer.isBadDebt) {
+      changes.push(`Nợ xấu: ${customerExists.isBadDebt ? 'Có' : 'Không'} ➔ ${updatedCustomer.isBadDebt ? 'Có' : 'Không'}`);
+    }
+    if ((customerExists.note || '') !== (updatedCustomer.note || '')) {
+      changes.push(`Ghi chú: "${customerExists.note || 'Không'}" ➔ "${updatedCustomer.note || 'Không'}"`);
+    }
+
+    const logDetail = changes.length > 0
+      ? `Cập nhật khách hàng "${customerExists.name}":\n• ${changes.join('\n• ')}`
+      : `Cập nhật khách hàng "${customerExists.name}" (Không có thay đổi)`;
+
     await logActivity(
       userId,
       'UPDATE_CUSTOMER',
-      `Cập nhật khách hàng: ${customerExists.name} (${customerExists.phone || 'Không'}) -> ${updatedCustomer.name} (${updatedCustomer.phone || 'Không'}), Nợ xấu: ${updatedCustomer.isBadDebt}`
+      logDetail
     );
     notifyCustomerUpdate(userId, 'UPDATE_CUSTOMER', { customerId: id });
 

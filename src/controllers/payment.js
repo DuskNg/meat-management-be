@@ -180,10 +180,31 @@ const updatePayment = async (req, res, next) => {
       include: { customer: { select: { name: true, phone: true } } },
     });
 
+    const oldAmountStr = `${Number(existing.amount).toLocaleString('vi-VN')}đ`;
+    const newAmountStr = `${Number(payAmount).toLocaleString('vi-VN')}đ`;
+
+    const oldDateStr = existing.paidAt
+      ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(existing.paidAt))
+      : '';
+    const newDateStr = updated.paidAt
+      ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(updated.paidAt))
+      : oldDateStr;
+
+    const changes = [];
+    changes.push(`Số tiền: ${oldAmountStr} ➔ ${newAmountStr}`);
+    if (oldDateStr !== newDateStr) {
+      changes.push(`Ngày thu: ${oldDateStr} ➔ ${newDateStr}`);
+    }
+    if ((existing.note || '') !== (updated.note || '')) {
+      changes.push(`Ghi chú: "${existing.note || 'Không'}" ➔ "${updated.note || 'Không'}"`);
+    }
+
+    const logDetail = `Cập nhật lượt thu tiền của khách hàng ${updated.customer.name}:\n• ${changes.join('\n• ')}`;
+
     await logActivity(
       userId,
       'UPDATE_PAYMENT',
-      `Cập nhật lượt thu tiền của khách hàng ${updated.customer.name}: Số tiền mới ${payAmount.toLocaleString('vi-VN')}đ`
+      logDetail
     );
     notifyCustomerUpdate(userId, 'UPDATE_PAYMENT', { customerId: existing.customerId, paymentId: id });
 

@@ -491,6 +491,20 @@ const updateCustomerProductPrice = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy sản phẩm thịt.');
     }
 
+    // Lấy giá riêng hiện tại trước khi cập nhật
+    const existingCustomPrice = await prisma.customerProductPrice.findUnique({
+      where: {
+        customerId_productId: {
+          customerId,
+          productId,
+        },
+      },
+    });
+    const oldPriceStr = existingCustomPrice
+      ? `${Number(existingCustomPrice.price).toLocaleString('vi-VN')}đ`
+      : `Mặc định ${Number(product.defaultPrice).toLocaleString('vi-VN')}đ`;
+    const newPriceStr = `${Number(numericPrice).toLocaleString('vi-VN')}đ`;
+
     // Thực hiện cập nhật giá riêng và nhân lại đơn hàng trong Prisma Transaction
     const result = await prisma.$transaction(async (tx) => {
       // 1. Cập nhật hoặc lưu mới đơn giá bán riêng cho khách hàng
@@ -609,10 +623,11 @@ const updateCustomerProductPrice = async (req, res, next) => {
     });
 
     // Ghi log hoạt động
+    const recalcNote = result.recalculatedCount > 0 ? ` (Tự động tính lại ${result.recalculatedCount} đơn nợ)` : '';
     await logActivity(
       userId,
       'UPDATE_CUSTOMER_PRICE',
-      `Cập nhật giá thịt & nhân lại đơn: Khách "${customer.name}" - Thịt "${product.name}" = ${Number(numericPrice).toLocaleString('vi-VN')}đ/${product.unit}`
+      `Cập nhật giá riêng cho khách "${customer.name}": Thịt "${product.name}" (Trước: ${oldPriceStr} ➔ Sau: ${newPriceStr}/${product.unit})${recalcNote}`
     );
 
     // Bắn socket thông báo cập nhật đơn nợ và công nợ khách hàng
@@ -737,12 +752,31 @@ const batchUpdateCustomerProductPrices = async (req, res, next) => {
     });
     const validProductMap = new Map(validProducts.map(p => [p.id, p]));
 
+    // Lấy giá riêng hiện tại của các khách này trước khi cập nhật để so sánh
+    const existingCustomPrices = await prisma.customerProductPrice.findMany({
+      where: {
+        customerId: { in: validCustomerIds },
+        productId: { in: productIds },
+      },
+    });
+    const oldPriceMap = new Map();
+    existingCustomPrices.forEach((cp) => {
+      oldPriceMap.set(`${cp.customerId}_${cp.productId}`, cp.price);
+    });
+
+    const priceDiffs = [];
     let totalUpdated = 0;
 
     await prisma.$transaction(async (tx) => {
       for (const cId of validCustomerIds) {
         for (const item of items) {
           if (!item.productId || !validProductMap.has(item.productId)) continue;
+
+          const prod = validProductMap.get(item.productId);
+          const oldPriceVal = oldPriceMap.get(`${cId}_${item.productId}`);
+          const oldPriceStr = oldPriceVal !== undefined && oldPriceVal !== null
+            ? `${Number(oldPriceVal).toLocaleString('vi-VN')}đ`
+            : `Mặc định (${Number(prod?.defaultPrice || 0).toLocaleString('vi-VN')}đ)`;
 
           // Nếu có yêu cầu khôi phục giá mặc định, xóa bản ghi giá riêng
           if (item.resetToDefault || item.price === null) {
@@ -753,6 +787,14 @@ const batchUpdateCustomerProductPrices = async (req, res, next) => {
               },
             });
             totalUpdated++;
+
+            const cust = validCustomers.find((c) => c.id === cId);
+            priceDiffs.push({
+              customerName: cust?.name || 'Khách',
+              productName: prod?.name || 'Thịt',
+              oldPrice: oldPriceStr,
+              newPrice: `Về mặc định (${Number(prod?.defaultPrice || 0).toLocaleString('vi-VN')}đ)`,
+            });
             continue;
           }
 
@@ -782,17 +824,41 @@ const batchUpdateCustomerProductPrices = async (req, res, next) => {
             },
           });
           totalUpdated++;
+
+          const cust = validCustomers.find((c) => c.id === cId);
+          priceDiffs.push({
+            customerName: cust?.name || 'Khách',
+            productName: prod?.name || 'Thịt',
+            oldPrice: oldPriceStr,
+            newPrice: `${Number(numPrice).toLocaleString('vi-VN')}đ`,
+          });
         }
       }
     });
 
-    // Ghi log hoạt động
-    const customerNames = validCustomers.map(c => c.name).slice(0, 3).join(', ');
-    const moreCust = validCustomers.length > 3 ? ` và ${validCustomers.length - 3} khách khác` : '';
+    // Ghi log hoạt động với chi tiết giá trước và sau khi sửa
+    let logDetail = '';
+    if (validCustomers.length === 1) {
+      const custName = validCustomers[0].name;
+      const changesText = priceDiffs
+        .map((pd) => `${pd.productName} (Trước: ${pd.oldPrice} ➔ Sau: ${pd.newPrice})`)
+        .join('; ');
+      logDetail = `Cập nhật giá riêng cho khách "${custName}":\n• ${changesText || `${items.length} loại thịt`}`;
+    } else {
+      const customerNames = validCustomers.map((c) => c.name).slice(0, 3).join(', ');
+      const moreCust = validCustomers.length > 3 ? ` và ${validCustomers.length - 3} khách khác` : '';
+      const sampleDiffs = priceDiffs
+        .slice(0, 5)
+        .map((pd) => `${pd.customerName} - ${pd.productName} (${pd.oldPrice} ➔ ${pd.newPrice})`)
+        .join('; ');
+      const moreDiffs = priceDiffs.length > 5 ? `... (+${priceDiffs.length - 5} loại nữa)` : '';
+      logDetail = `Cập nhật giá riêng cho ${validCustomers.length} khách (${customerNames}${moreCust}):\n• ${sampleDiffs}${moreDiffs}`;
+    }
+
     await logActivity(
       userId,
       'BATCH_UPDATE_CUSTOMER_PRICES',
-      `Cập nhật giá riêng cho ${validCustomers.length} khách (${customerNames}${moreCust}): ${items.length} loại thịt`
+      logDetail
     );
 
     // Bắn socket thông báo đồng bộ realtime cho từng khách hàng
