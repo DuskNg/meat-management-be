@@ -89,8 +89,49 @@ const parseStaffSubmission = async (submissionId) => {
 
     const isVideo = submission.fileType === 'VIDEO' || filePayload.mimeType.startsWith('video/');
 
-    // 4. Chuẩn bị prompt AI chuyên sâu cho tích kê bán thịt
-    const promptText = `Bạn là trợ lý AI chuyên nghiệp phân tích hóa đơn bán hàng, tích kê bán thịt viết tay tiếng Việt và video cân thịt.
+    // 4. Chuẩn bị prompt AI chuyên sâu: Nếu là Video thì LẮNG NGHE GIỌNG NÓI, nếu là Ảnh thì đọc chữ tích kê
+    let promptText = '';
+
+    if (isVideo) {
+      promptText = `Bạn là trợ lý AI chuyên nghiệp phân tích VIDEO BÁN THỊT / GIAO THỊT bằng cách LẮNG NGHE GIỌNG NÓI trong video.
+
+DANH SÁCH KHÁCH HÀNG QUEN THUỘC CỦA CHỦ BUÔN:
+[${customerNamesList || 'Chưa có'}]
+
+DANH SÁCH CÁC MÓN THỊT THƯỜNG BÁN:
+[${productNamesList || 'Chưa có'}]
+
+NHIỆM VỤ QUAN TRỌNG:
+Hãy TẬP TRUNG LẮNG NGHE KỸ ÂM THANH / GIỌNG NÓI của người trong video đọc về đơn hàng bán thịt:
+
+1. Xác định Tên khách hàng (customer_name) từ giọng nói:
+   - Nghe xem người nói gọi tên ai hoặc giao cho ai (ví dụ: "Chị Lan", "A Hùng phở", "Quán Tuyết", "Bún bò Huế",...).
+   - So khớp và chuẩn hóa với danh sách khách hàng quen thuộc ở trên. Nếu không nhắc tên khách hàng, trả về null.
+
+2. Bóc tách chi tiết các mặt hàng thịt (items) từ giọng nói:
+   - Tên món thịt (name): Nghe tên loại thịt được đọc (ví dụ: "Thăn", "Nạm", "Gầu", "Xô", "Bắp", "Dẻ", "Sườn", "Ba chỉ", "Xương", "Lạc",...). Cố gắng chuẩn hóa theo danh sách các món thịt ở trên.
+   - Khối lượng / Số lượng (quantity): Nghe số lượng/kg người nói đọc (ví dụ: "5 cân" -> 5, "mười cân rưỡi" -> 10.5, "hai phẩy ba cân" -> 2.3, "3 lạng" -> 0.3). Nếu chỉ nói món mà không rõ cân, để 1.
+   - Đơn giá (price): Nếu người nói có đọc đơn giá (ví dụ: "giá 240", "trăm tám một cân" -> 180000). Nếu không đọc giá, để null.
+   - Thành tiền (amount): Nếu người nói có đọc tổng tiền (ví dụ: "hết năm trăm tư" -> 540000). Nếu không có thì để null.
+
+3. Lưu ý:
+   - Người nói có thể dùng khẩu ngữ tiếng Việt (cân = kg, lạng = 0.1kg, rưỡi = .5, chẵn...).
+   - Không cần nhìn vào mặt cân điện tử, hãy ưu tiên nghe chính xác lời nói của nhân viên / người bán hàng trong video.
+
+Chỉ trả về JSON theo đúng cấu trúc:
+{
+  "customer_name": "Tên khách hàng hoặc null",
+  "items": [
+    {
+      "name": "Tên món thịt",
+      "quantity": 2.5,
+      "price": 240000,
+      "amount": 600000
+    }
+  ]
+}`;
+    } else {
+      promptText = `Bạn là trợ lý AI chuyên nghiệp phân tích hóa đơn bán hàng, tích kê bán thịt viết tay tiếng Việt.
 
 DANH SÁCH KHÁCH HÀNG QUEN THUỘC CỦA CHỦ BUÔN:
 [${customerNamesList || 'Chưa có'}]
@@ -110,8 +151,6 @@ NHIỆM VỤ CỦA BẠN:
    - Đơn giá (price): Đơn giá mỗi kg (VND). Nếu tích kê không ghi đơn giá nhưng có số lượng và thành tiền, hãy tính price = round(amount / quantity). Nếu không có cả giá và thành tiền thì để null.
    - Thành tiền (amount): Số tiền tổng của dòng thịt đó (VND). Tích kê viết tay thường viết tắt hàng nghìn (ví dụ "490" -> 490000, "2.050" hoặc "2050" -> 2050000). Hãy nhân với 1000 nếu thấy viết tắt để ra số tiền thực tế đầy đủ.
 
-${isVideo ? 'LƯU Ý ĐỐI VỚI VIDEO: Hãy quan sát kỹ các khung hình quay mặt cân điện tử hiển thị số kg thịt hoặc quay tích kê giấy để bóc tách chính xác khối lượng từng món thịt.' : ''}
-
 Chỉ trả về JSON theo đúng cấu trúc:
 {
   "customer_name": "Tên khách hàng hoặc null",
@@ -124,6 +163,7 @@ Chỉ trả về JSON theo đúng cấu trúc:
     }
   ]
 }`;
+    }
 
     // 5. Gọi Gemini API
     const geminiResult = await callGeminiWithRetry({
