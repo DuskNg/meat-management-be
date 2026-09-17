@@ -1,10 +1,18 @@
 // meat-management-be/src/controllers/staffSubmission.js
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { uploadToCloudinary } = require('../utils/cloudinary');
 const { emitWorkspaceEvent } = require('../utils/socket');
 const { parseStaffSubmission } = require('../services/aiInvoiceParser');
+
+// Đảm bảo thư mục lưu trữ ảnh/video nhân viên nộp luôn sẵn sàng
+const uploadsStaffDir = path.join(__dirname, '../../uploads/staff_submissions');
+if (!fs.existsSync(uploadsStaffDir)) {
+  fs.mkdirSync(uploadsStaffDir, { recursive: true });
+}
 
 // Helper sinh chuỗi token ngẫu nhiên
 const generateToken = () => {
@@ -26,7 +34,13 @@ const getPublicLinkInfo = async (req, res, next) => {
     const link = await prisma.staffSubmissionLink.findUnique({
       where: { token },
       include: {
-        user: { select: { id: true, name: true, phone: true } },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+          },
+        },
       },
     });
 
@@ -39,9 +53,9 @@ const getPublicLinkInfo = async (req, res, next) => {
       data: {
         id: link.id,
         name: link.name,
-        ownerName: link.user?.name,
-        hasPin: Boolean(link.pin),
-        note: link.note,
+        hasPin: !!link.pin,
+        ownerName: link.user?.name || 'Chủ buôn',
+        token: link.token,
       },
     });
   } catch (error) {
@@ -50,12 +64,15 @@ const getPublicLinkInfo = async (req, res, next) => {
 };
 
 /**
- * Xác thực mã PIN của link gửi hóa đơn
+ * Xác thực mã PIN để mở link gửi hóa đơn
  */
 const verifyLinkPin = async (req, res, next) => {
   try {
     const { token } = req.params;
     const { pin } = req.body;
+
+    if (!token) throw new BadRequestError('Thiếu mã token truy cập.');
+    if (!pin) throw new BadRequestError('Vui lòng nhập mã PIN bảo mật.');
 
     const link = await prisma.staffSubmissionLink.findUnique({
       where: { token },
@@ -69,18 +86,21 @@ const verifyLinkPin = async (req, res, next) => {
       return res.json({ success: true, message: 'Đường dẫn không yêu cầu mã PIN.' });
     }
 
-    if (link.pin !== String(pin).trim()) {
-      throw new BadRequestError('Mã PIN không chính xác.');
+    if (link.pin !== pin.trim()) {
+      throw new ForbiddenError('Mã PIN không chính xác. Vui lòng kiểm tra lại với chủ buôn.');
     }
 
-    res.json({ success: true, message: 'Xác thực mã PIN thành công.' });
+    res.json({
+      success: true,
+      message: 'Xác thực mã PIN thành công.',
+    });
   } catch (error) {
     next(error);
   }
 };
 
 /**
- * Nhân viên gửi hàng loạt ảnh hóa đơn / video qua link Zalo
+ * Nhân viên gửi hàng loạt ảnh hóa đơn / video (Tối ưu siêu tốc: lưu trữ cục bộ tức thì -> phản hồi nhân viên ngay -> upload Cloudinary & AI chạy ngầm)
  */
 const submitBatchFromStaff = async (req, res, next) => {
   try {
@@ -102,29 +122,42 @@ const submitBatchFromStaff = async (req, res, next) => {
     }
 
     const userId = link.userId;
-    const submissionDate = date ? new Date(date) : new Date();
+    // Luôn mặc định ngày hiện tại khi tải ảnh lên để danh sách hiển thị chung ở giao diện ngày hiện tại
+    const submissionDate = new Date();
 
-    // Tải song song tất cả các tệp lên Cloudinary và lưu vào database
-    const uploadTasks = files.map(async (fileItem) => {
+    // Danh sách các tác vụ chạy ngầm sau khi đã trả response cho client
+    const bgTasks = [];
+
+    // Xử lý song song tất cả các tệp cùng lúc (dùng indexOf/substring thay Regex tránh ReDoS)
+    const saveTasks = files.map(async (fileItem) => {
       const fileData = fileItem.fileData || fileItem.uri || fileItem.url;
       const isVideo = fileItem.fileType === 'VIDEO' || (fileItem.type && fileItem.type.startsWith('video'));
       const fileType = isVideo ? 'VIDEO' : 'IMAGE';
 
       if (!fileData) return null;
 
-      let uploadedUrl = fileData;
-      // Nếu là base64 hoặc blob, tải lên Cloudinary
-      if (fileData.startsWith('data:') || fileData.startsWith('blob:')) {
-        try {
-          const uploadRes = await uploadToCloudinary(fileData, {
-            folder: `meat_manager/${userId}/staff_submissions`,
-            resource_type: isVideo ? 'video' : 'image',
-          });
-          if (uploadRes && (uploadRes.secure_url || uploadRes.url)) {
-            uploadedUrl = uploadRes.secure_url || uploadRes.url;
+      let localUrl = fileData;
+      let rawBase64ToUpload = null;
+
+      // Xử lý Base64 siêu tốc bằng indexOf & substring (0ms, tuyệt đối không dùng Regex tránh ReDoS)
+      if (typeof fileData === 'string' && fileData.startsWith('data:')) {
+        const commaIdx = fileData.indexOf(',');
+        if (commaIdx !== -1) {
+          const header = fileData.substring(0, commaIdx);
+          const cleanBase64 = fileData.substring(commaIdx + 1);
+          const isPng = header.includes('png');
+          const ext = isVideo ? 'mp4' : (isPng ? 'png' : 'jpg');
+          const fileName = `sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
+          const filePath = path.join(uploadsStaffDir, fileName);
+
+          try {
+            // Ghi file bất đồng bộ qua libuv thread pool (không chặn Event Loop của Node.js)
+            await fs.promises.writeFile(filePath, Buffer.from(cleanBase64, 'base64'));
+            localUrl = `/uploads/staff_submissions/${fileName}`;
+            rawBase64ToUpload = fileData;
+          } catch (saveErr) {
+            console.error('[LOCAL_SAVE_ERR] Lỗi lưu tệp cục bộ:', saveErr);
           }
-        } catch (uploadErr) {
-          console.error('[CLOUDINARY_UPLOAD_ERR] Lỗi tải tệp lên Cloudinary:', uploadErr);
         }
       }
 
@@ -134,38 +167,79 @@ const submitBatchFromStaff = async (req, res, next) => {
           linkId: link.id,
           senderName: senderName || fileItem.senderName || null,
           note: note || fileItem.note || null,
-          fileUrl: uploadedUrl,
+          fileUrl: localUrl,
           fileType,
           date: submissionDate,
           status: 'PENDING',
         },
       });
 
-      // Kích hoạt chạy ngầm AI phân tích hóa đơn ngay lập tức (không bắt client đợi)
-      setImmediate(() => {
-        parseStaffSubmission(submission.id).catch((err) => {
-          console.error(`[BACKGROUND_AI_ERROR] Lỗi phân tích submission ${submission.id}:`, err);
-        });
+      bgTasks.push({
+        submissionId: submission.id,
+        rawBase64: rawBase64ToUpload,
+        isVideo,
+        localUrl,
       });
 
       return submission;
     });
 
-    const results = await Promise.all(uploadTasks);
+    const results = await Promise.all(saveTasks);
     const createdSubmissions = results.filter(Boolean);
 
-    // Phát socket thông báo cho chủ buôn có hóa đơn mới gửi về
+    // Phát socket thông báo cho chủ buôn có hóa đơn mới gửi về ngay lập tức
     emitWorkspaceEvent(userId, 'NEW_STAFF_SUBMISSIONS', {
       count: createdSubmissions.length,
       senderName,
       date: submissionDate,
     });
 
-    // Trả về kết quả thành công NGAY LẬP TỨC để nhân viên yên tâm
+    // Trả về kết quả thành công NGAY LẬP TỨC để nhân viên yên tâm (chỉ mất ~100-200ms!)
     res.json({
       success: true,
       message: `Đã lưu trữ thành công ${createdSubmissions.length} tệp hóa đơn/video. Hệ thống AI đang tự động phân tích ngầm.`,
       data: createdSubmissions,
+    });
+
+    // Kích hoạt tác vụ nền (Cloudinary & AI) SAU KHI ĐÃ TRẢ RESPONSE CHO CLIENT
+    res.on('finish', () => {
+      setImmediate(async () => {
+        for (const item of bgTasks) {
+          try {
+            if (item.rawBase64) {
+              try {
+                const uploadRes = await uploadToCloudinary(item.rawBase64, {
+                  folder: `meat_manager/${userId}/staff_submissions`,
+                  resource_type: item.isVideo ? 'video' : 'image',
+                });
+                if (uploadRes && (uploadRes.secure_url || uploadRes.url)) {
+                  const cloudUrl = uploadRes.secure_url || uploadRes.url;
+                  await prisma.staffSubmission.update({
+                    where: { id: item.submissionId },
+                    data: { fileUrl: cloudUrl },
+                  });
+                  // Đồng bộ đường dẫn Cloudinary mới cho TransactionInvoice nếu đơn nợ đã được tạo bằng localUrl trước đó
+                  if (item.localUrl) {
+                    await prisma.transactionInvoice.updateMany({
+                      where: { imageUrl: item.localUrl },
+                      data: { imageUrl: cloudUrl },
+                    });
+                  }
+                }
+              } catch (cloudErr) {
+                console.warn('[BACKGROUND_CLOUDINARY] Upload Cloudinary chạy ngầm lỗi, giữ link máy chủ cục bộ:', cloudErr.message);
+              }
+            }
+
+            // Gọi AI phân tích hóa đơn ngầm
+            parseStaffSubmission(item.submissionId).catch((err) => {
+              console.error(`[BACKGROUND_AI_ERROR] Lỗi phân tích submission ${item.submissionId}:`, err);
+            });
+          } catch (itemErr) {
+            console.error('[BACKGROUND_ITEM_ERR]', itemErr);
+          }
+        }
+      });
     });
   } catch (error) {
     next(error);
@@ -237,14 +311,35 @@ const getStaffSubmissions = async (req, res, next) => {
 
     if (status && status !== 'ALL') {
       where.status = status;
+    } else {
+      where.status = { not: 'REJECTED' };
     }
 
     if (date) {
       const d = new Date(date);
-      where.date = {
-        gte: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0),
-        lte: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999),
-      };
+      const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0);
+      const endOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
+      const now = new Date();
+      const isViewingToday = (
+        d.getFullYear() === now.getFullYear() &&
+        d.getMonth() === now.getMonth() &&
+        d.getDate() === now.getDate()
+      );
+
+      // Nếu đang xem giao diện ngày hiện tại: Hiển thị chung tất cả hóa đơn ngày hôm nay,
+      // ĐỒNG THỜI tự động gom tất cả hóa đơn chưa duyệt (kể cả trước đó mang ngày khác) vào chung 1 giao diện
+      if (isViewingToday && status !== 'APPROVED') {
+        where.OR = [
+          { date: { gte: startOfDay, lte: endOfDay } },
+          { status: { not: 'APPROVED' } },
+        ];
+      } else {
+        where.date = {
+          gte: startOfDay,
+          lte: endOfDay,
+        };
+      }
     } else if (fromDate && toDate) {
       where.date = {
         gte: new Date(fromDate),
@@ -286,7 +381,9 @@ const getStaffSubmissionDetail = async (req, res, next) => {
       include: {
         link: true,
         matchedCustomer: true,
-        items: true,
+        items: {
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
 
@@ -338,11 +435,12 @@ const updateStaffSubmission = async (req, res, next) => {
         where: { submissionId: id },
       });
 
-      const itemsToCreate = items.map((it) => {
+      const itemsToCreate = items.map((it, idx) => {
         const qty = it.quantity != null ? parseFloat(it.quantity) : null;
         const price = it.price != null ? parseFloat(it.price) : null;
         const amount = it.amount != null ? parseFloat(it.amount) : (qty && price ? Math.round(qty * price) : null);
 
+        const baseItemTime = Date.now();
         return {
           submissionId: id,
           rawName: it.rawName || it.name || 'Thịt lẻ',
@@ -350,6 +448,8 @@ const updateStaffSubmission = async (req, res, next) => {
           quantity: qty,
           price,
           amount,
+          createdAt: new Date(baseItemTime + idx * 50),
+          updatedAt: new Date(baseItemTime + idx * 50),
         };
       });
 
@@ -363,7 +463,9 @@ const updateStaffSubmission = async (req, res, next) => {
     const updated = await prisma.staffSubmission.findUnique({
       where: { id },
       include: {
-        items: true,
+        items: {
+          orderBy: { createdAt: 'asc' },
+        },
         matchedCustomer: true,
       },
     });
@@ -390,7 +492,11 @@ const approveStaffSubmission = async (req, res, next) => {
 
     const submission = await prisma.staffSubmission.findFirst({
       where: { id, userId },
-      include: { items: true },
+      include: {
+        items: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
 
     if (!submission) {
@@ -413,6 +519,8 @@ const approveStaffSubmission = async (req, res, next) => {
 
     // Tính tổng tiền đơn hàng
     let totalAmount = 0;
+    let totalCost = 0;
+    let totalProfit = 0;
     const transactionItemsData = [];
 
     for (const it of finalItems) {
@@ -422,68 +530,327 @@ const approveStaffSubmission = async (req, res, next) => {
       totalAmount += amount;
 
       let productId = it.matchedProductId;
-      // Nếu chưa khớp productId, tìm hoặc dùng sản phẩm mặc định
-      if (!productId) {
-        const prod = await prisma.product.findFirst({
+      let product = null;
+      if (productId) {
+        product = await prisma.product.findUnique({ where: { id: productId } });
+      }
+      if (!product && it.rawName) {
+        product = await prisma.product.findFirst({
+          where: { userId, isActive: true, name: { equals: it.rawName, mode: 'insensitive' } },
+        }) || await prisma.product.findFirst({
+          where: { userId, isActive: true, name: { contains: it.rawName, mode: 'insensitive' } },
+        });
+      }
+      if (!product) {
+        product = await prisma.product.findFirst({
           where: { userId, isActive: true },
         });
-        if (prod) productId = prod.id;
+      }
+      if (product) {
+        productId = product.id;
       }
 
       if (productId) {
+        const costPrice = product ? (parseFloat(product.costPrice) || 0) : 0;
+        const itemCost = Math.round(qty * costPrice);
+        const profit = amount - itemCost;
+        totalCost += itemCost;
+        totalProfit += profit;
+
         transactionItemsData.push({
           productId,
-          quantity: qty,
+          quantity: qty > 0 ? qty : 1,
           price,
+          costPrice,
           amount,
+          profit,
         });
       }
     }
 
-    // Thực hiện transaction: Tạo đơn nợ + Tạo TransactionInvoice + Cập nhật submission
-    const result = await prisma.$transaction(async (tx) => {
-      // 1. Tạo đơn nợ Transaction
-      const trans = await tx.transaction({
-        data: {
-          userId,
-          customerId: finalCustomerId,
-          createdBy: currentUserId,
-          date: finalDate,
-          note: finalNote,
-          totalAmount,
-          items: {
-            create: transactionItemsData,
-          },
-        },
-      });
+    // Kiểm tra đơn có phải là đơn trả hàng hay không
+    const isReturnOrder = Boolean(
+      req.body.isReturn ||
+      (finalNote && (finalNote.includes('[Trả lại hàng]') || finalNote.includes('[Trả hàng]') || /(trả hàng|gửi về|trả về|trả lại)/i.test(finalNote)))
+    );
 
-      // 2. Tạo ảnh hóa đơn TransactionInvoice đính kèm
-      if (submission.fileUrl) {
-        await tx.transactionInvoice.create({
-          data: {
-            userId,
-            customerId: finalCustomerId,
-            transactionId: trans.id,
-            date: finalDate,
-            imageUrl: submission.fileUrl,
-            note: submission.senderName ? `Nhân viên gửi: ${submission.senderName}` : 'Hóa đơn nhân viên',
-          },
-        });
+    // Thực hiện transaction: Nếu đơn trả hàng -> Tạo/Cập nhật Payment trừ nợ; Nếu đơn bán -> Tạo/Cập nhật Transaction tăng nợ
+    const result = await prisma.$transaction(async (tx) => {
+      let payment = null;
+      let trans = null;
+      let newTxId = null;
+
+      if (isReturnOrder) {
+        // Chuẩn bị ghi chú chi tiết danh sách thịt trả lại
+        const itemsDesc = finalItems
+          .map((it) => {
+            const q = it.quantity != null && it.quantity !== '' ? `${it.quantity}kg` : '';
+            const n = it.rawName || 'Thịt';
+            const a = it.amount != null && it.amount !== '' ? `(${new Intl.NumberFormat('vi-VN').format(Math.round(it.amount))}đ)` : '';
+            return `${q} ${n} ${a}`.trim();
+          })
+          .filter(Boolean)
+          .join(', ');
+
+        let returnNote = finalNote || '';
+        if (!returnNote.includes('[Trả lại hàng]') && !returnNote.includes('[Trả hàng]')) {
+          returnNote = `[Trả lại hàng] ${itemsDesc}${returnNote ? ` - ${returnNote}` : ''}`.trim();
+        }
+
+        // 1. Kiểm tra xem submission này trước đó đã có Transaction hay Payment chưa để cập nhật hoặc tạo mới
+        if (submission.transactionId) {
+          const existingTrans = await tx.transaction.findUnique({ where: { id: submission.transactionId } });
+          if (existingTrans) {
+            // Trước đó là đơn bán nợ, nay đổi sang đơn trả hàng: Xóa Transaction cũ
+            await tx.transactionItem.deleteMany({ where: { transactionId: submission.transactionId } });
+            await tx.transactionInvoice.updateMany({
+              where: { transactionId: submission.transactionId },
+              data: { transactionId: null },
+            });
+            await tx.transaction.delete({ where: { id: submission.transactionId } });
+          } else {
+            const existingPayment = await tx.payment.findUnique({ where: { id: submission.transactionId } });
+            if (existingPayment) {
+              // Cập nhật bản ghi Payment đã có
+              payment = await tx.payment.update({
+                where: { id: submission.transactionId },
+                data: {
+                  customerId: finalCustomerId,
+                  createdBy: currentUserId,
+                  amount: totalAmount,
+                  paidAt: finalDate,
+                  note: returnNote,
+                  type: 'customer',
+                },
+              });
+              newTxId = payment.id;
+            }
+          }
+        }
+
+        // Nếu chưa có Payment thì tạo mới
+        if (!payment) {
+          payment = await tx.payment.create({
+            data: {
+              customerId: finalCustomerId,
+              createdBy: currentUserId,
+              amount: totalAmount,
+              paidAt: finalDate,
+              note: returnNote,
+              type: 'customer',
+            },
+          });
+          newTxId = payment.id;
+        }
+
+        // 2. Tạo/Cập nhật ảnh hóa đơn đính kèm nếu có
+        if (submission.fileUrl) {
+          const existingInv = await tx.transactionInvoice.findFirst({
+            where: { userId, imageUrl: submission.fileUrl },
+          });
+          if (existingInv) {
+            await tx.transactionInvoice.update({
+              where: { id: existingInv.id },
+              data: {
+                customerId: finalCustomerId,
+                transactionId: null,
+                date: finalDate,
+                note: submission.senderName ? `Trả hàng - NV: ${submission.senderName}` : 'Đơn trả hàng nhân viên gửi',
+              },
+            });
+          } else {
+            await tx.transactionInvoice.create({
+              data: {
+                userId,
+                customerId: finalCustomerId,
+                transactionId: null,
+                date: finalDate,
+                imageUrl: submission.fileUrl,
+                note: submission.senderName ? `Trả hàng - NV: ${submission.senderName}` : 'Đơn trả hàng nhân viên gửi',
+              },
+            });
+          }
+        }
+      } else {
+        // Đơn bán hàng bình thường: Tạo / Cập nhật đơn nợ Transaction
+        if (submission.transactionId) {
+          const existingPayment = await tx.payment.findUnique({ where: { id: submission.transactionId } });
+          if (existingPayment) {
+            // Trước đó là đơn trả hàng, nay đổi sang đơn bán: Xóa Payment cũ
+            await tx.payment.delete({ where: { id: submission.transactionId } });
+          } else {
+            const existingTrans = await tx.transaction.findUnique({ where: { id: submission.transactionId } });
+            if (existingTrans) {
+              // Cập nhật Transaction cũ
+              await tx.transactionItem.deleteMany({ where: { transactionId: submission.transactionId } });
+              trans = await tx.transaction.update({
+                where: { id: submission.transactionId },
+                data: {
+                  customerId: finalCustomerId,
+                  createdBy: currentUserId,
+                  date: finalDate,
+                  note: finalNote,
+                  totalAmount,
+                  totalCost,
+                  totalProfit,
+                  items: {
+                    create: transactionItemsData,
+                  },
+                },
+              });
+              newTxId = trans.id;
+            }
+          }
+        }
+
+        // Nếu chưa có Transaction thì tạo mới
+        if (!trans) {
+          trans = await tx.transaction.create({
+            data: {
+              userId,
+              customerId: finalCustomerId,
+              createdBy: currentUserId,
+              date: finalDate,
+              note: finalNote,
+              totalAmount,
+              totalCost,
+              totalProfit,
+              items: {
+                create: transactionItemsData,
+              },
+            },
+          });
+          newTxId = trans.id;
+        }
+
+        // Tạo/Cập nhật ảnh/video hóa đơn TransactionInvoice đính kèm trực tiếp vào đơn nợ này
+        if (submission.fileUrl) {
+          const existingInv = await tx.transactionInvoice.findFirst({
+            where: {
+              userId,
+              OR: [
+                { imageUrl: submission.fileUrl },
+                { transactionId: trans.id },
+              ],
+            },
+          });
+          if (existingInv) {
+            await tx.transactionInvoice.update({
+              where: { id: existingInv.id },
+              data: {
+                customerId: finalCustomerId,
+                transactionId: trans.id,
+                imageUrl: submission.fileUrl,
+                date: finalDate,
+                note: submission.senderName ? `Nhân viên gửi: ${submission.senderName}` : 'Hóa đơn nhân viên',
+              },
+            });
+          } else {
+            await tx.transactionInvoice.create({
+              data: {
+                userId,
+                customerId: finalCustomerId,
+                transactionId: trans.id,
+                date: finalDate,
+                imageUrl: submission.fileUrl,
+                note: submission.senderName ? `Nhân viên gửi: ${submission.senderName}` : 'Hóa đơn nhân viên',
+              },
+            });
+          }
+        }
       }
 
-      // 3. Đánh dấu đã duyệt StaffSubmission
+      // 3. Cập nhật StaffSubmission với đầy đủ thông tin số cân, ghi chú, khách hàng, ngày tháng
       const updatedSub = await tx.staffSubmission.update({
         where: { id },
         data: {
           status: 'APPROVED',
           matchedCustomerId: finalCustomerId,
-          transactionId: trans.id,
+          date: finalDate,
+          note: finalNote,
+          transactionId: newTxId,
           approvedAt: new Date(),
         },
       });
 
-      return { transaction: trans, submission: updatedSub };
+      // 4. Lưu đồng bộ danh sách món thịt chi tiết (StaffSubmissionItem) vào CSDL
+      await tx.staffSubmissionItem.deleteMany({
+        where: { submissionId: id },
+      });
+
+      const baseItemTime = Date.now();
+      const itemsToCreate = finalItems.map((it, idx) => {
+        const qty = it.quantity != null && it.quantity !== '' ? parseFloat(it.quantity) : null;
+        const price = it.price != null && it.price !== '' ? parseFloat(it.price) : null;
+        const amount = it.amount != null && it.amount !== '' ? parseFloat(it.amount) : (qty && price ? Math.round(qty * price) : null);
+
+        return {
+          submissionId: id,
+          rawName: it.rawName || it.name || 'Thịt lẻ',
+          matchedProductId: it.matchedProductId || null,
+          quantity: qty,
+          price,
+          amount,
+          createdAt: new Date(baseItemTime + idx * 50),
+          updatedAt: new Date(baseItemTime + idx * 50),
+        };
+      });
+
+      if (itemsToCreate.length > 0) {
+        await tx.staffSubmissionItem.createMany({
+          data: itemsToCreate,
+        });
+      }
+
+      // Lấy bản ghi đầy đủ nhất trả về cho client
+      const fullSub = await tx.staffSubmission.findUnique({
+        where: { id },
+        include: {
+          items: {
+            orderBy: { createdAt: 'asc' },
+          },
+          matchedCustomer: {
+            select: { id: true, name: true, phone: true },
+          },
+        },
+      });
+
+      let fullTrans = null;
+      if (trans) {
+        fullTrans = await tx.transaction.findUnique({
+          where: { id: trans.id },
+          include: {
+            invoices: true,
+            items: {
+              include: {
+                product: {
+                  select: { name: true, unit: true, defaultPrice: true, costPrice: true },
+                },
+              },
+            },
+            customer: { select: { id: true, name: true, phone: true } },
+          },
+        });
+      }
+
+      return {
+        payment,
+        transaction: fullTrans || trans,
+        submission: fullSub,
+        isReturn: isReturnOrder,
+      };
     });
+
+    if (result.isReturn) {
+      emitWorkspaceEvent(userId, 'PAYMENT_CREATED', result.payment);
+      emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_APPROVED', { id });
+
+      return res.json({
+        success: true,
+        message: 'Đã phê duyệt và trừ nợ trả hàng cho khách thành công!',
+        data: result,
+      });
+    }
 
     emitWorkspaceEvent(userId, 'TRANSACTION_CREATED', result.transaction);
     emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_APPROVED', { id });
@@ -514,16 +881,47 @@ const rejectStaffSubmission = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy bản ghi hóa đơn.');
     }
 
-    await prisma.staffSubmission.update({
+    // Xóa vĩnh viễn hóa đơn và các món thịt liên quan (Cascade)
+    await prisma.staffSubmission.delete({
       where: { id },
-      data: { status: 'REJECTED' },
     });
 
     emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_REJECTED', { id });
 
     res.json({
       success: true,
-      message: 'Đã bác bỏ hóa đơn này.',
+      message: 'Đã xóa hóa đơn thành công.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Bác bỏ / Xóa hàng loạt hóa đơn
+ */
+const batchRejectStaffSubmissions = async (req, res, next) => {
+  try {
+    const userId = req.workspaceOwnerId || req.user.id;
+    const { ids } = req.body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      throw new BadRequestError('Vui lòng cung cấp danh sách ID hóa đơn cần xóa.');
+    }
+
+    // Xóa vĩnh viễn các bản ghi hóa đơn
+    await prisma.staffSubmission.deleteMany({
+      where: {
+        id: { in: ids },
+        userId,
+      },
+    });
+
+    emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_BATCH_REJECTED', { ids });
+
+    res.json({
+      success: true,
+      message: `Đã xóa ${ids.length} hóa đơn thành công.`,
     });
   } catch (error) {
     next(error);
@@ -708,6 +1106,7 @@ module.exports = {
   updateStaffSubmission,
   approveStaffSubmission,
   rejectStaffSubmission,
+  batchRejectStaffSubmissions,
   getSubmissionLinks,
   createSubmissionLink,
   updateSubmissionLink,

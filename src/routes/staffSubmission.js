@@ -30,6 +30,9 @@ router.put('/:id', authenticateToken, resolveWorkspace, staffSubmissionControlle
 // Phê duyệt và tự động tạo đơn nợ Transaction + TransactionInvoice
 router.post('/:id/approve', authenticateToken, resolveWorkspace, staffSubmissionController.approveStaffSubmission);
 
+// Xóa/bác bỏ hàng loạt hóa đơn
+router.post('/batch-reject', authenticateToken, resolveWorkspace, staffSubmissionController.batchRejectStaffSubmissions);
+
 // Bác bỏ/xóa hóa đơn
 router.post('/:id/reject', authenticateToken, resolveWorkspace, staffSubmissionController.rejectStaffSubmission);
 

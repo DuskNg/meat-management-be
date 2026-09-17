@@ -8,10 +8,11 @@ const callGeminiWithRetry = async ({
   systemInstruction = null,
   generationConfig = {},
   models = ['gemini-2.5-flash', 'gemini-3.1-pro-preview'],
-  apiKey,
+  apiKey = process.env.GEMINI_API_KEY,
   maxRetries = 2,
 }) => {
-  if (!apiKey) {
+  const activeKey = apiKey || process.env.GEMINI_API_KEY;
+  if (!activeKey) {
     throw new Error('Chưa cấu hình GEMINI_API_KEY.');
   }
 
@@ -20,7 +21,7 @@ const callGeminiWithRetry = async ({
   for (const model of models) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
         
         const payload = {
           contents,
