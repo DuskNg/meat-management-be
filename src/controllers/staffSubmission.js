@@ -7,6 +7,7 @@ const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/err
 const { uploadToCloudinary } = require('../utils/cloudinary');
 const { emitWorkspaceEvent } = require('../utils/socket');
 const { parseStaffSubmission } = require('../services/aiInvoiceParser');
+const { logActivity } = require('../utils/activityLogger');
 
 // Đảm bảo thư mục lưu trữ ảnh/video nhân viên nộp luôn sẵn sàng
 const uploadsStaffDir = path.join(__dirname, '../../uploads/staff_submissions');
@@ -628,19 +629,46 @@ const approveStaffSubmission = async (req, res, next) => {
           }
         }
 
-        // Nếu chưa có Payment thì tạo mới
+        // Nếu chưa có Payment thì tạo mới (hoặc tái sử dụng payment cũ nếu submission đã APPROVED nhưng transactionId bị null)
         if (!payment) {
-          payment = await tx.payment.create({
-            data: {
-              customerId: finalCustomerId,
-              createdBy: currentUserId,
-              amount: totalAmount,
-              paidAt: finalDate,
-              note: returnNote,
-              type: 'customer',
-            },
-          });
-          newTxId = payment.id;
+          let oldPayment = null;
+          if (submission.status === 'APPROVED' && !submission.transactionId) {
+            oldPayment = await tx.payment.findFirst({
+              where: {
+                customerId: finalCustomerId,
+                type: 'customer',
+                note: { contains: '[Trả lại hàng]' },
+              },
+              orderBy: { createdAt: 'desc' },
+            });
+          }
+
+          if (oldPayment) {
+            payment = await tx.payment.update({
+              where: { id: oldPayment.id },
+              data: {
+                customerId: finalCustomerId,
+                createdBy: currentUserId,
+                amount: totalAmount,
+                paidAt: finalDate,
+                note: returnNote,
+                type: 'customer',
+              },
+            });
+            newTxId = payment.id;
+          } else {
+            payment = await tx.payment.create({
+              data: {
+                customerId: finalCustomerId,
+                createdBy: currentUserId,
+                amount: totalAmount,
+                paidAt: finalDate,
+                note: returnNote,
+                type: 'customer',
+              },
+            });
+            newTxId = payment.id;
+          }
         }
 
         // 2. Tạo/Cập nhật ảnh hóa đơn đính kèm nếu có
@@ -802,6 +830,41 @@ const approveStaffSubmission = async (req, res, next) => {
         });
       }
 
+      // 5. Tự động đồng bộ và cập nhật đơn giá bán/trả vào Bảng giá riêng (CustomerProductPrice) của khách hàng
+      for (const it of finalItems) {
+        let pId = it.matchedProductId || it.productId;
+        const itemPrice = parseFloat(it.price) || 0;
+        if (itemPrice > 0 && finalCustomerId) {
+          if (!pId && it.rawName) {
+            const foundP = await tx.product.findFirst({
+              where: { userId, isActive: true, name: { equals: it.rawName, mode: 'insensitive' } },
+            });
+            if (foundP) pId = foundP.id;
+          }
+          if (pId) {
+            const prod = await tx.product.findUnique({ where: { id: pId } });
+            if (prod && prod.name !== 'Tiền hàng' && !prod.name.toLowerCase().startsWith('tiền')) {
+              await tx.customerProductPrice.upsert({
+                where: {
+                  customerId_productId: {
+                    customerId: finalCustomerId,
+                    productId: pId,
+                  },
+                },
+                update: {
+                  price: itemPrice,
+                },
+                create: {
+                  customerId: finalCustomerId,
+                  productId: pId,
+                  price: itemPrice,
+                },
+              });
+            }
+          }
+        }
+      }
+
       // Lấy bản ghi đầy đủ nhất trả về cho client
       const fullSub = await tx.staffSubmission.findUnique({
         where: { id },
@@ -841,7 +904,16 @@ const approveStaffSubmission = async (req, res, next) => {
       };
     });
 
+    const custName = result.submission?.matchedCustomer?.name || 'Khách';
+    const senderInfo = submission.senderName ? ` do ${submission.senderName} nộp` : '';
+
     if (result.isReturn) {
+      await logActivity(
+        userId,
+        'APPROVE_STAFF_SUBMISSION_RETURN',
+        `Duyệt hóa đơn trả hàng${senderInfo} cho khách ${custName}: Số tiền ${parseFloat(result.payment?.amount || 0).toLocaleString('vi-VN')}đ`
+      );
+
       emitWorkspaceEvent(userId, 'PAYMENT_CREATED', result.payment);
       emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_APPROVED', { id });
 
@@ -851,6 +923,12 @@ const approveStaffSubmission = async (req, res, next) => {
         data: result,
       });
     }
+
+    await logActivity(
+      userId,
+      'APPROVE_STAFF_SUBMISSION',
+      `Duyệt hóa đơn nộp${senderInfo} lên đơn nợ cho khách ${custName}: Tổng tiền ${parseFloat(result.transaction?.totalAmount || 0).toLocaleString('vi-VN')}đ`
+    );
 
     emitWorkspaceEvent(userId, 'TRANSACTION_CREATED', result.transaction);
     emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_APPROVED', { id });
@@ -875,6 +953,7 @@ const rejectStaffSubmission = async (req, res, next) => {
 
     const submission = await prisma.staffSubmission.findFirst({
       where: { id, userId },
+      include: { matchedCustomer: { select: { name: true } } },
     });
 
     if (!submission) {
@@ -885,6 +964,14 @@ const rejectStaffSubmission = async (req, res, next) => {
     await prisma.staffSubmission.delete({
       where: { id },
     });
+
+    const senderInfo = submission.senderName ? ` của ${submission.senderName}` : '';
+    const custInfo = submission.matchedCustomer?.name ? ` (khách ${submission.matchedCustomer.name})` : '';
+    await logActivity(
+      userId,
+      'REJECT_STAFF_SUBMISSION',
+      `Xóa/bác bỏ hóa đơn nộp${senderInfo}${custInfo}`
+    );
 
     emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_REJECTED', { id });
 
@@ -916,6 +1003,12 @@ const batchRejectStaffSubmissions = async (req, res, next) => {
         userId,
       },
     });
+
+    await logActivity(
+      userId,
+      'REJECT_STAFF_SUBMISSION',
+      `Xóa hàng loạt ${ids.length} hóa đơn nộp của nhân viên.`
+    );
 
     emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_BATCH_REJECTED', { ids });
 

@@ -1454,21 +1454,20 @@ Chỉ trả về JSON theo đúng cấu trúc:
         }
       }
 
-      // Ưu tiên giá riêng của khách hàng, sau đó đến defaultPrice
+      // Ưu tiên giá riêng của khách hàng cao nhất (bảo toàn theo nguyên tắc Custom Price Integrity)
       const customPriceVal = matchedProd ? customerPriceMap.get(matchedProd.id) : null;
+      const isQuickDebtItem = !normalizedName || normalizedName === 'Tiền hàng' || normalizedName === 'Thịt lẻ';
 
-      // QUY TẮC BẢO TOÀN SỐ TIỀN THÀNH TIỀN (ĐƠN NHẬP NHANH CHO TẤT CẢ KHÁCH HÀNG):
-      // Nếu hóa đơn ĐÃ CÓ số tiền ở cột Thành tiền hoặc Tổng cộng (amount > 0):
-      // BẮT BUỘC BẢO TOÀN AMOUNT NÀY, TUYỆT ĐỐI KHÔNG GHI ĐÈ BẰNG GIÁ RIÊNG HAY CÔNG THỨC KHÁC!
-      if (amount != null && amount > 0) {
-        if (price == null) {
-          price = (qty != null && qty > 0) ? Math.round(amount / qty) : amount;
-        }
-      } else if (customPriceVal != null) {
-        // Chưa có số tiền thành tiền trên hóa đơn, mới tự động lấy giá riêng của khách hàng để tính
+      if (customPriceVal != null && (!isQuickDebtItem || (qty != null && qty > 0))) {
+        // Khách hàng có giá riêng cho món này: Bắt buộc áp giá riêng và tính lại thành tiền
         price = customPriceVal;
         if (qty != null && qty > 0) {
           amount = Math.round(price * qty);
+        }
+      } else if (amount != null && amount > 0) {
+        // Đơn nợ nhanh tiền hàng hoặc hóa đơn đã có số tiền chốt
+        if (price == null) {
+          price = (qty != null && qty > 0) ? Math.round(amount / qty) : amount;
         }
       } else if (price == null && amount != null && qty != null && qty > 0) {
         price = Math.round(amount / qty);

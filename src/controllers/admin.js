@@ -310,10 +310,11 @@ const getUserLogs = async (req, res, next) => {
 
     const whereClause = { userId: id };
 
-    // Lọc theo ngày nếu có
+    // Lọc theo ngày nếu có (chuẩn hóa theo múi giờ Việt Nam UTC+7 để không mất log rạng sáng 00:00 - 07:00)
     if (date) {
-      const startDate = new Date(`${date}T00:00:00.000Z`);
-      const endDate = new Date(`${date}T23:59:59.999Z`);
+      const cleanDate = date.split('T')[0];
+      const startDate = new Date(`${cleanDate}T00:00:00+07:00`);
+      const endDate = new Date(`${cleanDate}T23:59:59.999+07:00`);
       whereClause.createdAt = {
         gte: startDate,
         lte: endDate,

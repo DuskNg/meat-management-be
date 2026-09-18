@@ -712,18 +712,17 @@ const getMemberActions = async (req, res, next) => {
       });
     }
 
-    // Xác định khoảng thời gian ngày cần lọc (mặc định hôm nay nếu không truyền)
+    // Xác định khoảng thời gian ngày cần lọc (chuẩn hóa theo múi giờ Việt Nam UTC+7 để không mất log rạng sáng)
     let startDate, endDate;
     if (date) {
-      startDate = new Date(`${date}T00:00:00.000Z`);
-      endDate = new Date(`${date}T23:59:59.999Z`);
+      const cleanDate = date.split('T')[0];
+      startDate = new Date(`${cleanDate}T00:00:00+07:00`);
+      endDate = new Date(`${cleanDate}T23:59:59.999+07:00`);
     } else {
       const now = new Date();
-      const yyyy = now.getFullYear();
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      const dd = String(now.getDate()).padStart(2, '0');
-      startDate = new Date(`${yyyy}-${mm}-${dd}T00:00:00.000Z`);
-      endDate = new Date(`${yyyy}-${mm}-${dd}T23:59:59.999Z`);
+      const vnDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(now);
+      startDate = new Date(`${vnDateStr}T00:00:00+07:00`);
+      endDate = new Date(`${vnDateStr}T23:59:59.999+07:00`);
     }
 
     const actions = [];
