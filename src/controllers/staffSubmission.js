@@ -123,8 +123,23 @@ const submitBatchFromStaff = async (req, res, next) => {
     }
 
     const userId = link.userId;
-    // Luôn mặc định ngày hiện tại khi tải ảnh lên để danh sách hiển thị chung ở giao diện ngày hiện tại
-    const submissionDate = new Date();
+    // Lưu đúng ngày mà người gửi đã chọn (hỗ trợ YYYY-MM-DD hoặc DD/MM/YYYY hoặc ISO)
+    let submissionDate = new Date();
+    if (date) {
+      if (typeof date === 'string' && date.includes('/')) {
+        const [d, m, y] = date.split('/').map(Number);
+        if (d && m && y) {
+          const now = new Date();
+          submissionDate = new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds());
+        }
+      } else {
+        const parsed = new Date(date);
+        if (!isNaN(parsed.getTime())) {
+          const now = new Date();
+          submissionDate = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), now.getHours(), now.getMinutes(), now.getSeconds());
+        }
+      }
+    }
 
     // Danh sách các tác vụ chạy ngầm sau khi đã trả response cho client
     const bgTasks = [];
@@ -269,15 +284,25 @@ const getPublicSubmissionHistory = async (req, res, next) => {
       throw new NotFoundError('Đường dẫn gửi hóa đơn không tồn tại hoặc đã bị khóa.');
     }
 
-    // Mặc định lấy các lượt gửi trong ngày hôm nay
-    const targetDate = date ? new Date(date) : new Date();
+    // Mặc định lấy theo ngày được truyền vào (nếu không có thì lấy ngày hôm nay)
+    let targetDate = new Date();
+    if (date) {
+      if (typeof date === 'string' && date.includes('/')) {
+        const [d, m, y] = date.split('/').map(Number);
+        if (d && m && y) targetDate = new Date(y, m - 1, d);
+      } else {
+        const parsed = new Date(date);
+        if (!isNaN(parsed.getTime())) targetDate = parsed;
+      }
+    }
+
     const startOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0);
     const endOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
 
     const submissions = await prisma.staffSubmission.findMany({
       where: {
         linkId: link.id,
-        createdAt: {
+        date: {
           gte: startOfDay,
           lte: endOfDay,
         },
@@ -288,6 +313,7 @@ const getPublicSubmissionHistory = async (req, res, next) => {
         fileUrl: true,
         fileType: true,
         status: true,
+        date: true,
         createdAt: true,
       },
       orderBy: { createdAt: 'desc' },
