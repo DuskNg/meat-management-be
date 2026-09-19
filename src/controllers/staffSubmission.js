@@ -155,36 +155,80 @@ const submitBatchFromStaff = async (req, res, next) => {
     // Xử lý song song tất cả các tệp cùng lúc (dùng indexOf/substring thay Regex tránh ReDoS)
     const saveTasks = files.map(async (fileItem) => {
       const fileData = fileItem.fileData || fileItem.uri || fileItem.url;
-      const isVideo = fileItem.fileType === 'VIDEO' || (fileItem.type && fileItem.type.startsWith('video'));
-      const fileType = isVideo ? 'VIDEO' : 'IMAGE';
-
       if (!fileData) return null;
 
-      let localUrl = fileData;
-      let rawBase64ToUpload = null;
-      let savedFilePath = null;
+      let isVideo =
+        fileItem.fileType === 'VIDEO' ||
+        (fileItem.type && (fileItem.type.startsWith('video') || fileItem.type.includes('quicktime'))) ||
+        (fileItem.fileName && /\.(mp4|mov|qt|avi|webm|m4v|3gp|mkv)$/i.test(fileItem.fileName));
+      let isPng = false;
+      let cleanBase64 = null;
 
       // Xử lý Base64 siêu tốc bằng indexOf & substring (0ms, tuyệt đối không dùng Regex tránh ReDoS)
       if (typeof fileData === 'string' && fileData.startsWith('data:')) {
         const commaIdx = fileData.indexOf(',');
         if (commaIdx !== -1) {
-          const header = fileData.substring(0, commaIdx);
-          const cleanBase64 = fileData.substring(commaIdx + 1);
-          const isPng = header.includes('png');
-          const ext = isVideo ? 'mp4' : (isPng ? 'png' : 'jpg');
-          const fileName = `sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
-          const filePath = path.join(uploadsStaffDir, fileName);
-
-          try {
-            // Ghi file bất đồng bộ qua libuv thread pool (không chặn Event Loop của Node.js)
-            await fs.promises.writeFile(filePath, Buffer.from(cleanBase64, 'base64'));
-            localUrl = `/uploads/staff_submissions/${fileName}`;
-            savedFilePath = filePath;
-            // Với video, giải phóng base64 ngay khỏi RAM để tránh tràn bộ nhớ (OOM) trên máy chủ
-            rawBase64ToUpload = isVideo ? null : fileData;
-          } catch (saveErr) {
-            console.error('[LOCAL_SAVE_ERR] Lỗi lưu tệp cục bộ:', saveErr);
+          const header = fileData.substring(0, commaIdx).toLowerCase();
+          cleanBase64 = fileData.substring(commaIdx + 1);
+          isPng = header.includes('png');
+          if (header.includes('video') || header.includes('quicktime') || header.includes('mp4') || header.includes('mov')) {
+            isVideo = true;
           }
+
+          // Kiểm tra Magic Bytes nhị phân phòng vệ từ Base64 (Đặc biệt cho video iPhone 11 Pro Max khi client gửi sai MIME)
+          if (cleanBase64.length >= 24) {
+            try {
+              const sampleBuf = Buffer.from(cleanBase64.substring(0, 64), 'base64');
+              if (sampleBuf.length >= 8) {
+                const tag = sampleBuf.subarray(4, 8).toString('ascii');
+                // Định dạng ISO Base Media (QuickTime MOV của iPhone, MP4, M4V, 3GP)
+                if (tag === 'ftyp' || tag === 'moov' || tag === 'mdat' || tag === 'wide') {
+                  let isHeic = false;
+                  if (sampleBuf.length >= 12) {
+                    const brand = sampleBuf.subarray(8, 12).toString('ascii').toLowerCase();
+                    if (['heic', 'heix', 'heim', 'heis', 'mif1', 'msf1'].includes(brand)) {
+                      isHeic = true;
+                    }
+                  }
+                  if (!isHeic) {
+                    isVideo = true;
+                  }
+                } else if (sampleBuf[0] === 0x1a && sampleBuf[1] === 0x45 && sampleBuf[2] === 0xdf && sampleBuf[3] === 0xa3) {
+                  isVideo = true; // WebM / MKV
+                } else if (
+                  sampleBuf.length >= 12 &&
+                  sampleBuf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+                  sampleBuf.subarray(8, 12).toString('ascii') === 'AVI '
+                ) {
+                  isVideo = true; // AVI
+                }
+              }
+            } catch (bufErr) {
+              console.warn('[MAGIC_BYTES_WARN] Lỗi đọc magic bytes base64:', bufErr.message);
+            }
+          }
+        }
+      }
+
+      const fileType = isVideo ? 'VIDEO' : 'IMAGE';
+      const ext = isVideo ? 'mp4' : (isPng ? 'png' : 'jpg');
+      const fileName = `sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
+      const filePath = path.join(uploadsStaffDir, fileName);
+
+      let localUrl = fileData;
+      let rawBase64ToUpload = null;
+      let savedFilePath = null;
+
+      if (cleanBase64) {
+        try {
+          // Ghi file bất đồng bộ qua libuv thread pool (không chặn Event Loop của Node.js)
+          await fs.promises.writeFile(filePath, Buffer.from(cleanBase64, 'base64'));
+          localUrl = `/uploads/staff_submissions/${fileName}`;
+          savedFilePath = filePath;
+          // Với video, giải phóng base64 ngay khỏi RAM để tránh tràn bộ nhớ (OOM) trên máy chủ
+          rawBase64ToUpload = isVideo ? null : fileData;
+        } catch (saveErr) {
+          console.error('[LOCAL_SAVE_ERR] Lỗi lưu tệp cục bộ:', saveErr);
         }
       }
 

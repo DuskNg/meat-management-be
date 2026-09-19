@@ -74,8 +74,28 @@ const fetchFileAsBase64 = async (url) => {
   if (url.startsWith('data:')) {
     const [header, data] = url.split(',');
     const mimeMatch = header.match(/data:(.*?);/);
+    let mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+    // Tự động kiểm tra Magic Bytes từ base64
+    if (data && data.length >= 24) {
+      try {
+        const sampleBuf = Buffer.from(data.substring(0, 64), 'base64');
+        if (sampleBuf.length >= 8) {
+          const tag = sampleBuf.subarray(4, 8).toString('ascii');
+          if (tag === 'ftyp' || tag === 'moov' || tag === 'mdat' || tag === 'wide') {
+            const brand = sampleBuf.length >= 12 ? sampleBuf.subarray(8, 12).toString('ascii').toLowerCase() : '';
+            if (!['heic', 'heix', 'heim', 'heis', 'mif1', 'msf1'].includes(brand)) {
+              mimeType = 'video/mp4';
+            }
+          } else if (sampleBuf[0] === 0x1a && sampleBuf[1] === 0x45 && sampleBuf[2] === 0xdf && sampleBuf[3] === 0xa3) {
+            mimeType = 'video/webm';
+          }
+        }
+      } catch {}
+    }
+
     return {
-      mimeType: mimeMatch ? mimeMatch[1] : 'image/jpeg',
+      mimeType,
       base64Data: data,
     };
   }
@@ -86,7 +106,21 @@ const fetchFileAsBase64 = async (url) => {
       const filePath = path.join(__dirname, '../..', url);
       if (fs.existsSync(filePath)) {
         const buffer = fs.readFileSync(filePath);
-        const isVideo = /\.(mp4|mov|webm|avi|mkv)$/i.test(url);
+        let isVideo = /\.(mp4|mov|webm|avi|mkv)$/i.test(url);
+
+        // Kiểm tra Magic Bytes nhị phân phòng trường hợp file video bị lưu tên đuôi .jpg
+        if (!isVideo && buffer.length >= 8) {
+          const tag = buffer.subarray(4, 8).toString('ascii');
+          if (tag === 'ftyp' || tag === 'moov' || tag === 'mdat' || tag === 'wide') {
+            const brand = buffer.length >= 12 ? buffer.subarray(8, 12).toString('ascii').toLowerCase() : '';
+            if (!['heic', 'heix', 'heim', 'heis', 'mif1', 'msf1'].includes(brand)) {
+              isVideo = true;
+            }
+          } else if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
+            isVideo = true;
+          }
+        }
+
         const mimeType = isVideo ? 'video/mp4' : (url.endsWith('.png') ? 'image/png' : 'image/jpeg');
         return {
           mimeType,
@@ -104,9 +138,24 @@ const fetchFileAsBase64 = async (url) => {
   }
   const arrayBuffer = await response.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
-  const contentType = response.headers.get('content-type') || 'image/jpeg';
+  let contentType = response.headers.get('content-type') || 'image/jpeg';
+  let mimeType = contentType.split(';')[0];
+
+  // Kiểm tra Magic Bytes nhị phân của dữ liệu fetch từ Cloudinary / CDN
+  if (buffer.length >= 8) {
+    const tag = buffer.subarray(4, 8).toString('ascii');
+    if (tag === 'ftyp' || tag === 'moov' || tag === 'mdat' || tag === 'wide') {
+      const brand = buffer.length >= 12 ? buffer.subarray(8, 12).toString('ascii').toLowerCase() : '';
+      if (!['heic', 'heix', 'heim', 'heis', 'mif1', 'msf1'].includes(brand)) {
+        mimeType = 'video/mp4';
+      }
+    } else if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
+      mimeType = 'video/webm';
+    }
+  }
+
   return {
-    mimeType: contentType.split(';')[0],
+    mimeType,
     base64Data: buffer.toString('base64'),
   };
 };
@@ -161,6 +210,14 @@ const parseStaffSubmission = async (submissionId) => {
     }
 
     const isVideo = submission.fileType === 'VIDEO' || filePayload.mimeType.startsWith('video/');
+
+    // Tự động đồng bộ lại DB nếu phát hiện file thực tế là Video nhưng DB đang lưu nhầm IMAGE
+    if (isVideo && submission.fileType !== 'VIDEO') {
+      await prisma.staffSubmission.update({
+        where: { id: submissionId },
+        data: { fileType: 'VIDEO' },
+      }).catch((syncErr) => console.warn('[SYNC_FILETYPE_ERR]', syncErr.message));
+    }
 
     // 4. Chuẩn bị prompt AI chuyên sâu: Nếu là Video thì LẮNG NGHE GIỌNG NÓI, nếu là Ảnh thì đọc chữ tích kê
     let promptText = '';
