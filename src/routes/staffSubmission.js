@@ -36,6 +36,9 @@ router.post('/batch-reject', authenticateToken, resolveWorkspace, staffSubmissio
 // Bác bỏ/xóa hóa đơn
 router.post('/:id/reject', authenticateToken, resolveWorkspace, staffSubmissionController.rejectStaffSubmission);
 
+// Quét lại bằng AI
+router.post('/:id/reparse', authenticateToken, resolveWorkspace, staffSubmissionController.reparseStaffSubmission);
+
 // ─── 3. QUẢN LÝ LINK ZALO NHÂN VIÊN ───
 // Lấy danh sách link Zalo nhân viên
 router.get('/manage/links', authenticateToken, resolveWorkspace, staffSubmissionController.getSubmissionLinks);

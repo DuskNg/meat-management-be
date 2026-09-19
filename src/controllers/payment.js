@@ -46,6 +46,16 @@ const createPayment = async (req, res, next) => {
         const targetY = parseInt(monthMatch[2], 10);
         const lastDay = new Date(targetY, targetM, 0).getDate();
         paymentPaidAt = new Date(Date.UTC(targetY, targetM - 1, lastDay, 5, 0, 0, 0));
+      } else {
+        const rangeMatch = note.match(/Thanh toán (?:nợ|hóa đơn) từ ngày (\d{2})\/(\d{2})\/(\d{4}) đến ngày (\d{2})\/(\d{2})\/(\d{4})/i);
+        if (rangeMatch) {
+          const toD = parseInt(rangeMatch[4], 10);
+          const toM = parseInt(rangeMatch[5], 10);
+          const toY = parseInt(rangeMatch[6], 10);
+          if (toD && toM && toY) {
+            paymentPaidAt = new Date(Date.UTC(toY, toM - 1, toD, 12, 0, 0, 0));
+          }
+        }
       }
     }
 

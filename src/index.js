@@ -298,6 +298,10 @@ startCleanupScheduler();
 const { initRecurringDebtScheduler } = require('./schedulers/recurringDebtScheduler');
 initRecurringDebtScheduler();
 
+// Khởi chạy tiến trình tự động phục hồi đơn nộp nhân viên bị kẹt (Auto-Recovery)
+const { initStaffSubmissionRecoveryScheduler } = require('./schedulers/staffSubmissionRecoveryScheduler');
+initStaffSubmissionRecoveryScheduler();
+
 // Tạo HTTP server và khởi tạo Socket.IO
 const http = require('http');
 const { initSocket } = require('./utils/socket');

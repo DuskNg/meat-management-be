@@ -193,15 +193,19 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
       + Nếu đọc là "b2", "b 2", "bê hai", "bếp 2", "bếp hai": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 2".
       + Nếu đọc là "b3", "b 3", "bê ba", "bếp 3", "bếp ba": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 3".
       + Nếu đọc là "b4", "b 4", "bê bốn", "bếp 4", "bếp bốn", "vườn xanh", "nhà hàng vườn xanh": BẮT BUỘC trả về customer_name là: "Nhà hàng vườn xanh".
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HÀ TRÌ" (CỰC KỲ QUAN TRỌNG — PHÂN BIỆT VỚI "CHỊ HẠNH SÂN BÓNG HÀ TRÌ" VÀ "CỒ HẢI"):
+      + BẤT KỲ VIDEO NÀO NGƯỜI NÓI ĐỌC LÀ "HÀ TRÌ" (hoặc "Hà Trì", "Hà trì", "quán Hà Trì", "anh Hà Trì", "cô Hà Trì", "cô hà trì", "co ha tri", "co ha ti", "ha tri", "ha ti"):
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Hà Trì".
+      + TUYỆT ĐỐI KHÔNG ĐƯỢC NHẬN NHẦM THÀNH "Chị hạnh sân bóng hà trì"! Vì nếu là khách "Chị hạnh sân bóng hà trì" thì người nói sẽ đọc là "chị Hạnh" (hoặc "Hạnh", "chị Hạnh sân bóng"). Khi người nói đọc là "Hà Trì" thì 100% là khách "Hà Trì".
+      + TUYỆT ĐỐI KHÔNG nhầm thành "Cồ Hải" hay khách khác (khi người nói đọc nhanh "cô Hà Trì", nuốt âm thành "cô ha trì" hoặc âm gần như "cồ hải", hệ thống vẫn PHẢI nhận diện đúng là "Hà Trì").
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CHỊ HẠNH SÂN BÓNG HÀ TRÌ":
+      + Chỉ khi nào người nói đọc là "chị Hạnh", "chị hạnh", "Hạnh", "Hạnh sân bóng", "chị Hạnh sân bóng", "chị Hạnh hà trì", "sân bóng": BẮT BUỘC mới nhận diện và trả về customer_name là: "Chị hạnh sân bóng hà trì".
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HUYỀN ĐÔ NGHĨA":
       + Nếu người nói đọc là "Huyền", "chị Huyền", "Huyền Đô Nghĩa", "Huyền đô ngĩa", "cửa hàng Huyền", "quán Huyền":
       + BẮT BUỘC nhận diện và trả về customer_name là: "Huyền Đô Nghĩa".
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "PHỞ TƯỞNG (CHỊ LUYẾN)":
-     + Nếu người nói đọc là "phở Tưởng", "quán Tưởng", "anh Tưởng", "chị Luyến", "Phởtưởng", "Phở Tưởng", "Luyến":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "Phở tưởng(chị Luyến)" (hoặc "Phở tưởng"). Tuyệt đối không nhầm sang "Phở Tiến" hay khách khác.
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HÀ TRÌ":
-     + Nếu người nói đọc là "Hà Trì", "Hà trì", "quán Hà Trì", "anh Hà Trì":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "Hà Trì".
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "PHỞ TƯỞNG (CHỊ LUYẾN)":
+      + Nếu người nói đọc là "phở Tưởng", "quán Tưởng", "anh Tưởng", "chị Luyến", "Phởtưởng", "Phở Tưởng", "Luyến":
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Phở tưởng(chị Luyến)" (hoặc "Phở tưởng"). Tuyệt đối không nhầm sang "Phở Tiến" hay khách khác.
    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CHỊ THÚY NGA" (CHINGA):
      + Nếu người nói đọc là "chinga", "Chinga", "chị Nga", "chị nga", "Nga", "cô Nga", "Thúy Nga", "chị Thúy Nga":
      + BẮT BUỘC nhận diện và trả về customer_name là: "Chị Thúy Nga" (hoặc tên khách Thúy Nga trong danh bạ). Tuyệt đối không nhầm sang khách khác.
@@ -527,6 +531,9 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
         2) Chữ thứ 2: Chữ "H" viết hoa hai nét đứng song song có nét gạch ngang mềm mại nối giữa, chữ "a" tròn nhỏ có dấu huyền "\" phía trên -> chữ "Hà" (hoặc "Ha").
       + QUY TẮC BẮT BUỘC: Khi chữ viết tay ở dòng Tên khách hàng nhìn giống "Thái Hà", "Thai Ha", "thai ha", "thái hà", "Hkú Hà", "Hkú Ha", "Hki Ha", "Hkui Ha", "Hkai Ha", "Hai Ha", "Hải Hà", "Thki Ha":
       => BẮT BUỘC nhận diện và trả về customer_name là: "Thái hà" (để so khớp chính xác với khách hàng "Thái hà" trong danh bạ).
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HÀ TRÌ" (PHÂN BIỆT VỚI "CHỊ HẠNH SÂN BÓNG HÀ TRÌ" VÀ "CỒ HẢI"):
+      + Khi trên tích kê / hóa đơn ghi chữ "Hà Trì", "Hà trì", "cô Hà Trì", "cô hà trì", "Hà tri", "ha tri", "cô Trì":
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Hà Trì". TUYỆT ĐỐI KHÔNG nhầm sang "Chị hạnh sân bóng hà trì" (trừ khi có ghi rõ chữ "Hạnh" hoặc "chị Hạnh") và TUYỆT ĐỐI KHÔNG nhầm sang "Cồ Hải".
     - Ngày hóa đơn: Đọc ở dòng góc dưới "Ngày [ngày] tháng [tháng] năm 20[năm]" (ví dụ: "16/09/2026").
     - Bỏ qua các nét gạch chéo, nét cong sổ dài khóa hóa đơn, không nhận nhầm thành chữ số.
 4. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):
@@ -1041,12 +1048,28 @@ Chỉ trả về JSON theo đúng cấu trúc:
           cleanDetectedNoSpace === 'hathi' ||
           cleanDetectedNoSpace.includes('hatri')
         ) {
-          const haTriCust = customers.find((c) => {
-            const cClean = removeDiacritics(c.name.toLowerCase());
-            return cClean.includes('ha tri') || (cClean.includes('ha') && cClean.includes('tri'));
-          });
-          if (haTriCust) {
-            matchedCustomerId = haTriCust.id;
+          const isHanh = cleanDetected.includes('hanh') || cleanDetected.includes('chi hanh');
+          if (isHanh) {
+            const hanhCust = customers.find((c) => {
+              const cClean = removeDiacritics(c.name.toLowerCase());
+              return cClean.includes('hanh');
+            });
+            if (hanhCust) {
+              matchedCustomerId = hanhCust.id;
+            }
+          } else {
+            // Đọc là "Hà Trì" -> ƯU TIÊN khách có tên chính xác là "Hà Trì", TUYỆT ĐỐI không nhầm sang "Chị hạnh sân bóng hà trì"
+            const exactHaTriCust = customers.find((c) => {
+              const cClean = removeDiacritics(c.name.toLowerCase()).trim();
+              return cClean === 'ha tri';
+            });
+            const haTriCust = exactHaTriCust || customers.find((c) => {
+              const cClean = removeDiacritics(c.name.toLowerCase());
+              return cClean.includes('ha tri') && !cClean.includes('hanh');
+            });
+            if (haTriCust) {
+              matchedCustomerId = haTriCust.id;
+            }
           }
         }
       }

@@ -139,6 +139,7 @@ const submitBatchFromStaff = async (req, res, next) => {
 
       let localUrl = fileData;
       let rawBase64ToUpload = null;
+      let savedFilePath = null;
 
       // Xử lý Base64 siêu tốc bằng indexOf & substring (0ms, tuyệt đối không dùng Regex tránh ReDoS)
       if (typeof fileData === 'string' && fileData.startsWith('data:')) {
@@ -155,7 +156,9 @@ const submitBatchFromStaff = async (req, res, next) => {
             // Ghi file bất đồng bộ qua libuv thread pool (không chặn Event Loop của Node.js)
             await fs.promises.writeFile(filePath, Buffer.from(cleanBase64, 'base64'));
             localUrl = `/uploads/staff_submissions/${fileName}`;
-            rawBase64ToUpload = fileData;
+            savedFilePath = filePath;
+            // Với video, giải phóng base64 ngay khỏi RAM để tránh tràn bộ nhớ (OOM) trên máy chủ
+            rawBase64ToUpload = isVideo ? null : fileData;
           } catch (saveErr) {
             console.error('[LOCAL_SAVE_ERR] Lỗi lưu tệp cục bộ:', saveErr);
           }
@@ -177,6 +180,7 @@ const submitBatchFromStaff = async (req, res, next) => {
 
       bgTasks.push({
         submissionId: submission.id,
+        filePath: savedFilePath,
         rawBase64: rawBase64ToUpload,
         isVideo,
         localUrl,
@@ -207,9 +211,11 @@ const submitBatchFromStaff = async (req, res, next) => {
       setImmediate(async () => {
         for (const item of bgTasks) {
           try {
-            if (item.rawBase64) {
+            const uploadSource = (item.filePath && fs.existsSync(item.filePath)) ? item.filePath : item.rawBase64;
+            if (uploadSource) {
               try {
-                const uploadRes = await uploadToCloudinary(item.rawBase64, {
+                const uploadRes = await uploadToCloudinary(uploadSource, {
+                  filePath: item.filePath,
                   folder: `meat_manager/${userId}/staff_submissions`,
                   resource_type: item.isVideo ? 'video' : 'image',
                 });
@@ -629,15 +635,28 @@ const approveStaffSubmission = async (req, res, next) => {
           }
         }
 
-        // Nếu chưa có Payment thì tạo mới (hoặc tái sử dụng payment cũ nếu submission đã APPROVED nhưng transactionId bị null)
+        // Nếu chưa có Payment thì kiểm tra payment cũ để tránh trùng lặp số tiền trả hàng
         if (!payment) {
           let oldPayment = null;
-          if (submission.status === 'APPROVED' && !submission.transactionId) {
+          if (submission.transactionId) {
+            oldPayment = await tx.payment.findUnique({ where: { id: submission.transactionId } });
+          }
+
+          if (!oldPayment) {
+            // Kiểm tra xem trong cùng ngày đã có lượt trả hàng nào cùng khách hàng và cùng số tiền chưa
+            const finalD = new Date(finalDate);
+            const startDay = new Date(finalD);
+            startDay.setHours(0, 0, 0, 0);
+            const endDay = new Date(finalD);
+            endDay.setHours(23, 59, 59, 999);
+
             oldPayment = await tx.payment.findFirst({
               where: {
                 customerId: finalCustomerId,
                 type: 'customer',
-                note: { contains: '[Trả lại hàng]' },
+                amount: totalAmount,
+                paidAt: { gte: startDay, lte: endDay },
+                note: { contains: 'Trả' },
               },
               orderBy: { createdAt: 'desc' },
             });
@@ -1189,6 +1208,49 @@ const deleteSubmissionLink = async (req, res, next) => {
   }
 };
 
+/**
+ * Chủ buôn kích hoạt quét lại AI cho 1 submission
+ */
+const reparseStaffSubmission = async (req, res, next) => {
+  try {
+    const userId = req.workspaceOwnerId || req.user.id;
+    const { id } = req.params;
+
+    const submission = await prisma.staffSubmission.findFirst({
+      where: { id, userId },
+    });
+
+    if (!submission) {
+      throw new NotFoundError('Không tìm thấy hóa đơn cần quét lại.');
+    }
+
+    // Chuyển trạng thái sang ANALYZING và xóa lỗi cũ
+    await prisma.staffSubmission.update({
+      where: { id },
+      data: { status: 'ANALYZING', aiError: null },
+    });
+
+    emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_ANALYZING', { id });
+
+    // Gọi hàm phân tích AI
+    parseStaffSubmission(id)
+      .then((updated) => {
+        emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_READY', updated);
+      })
+      .catch((err) => {
+        console.error(`[REPARSE_ERROR] Lỗi quét lại submission ${id}:`, err);
+      });
+
+    res.json({
+      success: true,
+      message: 'Hệ thống AI đang bắt đầu quét lại hóa đơn / video...',
+      data: { id, status: 'ANALYZING' },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getPublicLinkInfo,
   verifyLinkPin,
@@ -1200,6 +1262,7 @@ module.exports = {
   approveStaffSubmission,
   rejectStaffSubmission,
   batchRejectStaffSubmissions,
+  reparseStaffSubmission,
   getSubmissionLinks,
   createSubmissionLink,
   updateSubmissionLink,
