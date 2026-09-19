@@ -15,6 +15,24 @@ if (!fs.existsSync(uploadsStaffDir)) {
   fs.mkdirSync(uploadsStaffDir, { recursive: true });
 }
 
+// Helper chuẩn hóa ngày DD/MM/YYYY hoặc YYYY-MM-DD sang khoảng ngày Việt Nam (UTC+7)
+const parseDayRangeVN = (dateStr) => {
+  let dateYMD = '';
+  if (!dateStr) {
+    const now = new Date();
+    dateYMD = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(now);
+  } else if (typeof dateStr === 'string' && dateStr.includes('/')) {
+    const [d, m, y] = dateStr.split('/').map(Number);
+    const pad = (n) => String(n).padStart(2, '0');
+    dateYMD = `${y}-${pad(m)}-${pad(d)}`;
+  } else {
+    dateYMD = String(dateStr).split('T')[0];
+  }
+  const startOfDay = new Date(`${dateYMD}T00:00:00+07:00`);
+  const endOfDay = new Date(`${dateYMD}T23:59:59.999+07:00`);
+  return { startOfDay, endOfDay, dateYMD };
+};
+
 // Helper sinh chuỗi token ngẫu nhiên
 const generateToken = () => {
   return crypto.randomBytes(12).toString('base64url');
@@ -123,23 +141,13 @@ const submitBatchFromStaff = async (req, res, next) => {
     }
 
     const userId = link.userId;
-    // Lưu đúng ngày mà người gửi đã chọn (hỗ trợ YYYY-MM-DD hoặc DD/MM/YYYY hoặc ISO)
-    let submissionDate = new Date();
-    if (date) {
-      if (typeof date === 'string' && date.includes('/')) {
-        const [d, m, y] = date.split('/').map(Number);
-        if (d && m && y) {
-          const now = new Date();
-          submissionDate = new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds());
-        }
-      } else {
-        const parsed = new Date(date);
-        if (!isNaN(parsed.getTime())) {
-          const now = new Date();
-          submissionDate = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), now.getHours(), now.getMinutes(), now.getSeconds());
-        }
-      }
-    }
+    // Lưu đúng ngày mà người gửi đã chọn theo chuẩn múi giờ Việt Nam (UTC+7)
+    const { dateYMD } = parseDayRangeVN(date);
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    const submissionDate = new Date(`${dateYMD}T${hh}:${mm}:${ss}+07:00`);
 
     // Danh sách các tác vụ chạy ngầm sau khi đã trả response cho client
     const bgTasks = [];
@@ -286,20 +294,15 @@ const getPublicSubmissionHistory = async (req, res, next) => {
       throw new NotFoundError('Đường dẫn gửi hóa đơn không tồn tại hoặc đã bị khóa.');
     }
 
-    // Mặc định lấy theo ngày được truyền vào (nếu không có thì lấy ngày hôm nay)
-    let targetDate = new Date();
-    if (date) {
-      if (typeof date === 'string' && date.includes('/')) {
-        const [d, m, y] = date.split('/').map(Number);
-        if (d && m && y) targetDate = new Date(y, m - 1, d);
-      } else {
-        const parsed = new Date(date);
-        if (!isNaN(parsed.getTime())) targetDate = parsed;
-      }
-    }
+    // Header chống cache trình duyệt tuyệt đối cho danh sách ảnh công nợ
+    res.set({
+      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    });
 
-    const startOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 0, 0, 0);
-    const endOfDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate(), 23, 59, 59, 999);
+    // Mặc định lấy theo ngày được truyền vào chuẩn múi giờ Việt Nam (UTC+7)
+    const { startOfDay, endOfDay } = parseDayRangeVN(date);
 
     const submissions = await prisma.staffSubmission.findMany({
       where: {
