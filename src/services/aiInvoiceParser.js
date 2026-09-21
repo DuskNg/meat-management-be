@@ -529,6 +529,15 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      * Trường hợp hóa đơn có số tiền ở cột "Thành tiền" của từng món: lấy amount = số tiền ở cột Thành tiền * 1000.
      * Trường hợp hóa đơn chỉ có duy nhất 1 con số tổng cộng ở đáy (ví dụ "1146" hay "3814"): trả về 1 dòng "Thịt lẻ" với price = amount = tổng tiền * 1000, quantity = 1.
      * Trường hợp hóa đơn ghi rõ số kg thập phân (ví dụ "5,2" hoặc "1,95") và đơn giá thông thường: tính amount = Math.round(quantity * price).
+    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN BIỆT SỐ CÂN "4.9" VỚI "1.9":
+      + Quan sát nét chữ số 4 viết thảo ở cột "Số lượng" / số cân:
+        1) Nét 1: Nét xiên chéo dài từ trên cao vươn sát mép chữ in kéo xuống dưới trái.
+        2) Nét 2: Nét gập ngang thắt góc nhọn ở thân tạo thành khoảng tam giác khép kín ở bụng số 4.
+        3) Nét 3: Nét sổ dọc cắt qua nét ngang kéo thẳng xuống đáy tạo thành 2 NHÁNH CHÂN RÕ RỆT (nhánh chân xiên bên trái và nhánh chân thẳng đứng bên phải).
+      + NGUYÊN NHÂN AI DỄ BỊ ẢO GIÁC NHÌN NHẦM THÀNH "1.9": Do nét xiên chéo trên đỉnh kéo rất dài và nổi bật, OCR dễ nhìn nhầm nét xiên đó thành thân số "1", còn phần thắt ngang và 2 chân phía dưới bị coi là chân đế của số "1".
+      + QUY TẮC BẮT BUỘC: Khi nhìn thấy con số có 2 nhánh chân chĩa xuống đáy dòng kẻ và có nét thắt ngang/tam giác ở thân, theo sau là dấu phẩy/chấm và số 9 cong tròn:
+      => BẮT BUỘC nhận diện khối lượng (quantity) là: 4.9 (hoặc "4.9" kg)!
+      => TUYỆT ĐỐI CẤM NHẬN DIỆN THÀNH 1.9!
 
 3. TÊN KHÁCH HÀNG & NGÀY THÁNG:
    - Tên khách hàng: Thường nằm ở dòng "Tên khách hàng:" (ví dụ: "A Thang", "Yến Mễ Trì", "Lam nghi"...). Hãy so khớp với danh sách khách hàng quen thuộc ở trên. Nếu không rõ, trả về null.
