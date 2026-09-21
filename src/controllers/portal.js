@@ -327,7 +327,7 @@ const getPublicPortalData = async (req, res, next) => {
           });
         }
 
-        // Lấy 50 giao dịch gần nhất của toàn chuỗi
+        // Lấy toàn bộ giao dịch của toàn chuỗi (không giới hạn 50 đơn để hiển thị đầy đủ theo thời gian lọc)
         const recentTxs = await prisma.transaction.findMany({
           where: {
             customerId: { in: allowedCustomerIds },
@@ -344,7 +344,19 @@ const getPublicPortalData = async (req, res, next) => {
             invoices: true, // Bao gồm ảnh hóa đơn đính kèm đơn nợ
           },
           orderBy: { date: 'desc' },
-          take: 50
+        });
+
+        // Lấy danh sách thanh toán / trả hàng của toàn chuỗi để đối soát chi tiết
+        const chainPayments = await prisma.payment.findMany({
+          where: {
+            customerId: { in: allowedCustomerIds },
+            ...(Object.keys(dateFilter).length > 0 ? { paidAt: dateFilter } : {}),
+            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+          },
+          include: {
+            customer: { select: { id: true, name: true } }
+          },
+          orderBy: { paidAt: 'desc' }
         });
 
         // Định dạng dữ liệu an toàn (Zero-leakage: không costPrice, không profit)
@@ -366,6 +378,16 @@ const getPublicPortalData = async (req, res, next) => {
           }))
         }));
 
+        const safePayments = chainPayments.map(pm => ({
+          id: pm.id,
+          amount: Number(pm.amount),
+          paidAt: pm.paidAt,
+          note: pm.note,
+          method: pm.method,
+          customerId: pm.customerId,
+          customerName: pm.customer?.name || null
+        }));
+
         const chainData = {
           type: 'customer',
           isChainOverview: true,
@@ -377,6 +399,7 @@ const getPublicPortalData = async (req, res, next) => {
           },
           branches: allCustomersData,
           transactions: safeTxs,
+          payments: safePayments,
           publishInfo: {
             isOwner,
             lastPublishedAt: portalLink.lastPublishedAt ? portalLink.lastPublishedAt.toISOString() : null,
