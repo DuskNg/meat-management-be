@@ -658,6 +658,13 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      + BẮT BUỘC đặt "note": "[Trả lại hàng]".
      + Vẫn bóc tách chính xác customer_name và danh sách các món thịt (name, quantity, price, amount).
      + TUYỆT ĐỐI CẤM đưa các chữ "trả", "trả hàng", "gửi về", "trả về", "trả lại", "hàng trả" vào tên khách hàng hay tên món thịt!
+   - PHÂN BIỆT RÕ MÓN "TRÀNG BÒ" (TUYỆT ĐỐI CẤM NHẬN NHẦM THÀNH "QUẢ TRẮNG" HAY "TRẮNG BÒ"):
+     + Quan sát nét chữ viết tay:
+       1) Chữ thứ 1 "Tràng": Chữ "Tr" viết hoa kiểu thảo lượn sóng mềm mại nối liền sang "ang", đuôi chữ "g" thòng sâu xuống dưới dòng kẻ, có nét dấu huyền "\" trên đầu.
+       2) Chữ thứ 2 "bò": Chữ "b" vươn cao bụng tròn nối sang chữ "o" có dấu huyền "\".
+     + BẮT BUỘC nhận diện tên món thịt là "Tràng bò" (hoặc "Tràng").
+     + TUYỆT ĐỐI CẤM đọc thành "Quả trắng" hay "Trắng bò"!
+
    - ĐẶC BIỆT QUY TẮC RIÊNG CHO KHÁCH HÀNG "CHỊ TUYẾT" (HOẶC "TUYẾT"):
      + Khi hóa đơn / tích kê là của khách hàng "Chị Tuyết" (hoặc "Tuyết"): nếu có chữ viết tay "gửi về", "trả về", "trả lại", "gửi lại" mà KHÔNG ghi rõ tên món thịt (chỉ có số cân / kg, hoặc chỉ ghi "Chị Tuyết gửi về: 2.5", "Trả về 3.2", "Gửi về 1.8kg"):
        => BẮT BUỘC nhận diện tên món thịt ("name") là: "Thịt chín" (hoặc "Chín")!
@@ -1624,18 +1631,21 @@ Chỉ trả về JSON theo đúng cấu trúc:
       'quả bằng': 'quả bằng',
       'thit bang': 'quả bằng',
       'thịt bằng': 'quả bằng',
+      // Tràng bò
+      'trang bo': 'Tràng bò',
+      'tràng bò': 'Tràng bò',
+      'trangbo': 'Tràng bò',
+      'thit trang bo': 'Tràng bò',
+      'thịt tràng bò': 'Tràng bò',
+      'long trang': 'Tràng bò',
+      'lòng tràng': 'Tràng bò',
       // Quả trắng
-      'trang': 'quả trắng',
-      'trắng': 'quả trắng',
-      'trang bo': 'quả trắng',
-      'trắng bò': 'quả trắng',
-      'trangbo': 'quả trắng',
-      'trang bo': 'quả trắng',
-      'tráng bò': 'quả trắng',
       'qua trang': 'quả trắng',
       'quả trắng': 'quả trắng',
       'thit trang': 'quả trắng',
       'thịt trắng': 'quả trắng',
+      'trang': 'quả trắng',
+      'trắng': 'quả trắng',
       // Quạt
       'quat': 'quạt',
       'quạt': 'quạt',
