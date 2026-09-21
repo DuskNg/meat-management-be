@@ -300,6 +300,9 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "GIẢNG VÕ" / "GIANG VÕ":
       + Nếu người nói đọc là "Giảng Võ", "giảng võ", "Giang Võ", "giang võ", "quán Giảng Võ", "anh Giảng Võ":
       + BẮT BUỘC nhận diện và trả về customer_name là: "Giảng võ".
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "794 LÁNG HẠ" / "794 ĐƯỜNG LÁNG" (THE INDUSTREE):
+      + Nếu người nói đọc là "794", "794 láng hạ", "794 đường láng", "the industree", "quán 794":
+      + BẮT BUỘC trả về customer_name là: "794 láng hạ" (hoặc "the industree(794 đường láng)"). Tuyệt đối không nhầm sang "Cuốn láng hạ".
 
 2. Bóc tách chi tiết các mặt hàng thịt (items) từ GIỌNG NÓI và HÌNH ẢNH MÀN HÌNH CÂN ĐIỆN TỬ:
    - Tên món thịt (name) - QUY TẮC SỐNG CÒN (BẮT BUỘC LUÔN PHẢI CÓ TÊN MÓN THỊT):
@@ -616,6 +619,21 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
         3) NGUYÊN NHÂN AI HAY NHÌN NHẦM: Do chữ "V" viết thảo nối liền mạch sang chữ "o", nét sổ cong trái và nét móc phải của chữ "V" khi dính liền vào chữ "o" rất dễ khiến AI OCR bị ảo giác nhìn nhầm thành chữ "Đ", "đ", "D" -> đọc sai thành "Giang Đỏ", "Giang đỏ", "Giang Đô", "Giang đô", "Giang Dỏ", "Giang dỏ", "Giang đo", "Giang do".
       + QUY TẮC BẮT BUỘC: Khi chữ viết tay ở dòng Tên khách hàng nhìn giống "Giang Võ", "Giang võ", "Giảng võ", "Giang Đỏ", "Giang đỏ", "Giang Đô", "Giang đô", "Giang Dỏ", "Giang dỏ", "Giang do", "Giang đo":
       => BẮT BUỘC nhận diện và trả về customer_name là: "Giảng võ" (để hệ thống tự động chọn chính xác khách hàng "Giảng võ" trong danh bạ).
+    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN BIỆT SỐ "794 LÁNG HẠ" VỚI CHỮ "CUỐN LÁNG HẠ":
+      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:" (dưới tiêu đề in đỏ "HÓA ĐƠN BÁN HÀNG"):
+        1) KÝ TỰ BẮT ĐẦU LÀ 3 CON SỐ "794" (KHÔNG PHẢI CHỮ VIẾT "CUỐN"):
+           - Số "7": Nét ngang trên đầu hơi lượn nhẹ, nét sổ chéo xuống dưới.
+           - Số "9": Vòng tròn khép kín ở trên, thân cong sổ xuống dưới.
+           - Số "4": Nét sổ xiên gập ngang và nét sổ thẳng dọc cắt ngang qua.
+        2) CỤM CHỮ TIẾP THEO LÀ "lang ha" (hoặc "láng hạ", "láng"):
+           - Chữ "l" có nét khuyết vươn cao, chữ "a-n-g" với đuôi chữ "g" thòng sâu xuống dưới dòng kẻ, theo sau là chữ "h-a" (hoặc "hạ").
+        3) NGUYÊN NHÂN AI THƯỜNG BỊ ẢO GIÁC NHÌN NHẦM THÀNH "Cuốn láng hạ":
+           - Khi 3 con số "794" viết liền tay, nét lượn số 7 giống nét cong chữ "C", số 9 tròn và số 4 gập ngang giống vần "u-ố-n".
+           - Đồng thời do trong danh bạ cửa hàng có khách "Cuốn láng hạ", AI bị tâm lý "ép từ điển" nhìn thấy "lang ha" liền tự động đoán sai thành "Cuốn láng hạ".
+      + QUY TẮC BẮT BUỘC: Khi ở dòng Tên khách hàng nhìn thấy 3 con số "794" (hoặc "794 lang ha", "794 láng hạ", "794 đường láng", "794 lang"):
+      => BẮT BUỘC nhận diện và trả về customer_name là: "794 láng hạ" (hoặc so khớp với "the industree(794 đường láng)").
+      => TUYỆT ĐỐI CẤM NHẬN DIỆN THÀNH "Cuốn láng hạ"!
+      => CHỈ KHI NÀO chữ đầu tiên viết tay rõ ràng bằng chữ cái "Cuốn", "Cuon", "Cươn" (hoàn toàn không có chữ số 794) thì mới là khách "Cuốn láng hạ".
     - Ngày hóa đơn: Đọc ở dòng góc dưới "Ngày [ngày] tháng [tháng] năm 20[năm]" (ví dụ: "16/09/2026").
     - Bỏ qua các nét gạch chéo, nét cong sổ dài khóa hóa đơn, không nhận nhầm thành chữ số.
 4. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):
@@ -986,6 +1004,24 @@ Chỉ trả về JSON theo đúng cấu trúc:
           });
           if (giangVoCust) {
             matchedCustomerId = giangVoCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "the industree(794 đường láng)" / "794 láng hạ" nếu AI nhận diện có số 794 hoặc the industree
+        if (
+          cleanDetected.includes('794') ||
+          cleanDetectedNoSpace.includes('794') ||
+          cleanDetected.includes('industree') ||
+          (cleanDetected.includes('lang ha') && !cleanDetected.includes('cuon') && !cleanDetected.includes('cuon lang ha'))
+        ) {
+          const industreeCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('794') || cClean.includes('industree');
+          });
+          if (industreeCust) {
+            matchedCustomerId = industreeCust.id;
           }
         }
       }
