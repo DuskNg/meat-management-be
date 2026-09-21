@@ -297,6 +297,9 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "VĂN KHÊ" VÀ "BÚN HUẾ VĂN KHÊ":
      + Nếu người nói chỉ đọc là "văn khê", "quán văn khê", "anh văn khê" (KHÔNG có chữ bún huế): BẮT BUỘC trả về customer_name là: "văn khê".
      + Nếu người nói đọc là "bún huế", "bún huế văn khê", "bun hue", "bún bò huế": BẮT BUỘC trả về customer_name là: "Bún huế van khe".
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "GIẢNG VÕ" / "GIANG VÕ":
+      + Nếu người nói đọc là "Giảng Võ", "giảng võ", "Giang Võ", "giang võ", "quán Giảng Võ", "anh Giảng Võ":
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Giảng võ".
 
 2. Bóc tách chi tiết các mặt hàng thịt (items) từ GIỌNG NÓI và HÌNH ẢNH MÀN HÌNH CÂN ĐIỆN TỬ:
    - Tên món thịt (name) - QUY TẮC SỐNG CÒN (BẮT BUỘC LUÔN PHẢI CÓ TÊN MÓN THỊT):
@@ -606,6 +609,13 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CỒ HẢI" / "CỔ HẢI":
       + Khi trên tích kê / hóa đơn ghi chữ "Cồ Hải", "cồ hải", "Cổ Hải", "cổ hải", "Cồ hải", "quán Cồ Hải":
       + BẮT BUỘC nhận diện và trả về customer_name là: "Cồ hải" (hoặc "Cồ Hải"). TUYỆT ĐỐI KHÔNG nhầm sang "Hà Trì"!
+    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "GIẢNG VÕ" / "GIANG VÕ":
+      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:" (dưới tiêu đề in đỏ "HÓA ĐƠN BÁN HÀNG"):
+        1) Chữ thứ 1: Chữ "G" viết hoa nét cong to rộng phóng khoáng, thân nối liền vần "i-a-n", và chữ "g" cuối có nét móc đuôi sổ thòng rất sâu xuống dưới dòng kẻ chấm -> tạo thành chữ "Giang" (hoặc "Giảng").
+        2) Chữ thứ 2: Chữ "V" viết hoa/thảo nét sổ cong xuống rồi uốn lượn móc hất lên bên phải nối liền mạch sang chữ "o" (hoặc "õ" có nét ngã nhẹ trên đầu) -> tạo thành chữ "Võ" (hoặc "võ").
+        3) NGUYÊN NHÂN AI HAY NHÌN NHẦM: Do chữ "V" viết thảo nối liền mạch sang chữ "o", nét sổ cong trái và nét móc phải của chữ "V" khi dính liền vào chữ "o" rất dễ khiến AI OCR bị ảo giác nhìn nhầm thành chữ "Đ", "đ", "D" -> đọc sai thành "Giang Đỏ", "Giang đỏ", "Giang Đô", "Giang đô", "Giang Dỏ", "Giang dỏ", "Giang đo", "Giang do".
+      + QUY TẮC BẮT BUỘC: Khi chữ viết tay ở dòng Tên khách hàng nhìn giống "Giang Võ", "Giang võ", "Giảng võ", "Giang Đỏ", "Giang đỏ", "Giang Đô", "Giang đô", "Giang Dỏ", "Giang dỏ", "Giang do", "Giang đo":
+      => BẮT BUỘC nhận diện và trả về customer_name là: "Giảng võ" (để hệ thống tự động chọn chính xác khách hàng "Giảng võ" trong danh bạ).
     - Ngày hóa đơn: Đọc ở dòng góc dưới "Ngày [ngày] tháng [tháng] năm 20[năm]" (ví dụ: "16/09/2026").
     - Bỏ qua các nét gạch chéo, nét cong sổ dài khóa hóa đơn, không nhận nhầm thành chữ số.
 4. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):
@@ -945,6 +955,37 @@ Chỉ trả về JSON theo đúng cấu trúc:
           });
           if (giaHungCs2Cust) {
             matchedCustomerId = giaHungCs2Cust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "Giảng võ" nếu AI nhận diện là giang vo, giang do, giang đo, giang đỏ, giang đô...
+        if (
+          cleanDetected.includes('giang vo') ||
+          cleanDetected.includes('giang do') ||
+          cleanDetected.includes('giang đô') ||
+          cleanDetected.includes('giang đo') ||
+          cleanDetected.includes('giang đỏ') ||
+          cleanDetected.includes('giang dỏ') ||
+          cleanDetected.includes('giang võ') ||
+          cleanDetected.includes('giảng võ') ||
+          cleanDetectedNoSpace === 'giangvo' ||
+          cleanDetectedNoSpace === 'giangdo' ||
+          cleanDetectedNoSpace === 'giangđo' ||
+          cleanDetectedNoSpace === 'giangđỏ' ||
+          cleanDetectedNoSpace === 'giangđô' ||
+          cleanDetectedNoSpace.includes('giangvo') ||
+          cleanDetectedNoSpace.includes('giangdo') ||
+          cleanDetectedNoSpace.includes('giangđo') ||
+          cleanDetectedNoSpace.includes('giangđỏ')
+        ) {
+          const giangVoCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean === 'giang vo' || cClean.includes('giang vo');
+          });
+          if (giangVoCust) {
+            matchedCustomerId = giangVoCust.id;
           }
         }
       }
