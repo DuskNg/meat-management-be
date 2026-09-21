@@ -7,9 +7,9 @@ const callGeminiWithRetry = async ({
   contents,
   systemInstruction = null,
   generationConfig = {},
-  models = ['gemini-2.5-flash', 'gemini-3.1-pro-preview'],
+  models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'],
   apiKey = process.env.GEMINI_API_KEY,
-  maxRetries = 2,
+  maxRetries = 3,
 }) => {
   const activeKey = apiKey || process.env.GEMINI_API_KEY;
   if (!activeKey) {
@@ -62,7 +62,7 @@ const callGeminiWithRetry = async ({
 
         // Nếu lỗi 503 (Quá tải) hoặc 429 (Giới hạn tốc độ) và còn lượt retry
         if ((statusCode === 503 || statusCode === 429) && attempt < maxRetries) {
-          const delayMs = (attempt + 1) * 1000;
+          const delayMs = (attempt + 1) * 2000 + Math.floor(Math.random() * 1000);
           console.warn(`[GEMINI ${model}] Gặp lỗi ${statusCode}, đang thử lại sau ${delayMs}ms (Lần ${attempt + 1}/${maxRetries})...`);
           await new Promise((res) => setTimeout(res, delayMs));
           continue;
