@@ -699,8 +699,11 @@ const getBranchesDebtByMonth = async (req, res, next) => {
       }
     }
 
-    const startOfMonth = new Date(targetYear, targetMonth - 1, 1, 0, 0, 0, 0);
-    const endOfMonth = new Date(targetYear, targetMonth, 0, 23, 59, 59, 999);
+    // Chuẩn hóa mốc thời gian bắt đầu và kết thúc tháng theo đúng múi giờ Việt Nam (UTC+7)
+    // Đầu tháng: 00:00:00 ngày 1 (giờ VN) = 17:00:00 ngày cuối tháng trước (giờ UTC)
+    // Cuối tháng: 23:59:59.999 ngày cuối tháng (giờ VN) = 16:59:59.999 ngày cuối tháng (giờ UTC)
+    const startOfMonth = new Date(Date.UTC(targetYear, targetMonth - 1, 1, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+    const endOfMonth = new Date(Date.UTC(targetYear, targetMonth, 0, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
     const formattedMonth = `${String(targetMonth).padStart(2, '0')}/${targetYear}`;
 
     let grandTotalDebt = 0;
