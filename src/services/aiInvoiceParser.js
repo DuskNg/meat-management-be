@@ -645,6 +645,10 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      + BẮT BUỘC đặt "note": "[Trả lại hàng]".
      + Vẫn bóc tách chính xác customer_name và danh sách các món thịt (name, quantity, price, amount).
      + TUYỆT ĐỐI CẤM đưa các chữ "trả", "trả hàng", "gửi về", "trả về", "trả lại", "hàng trả" vào tên khách hàng hay tên món thịt!
+   - ĐẶC BIỆT QUY TẮC RIÊNG CHO KHÁCH HÀNG "CHỊ TUYẾT" (HOẶC "TUYẾT"):
+     + Khi hóa đơn / tích kê là của khách hàng "Chị Tuyết" (hoặc "Tuyết"): nếu có chữ viết tay "gửi về", "trả về", "trả lại", "gửi lại" mà KHÔNG ghi rõ tên món thịt (chỉ có số cân / kg, hoặc chỉ ghi "Chị Tuyết gửi về: 2.5", "Trả về 3.2", "Gửi về 1.8kg"):
+       => BẮT BUỘC nhận diện tên món thịt ("name") là: "Thịt chín" (hoặc "Chín")!
+       => TUYỆT ĐỐI CẤM để trống tên món thịt, cấm bỏ qua món, cấm đoán thành món khác khi khách Chị Tuyết gửi về / trả về!
 
 Chỉ trả về JSON theo đúng cấu trúc:
 {
@@ -1404,6 +1408,30 @@ Chỉ trả về JSON theo đúng cấu trúc:
     const isHuongCustomer = cleanCustDetected.includes('huong') ||
       (matchedCustomerId && customers.some((c) => c.id === matchedCustomerId && removeDiacritics(c.name.toLowerCase()).includes('huong')));
 
+        // Xử lý đặc thù cho khách hàng "Chị Tuyết": gửi về, trả về... mà không có tên thịt thì sẽ là thịt chín
+    const isTuyetCustomer = cleanCustDetected.includes('tuyet') ||
+      (matchedCustomerId && (
+        matchedCustomerId === '585fa225-f5e2-407d-89ea-c0afecc8263b' ||
+        customers.some((c) => c.id === matchedCustomerId && removeDiacritics(c.name.toLowerCase()).includes('tuyet'))
+      ));
+    const isReturnOrder = isReturn || Boolean(parsedResult?.is_return) || (parsedResult?.note && /(trả|gửi về|trả về|trả lại|gửi lại|hàng trả)/i.test(parsedResult.note));
+
+    if (isTuyetCustomer) {
+      const returnKeywordsRegex = /\b(trả hàng|gửi về|trả về|trả lại|gửi lại|hàng trả|thu hồi|bắn về|quay đầu|đổi trả|hoàn hàng|tra hang|gui ve|tra ve|tra lai|gui lai|hang tra|quay dau|doi tra|hoan hang|tra|trả)\b/gi;
+      rawItems.forEach((item) => {
+        const itemClean = removeDiacritics((item.name || '').toLowerCase().trim());
+        const cleanedName = (item.name || '').replace(returnKeywordsRegex, '').replace(/[-–—:()]/g, ' ').replace(/\s+/g, ' ').trim();
+        const cleanedClean = removeDiacritics(cleanedName.toLowerCase());
+        const isItemReturn = isReturnOrder || returnKeywordsRegex.test(item.name || '') || /(trả|gửi về|trả về|trả lại|gửi lại)/i.test(item.name || '');
+
+        if (isItemReturn || !itemClean || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', ''].includes(itemClean)) {
+          if (!cleanedClean || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', ''].includes(cleanedClean)) {
+            item.name = 'Thịt chín';
+          }
+        }
+      });
+    }
+
     if (isVideo && isHuongCustomer) {
       rawItems.forEach((item) => {
         const itemClean = removeDiacritics((item.name || '').toLowerCase().trim());
@@ -1430,7 +1458,7 @@ Chỉ trả về JSON theo đúng cấu trúc:
               if (item.price == null) item.price = customerPriceMap.get(firstProdId);
             }
           } else if (cleanCustDetected.includes('tuyet')) {
-            item.name = 'Thăn';
+            item.name = isReturnOrder ? 'Thịt chín' : 'Thăn';
           } else if (cleanCustDetected.includes('hai')) {
             item.name = 'Thịt lạm';
           } else if (cleanCustDetected.includes('tuong') || cleanCustDetected.includes('luyen')) {
@@ -1663,6 +1691,13 @@ Chỉ trả về JSON theo đúng cấu trúc:
         .replace(/\b(lay them|lấy thêm|lay|lấy|them|thêm|cho chi tuyet|cho chị tuyết|chi tuyet|chị tuyết|cua chi tuyet|của chị tuyết|gui ve|gửi về|tra hang|trả hàng|tra ve|trả về|tra lai|trả lại|gui lai|gửi lại|hang tra|hàng trả|thu hoi|thu hồi|quay dau|quay đầu|doi tra|đổi trả|hoan hang|hoàn hàng|tra|trả)\b/gi, '')
         .trim();
       const cleanLower = removeDiacritics(cleanedRaw || rawLower);
+
+      // Quy tắc: chị tuyết gửi về, trả về... mà không có tên thịt thì sẽ là thịt chín
+      if (isTuyetCustomer && (isReturnOrder || /(trả|gửi về|trả về|trả lại|gửi lại|hàng trả)/i.test(rawOriginal))) {
+        if (!cleanedRaw || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai'].includes(cleanLower)) {
+          cleanedRaw = 'Thịt chín';
+        }
+      }
 
       // Ưu tiên chuẩn hóa theo quy tắc từ lóng
       const normalizedName =
