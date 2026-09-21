@@ -14,6 +14,25 @@ const notifyRecurringDebtUpdate = (userId, action, payload = {}) => {
   });
 };
 
+// Helper gửi socket event thông báo giao dịch / nợ khách hàng thay đổi
+const notifyCustomerUpdate = (userId, action, payload = {}) => {
+  emitWorkspaceEvent(userId, 'CUSTOMER_UPDATED', {
+    action,
+    userId,
+    timestamp: new Date().toISOString(),
+    ...payload,
+  });
+};
+
+// Helper lấy ngày hiện tại theo múi giờ Việt Nam (UTC+7) dạng YYYY-MM-DD
+const getVietnamDateKey = (date = new Date()) => {
+  const vnTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+  const year = vnTime.getUTCFullYear();
+  const month = String(vnTime.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(vnTime.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 // 1. Lấy danh sách các đơn nợ cố định hàng ngày
 const getRecurringDebts = async (req, res, next) => {
   try {
@@ -169,57 +188,97 @@ const createRecurringDebt = async (req, res, next) => {
       }
     }
 
-    // Lưu vào database
-    const newRecurringDebt = await prisma.recurringDebt.create({
-      data: {
-        userId,
-        createdBy: req.user.id,
-        customerId,
-        note: note || null,
-        totalAmount: calculatedTotal,
-        profitPercent: finalProfitPercent,
-        totalCost: finalTotalCost,
-        totalProfit: finalTotalProfit,
-        isActive: true,
-        items: {
-          create: formattedItems,
-        },
-      },
-      include: {
-        customer: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
+    // Lưu vào database và đồng thời tạo ngay 1 giao dịch nợ cho ngày hôm nay
+    const now = new Date();
+    const { newRecurringDebt, createdTx } = await prisma.$transaction(async (tx) => {
+      // 1. Tạo mẫu đơn nợ cố định (gắn lastGeneratedAt = now để 00:30 không bị sinh trùng lặp trong ngày hôm nay)
+      const recDebt = await tx.recurringDebt.create({
+        data: {
+          userId,
+          createdBy: req.user.id,
+          customerId,
+          note: note || null,
+          totalAmount: calculatedTotal,
+          profitPercent: finalProfitPercent,
+          totalCost: finalTotalCost,
+          totalProfit: finalTotalProfit,
+          isActive: true,
+          lastGeneratedAt: now,
+          items: {
+            create: formattedItems,
           },
         },
-        items: {
-          include: {
-            product: {
-              select: {
-                id: true,
-                name: true,
-                unit: true,
-                defaultPrice: true,
-                costPrice: true,
+        include: {
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+            },
+          },
+          items: {
+            include: {
+              product: {
+                select: {
+                  id: true,
+                  name: true,
+                  unit: true,
+                  defaultPrice: true,
+                  costPrice: true,
+                },
               },
             },
           },
         },
-      },
+      });
+
+      // 2. Tự động sinh ngay 1 đơn nợ thực tế vào bảng transactions cho ngày hôm nay
+      const txItemsData = formattedItems.map((item) => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        price: item.price,
+        costPrice: item.costPrice,
+        amount: item.amount,
+        profit: item.profit,
+      }));
+
+      const transaction = await tx.transaction.create({
+        data: {
+          userId,
+          createdBy: req.user.id,
+          customerId,
+          date: now,
+          note: note || 'Đơn nợ cố định hàng ngày (Tự động thêm vào ngày hôm nay)',
+          totalAmount: calculatedTotal,
+          profitPercent: finalProfitPercent,
+          totalCost: finalTotalCost,
+          totalProfit: finalTotalProfit,
+          type: 'customer',
+          items: {
+            create: txItemsData,
+          },
+        },
+      });
+
+      return { newRecurringDebt: recDebt, createdTx: transaction };
     });
 
     await logActivity(
       userId,
       'CREATE_RECURRING_DEBT',
-      `Tạo mẫu đơn nợ cố định hàng ngày cho khách hàng ${customer.name}: ${calculatedTotal.toLocaleString('vi-VN')}đ`
+      `Tạo mẫu đơn nợ cố định và tự động ghi nợ ngày hôm nay cho khách hàng ${customer.name}: ${calculatedTotal.toLocaleString('vi-VN')}đ`
     );
     notifyRecurringDebtUpdate(userId, 'CREATE_RECURRING_DEBT', { recurringDebtId: newRecurringDebt.id });
+    notifyCustomerUpdate(userId, 'CREATE_TRANSACTION', {
+      customerId,
+      transactionId: createdTx.id,
+    });
 
     res.status(201).json({
       success: true,
-      message: 'Tạo đơn nợ cố định hàng ngày thành công.',
+      message: 'Tạo đơn nợ cố định hàng ngày thành công và đã tự động lên đơn cho ngày hôm nay.',
       data: newRecurringDebt,
+      transaction: createdTx,
     });
   } catch (error) {
     next(error);
@@ -343,13 +402,18 @@ const updateRecurringDebt = async (req, res, next) => {
       }
     }
 
-    const updated = await prisma.$transaction(async (tx) => {
+    const now = new Date();
+    const todayKey = getVietnamDateKey(now);
+    const lastGenKey = existingDebt.lastGeneratedAt ? getVietnamDateKey(new Date(existingDebt.lastGeneratedAt)) : null;
+    const shouldGenerateToday = lastGenKey !== todayKey;
+
+    const { updated, createdTx } = await prisma.$transaction(async (tx) => {
       // Xóa các item cũ
       await tx.recurringDebtItem.deleteMany({
         where: { recurringDebtId: id },
       });
 
-      return tx.recurringDebt.update({
+      const updatedDebt = await tx.recurringDebt.update({
         where: { id },
         data: {
           customerId: targetCustomerId,
@@ -358,6 +422,7 @@ const updateRecurringDebt = async (req, res, next) => {
           profitPercent: finalProfitPercent,
           totalCost: finalTotalCost,
           totalProfit: finalTotalProfit,
+          ...(shouldGenerateToday ? { lastGeneratedAt: now } : {}),
           items: {
             create: formattedItems,
           },
@@ -385,7 +450,46 @@ const updateRecurringDebt = async (req, res, next) => {
           },
         },
       });
+
+      let newTx = null;
+      if (shouldGenerateToday) {
+        const txItemsData = formattedItems.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+          costPrice: item.costPrice,
+          amount: item.amount,
+          profit: item.profit,
+        }));
+
+        newTx = await tx.transaction.create({
+          data: {
+            userId,
+            createdBy: req.user.id,
+            customerId: targetCustomerId,
+            date: now,
+            note: note || 'Đơn nợ cố định hàng ngày (Tự động thêm vào ngày hôm nay)',
+            totalAmount: calculatedTotal,
+            profitPercent: finalProfitPercent,
+            totalCost: finalTotalCost,
+            totalProfit: finalTotalProfit,
+            type: 'customer',
+            items: {
+              create: txItemsData,
+            },
+          },
+        });
+      }
+
+      return { updated: updatedDebt, createdTx: newTx };
     });
+
+    if (createdTx) {
+      notifyCustomerUpdate(userId, 'CREATE_TRANSACTION', {
+        customerId: targetCustomerId,
+        transactionId: createdTx.id,
+      });
+    }
 
     const oldItemsSummary = (existingDebt.items || [])
       .map((it) => `${it.product?.name || 'Món'}: ${it.quantity}${it.product?.unit || 'kg'} x ${Number(it.price).toLocaleString('vi-VN')}đ`)

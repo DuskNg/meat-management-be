@@ -250,11 +250,15 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
       + Nếu đọc là "b2", "b 2", "bê hai", "bếp 2", "bếp hai": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 2".
       + Nếu đọc là "b3", "b 3", "bê ba", "bếp 3", "bếp ba": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 3".
       + Nếu đọc là "b4", "b 4", "bê bốn", "bếp 4", "bếp bốn", "vườn xanh", "nhà hàng vườn xanh": BẮT BUỘC trả về customer_name là: "Nhà hàng vườn xanh".
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HÀ TRÌ" (CỰC KỲ QUAN TRỌNG — PHÂN BIỆT VỚI "CHỊ HẠNH SÂN BÓNG HÀ TRÌ" VÀ "CỒ HẢI"):
-      + BẤT KỲ VIDEO NÀO NGƯỜI NÓI ĐỌC LÀ "HÀ TRÌ" (hoặc "Hà Trì", "Hà trì", "quán Hà Trì", "anh Hà Trì", "cô Hà Trì", "cô hà trì", "co ha tri", "co ha ti", "ha tri", "ha ti"):
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HÀ TRÌ" (PHÂN BIỆT VỚI "CHỊ HẠNH SÂN BÓNG HÀ TRÌ" VÀ "CỒ HẢI"):
+      + BẤT KỲ VIDEO NÀO NGƯỜI NÓI ĐỌC LÀ "HÀ TRÌ" (hoặc "Hà Trì", "Hà trì", "quán Hà Trì", "anh Hà Trì", "cô Hà Trì", "cô hà trì", "co ha tri", "ha tri", "ha ti"):
       + BẮT BUỘC nhận diện và trả về customer_name là: "Hà Trì".
       + TUYỆT ĐỐI KHÔNG ĐƯỢC NHẬN NHẦM THÀNH "Chị hạnh sân bóng hà trì"! Vì nếu là khách "Chị hạnh sân bóng hà trì" thì người nói sẽ đọc là "chị Hạnh" (hoặc "Hạnh", "chị Hạnh sân bóng"). Khi người nói đọc là "Hà Trì" thì 100% là khách "Hà Trì".
-      + TUYỆT ĐỐI KHÔNG nhầm thành "Cồ Hải" hay khách khác (khi người nói đọc nhanh "cô Hà Trì", nuốt âm thành "cô ha trì" hoặc âm gần như "cồ hải", hệ thống vẫn PHẢI nhận diện đúng là "Hà Trì").
+      + TUYỆT ĐỐI KHÔNG gán nhầm sang khách "Cồ Hải" (nếu người nói đọc là "Cồ Hải", "Cổ Hải" thì đó là khách "Cồ hải" riêng biệt, tuyệt đối không gán sang "Hà Trì").
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CỒ HẢI" / "CỔ HẢI" (CỰC KỲ QUAN TRỌNG):
+      + BẤT KỲ VIDEO NÀO NGƯỜI NÓI ĐỌC LÀ "CỒ HẢI", "Cổ Hải", "cồ hải", "cổ hải", "Cồ hải", "anh Hải", "quán Cồ Hải", "quán Cổ Hải":
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Cồ hải" (hoặc "Cồ Hải").
+      + TUYỆT ĐỐI KHÔNG nhận nhầm sang "Hà Trì" hay khách khác!
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CHỊ HẠNH SÂN BÓNG HÀ TRÌ":
       + Chỉ khi nào người nói đọc là "chị Hạnh", "chị hạnh", "Hạnh", "Hạnh sân bóng", "chị Hạnh sân bóng", "chị Hạnh hà trì", "sân bóng": BẮT BUỘC mới nhận diện và trả về customer_name là: "Chị hạnh sân bóng hà trì".
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HUYỀN ĐÔ NGHĨA":
@@ -462,7 +466,15 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      + "Tai" hoặc "Tái" (chữ T hoa uốn lượn viết liền chữ ái): BẮT BUỘC trả về tên là "Tái (Bò)".
      + "bắp" hoặc "Bắp": BẮT BUỘC trả về tên là "Bắp Bò".
      + "Lá" / "lá" / "la" / "lá vai" / "la vai" / "thịt la" / "thịt lá" / "thịt la vai": Chữ "L" hoa thảo nét cong cao nối liền chữ "á" hoặc "a" (có thể kèm "vai") -> BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "thịt la vai".
-     + "Sườn" / "suon" / "sườn bò": Chữ "S" hoa to lượn sóng mềm mại, "ườn" viết liền nét có dấu huyền -> BẮT BUỘC trả về tên là: "Sườn".
+      + "Sườn" / "suon" / "sườn bò": Chữ "S" hoa to lượn sóng mềm mại, "ườn" viết liền nét có dấu huyền -> BẮT BUỘC trả về tên là: "Sườn".
+      + PHÂN TÍCH ĐẶC TẢ NÉT CHỮ MÓN "SƯỜN XG" ("xườn xg" / "sườn xg" / "sườn xương"):
+        * Chữ viết tay thực tế: Người viết viết theo thói quen địa phương dùng chữ "x" thay vì "s", viết thành "xườn xg" (hoặc "xườn xương").
+        * Đặc trưng thị giác nét chữ:
+          1) Chữ thứ 1: Bắt đầu bằng chữ "x" viết thường nét lượn cong mềm chéo; tiếp theo là chữ "ư" có móc râu tròn trên đầu và có dấu huyền nhỏ phía trên; tiếp theo nối liền các nét sóng uốn lượn của "ơ-n" (nhìn lướt qua AI OCR rất dễ đọc nhầm thành "x lơn", "xlan", "xldn", "xion", "xian", "xuan", "xơm", "xơn").
+          2) Chữ thứ 2: Chữ "x" nối tiếp chữ "g" viết thảo với vòng tròn bên trên và một nét đuôi sổ thòng sâu xuống dưới dòng kẻ chấm rồi móc lượn sang phải (hoặc viết thảo "xương" -> "xg"). AI OCR rất dễ đọc nhầm thành "xdung", "xldug", "xlang", "xlơng", "xdug", "xling", "x lơng").
+          3) Cột số lượng / số cân bên cạnh: Ví dụ con số viết tay "30" -> số lượng (quantity): 30.
+        * QUY TẮC BẮT BUỘC: Khi ở cột Tên hàng hóa có chữ viết tay nhìn giống "xườn xg", "sườn xg", "x lơn x lơng", "xldn xldug", "xlan xg", "xuan xg", "xuon xg", "sườn xương", "suon xg", "xườn xương", "x lơng", "xian xdang", "s xg", "x xg":
+          => BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Sườn xg", số lượng (quantity) là con số bên cạnh (ví dụ: 30).
      + "bò xay" / "bo xay" / "vai xay" / "thịt bò xay" / "xay": BẮT BUỘC trả về tên là: "Vai xay".
       + PHÂN TÍCH NÉT CHỮ MÓN "BÊ" -> "BÊ BA CHỈ" (CỰC KỲ QUAN TRỌNG):
         * Nét chữ viết tay: Chữ "b" có nét khuyết trên vươn rất cao lên tận mép trên của dòng, thân thẳng đứng, bụng dưới tròn có nét thắt loop nhỏ; chữ "e" viết liền mạch hình bầu dục nhỏ nằm sát bên phải nét thắt, phía trên đầu chữ "e" có nét phẩy hoặc dấu mũ nhỏ (nhìn giống "bê", "be", "bè", "bé", "bc", "b.").
@@ -591,6 +603,9 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HÀ TRÌ" (PHÂN BIỆT VỚI "CHỊ HẠNH SÂN BÓNG HÀ TRÌ" VÀ "CỒ HẢI"):
       + Khi trên tích kê / hóa đơn ghi chữ "Hà Trì", "Hà trì", "cô Hà Trì", "cô hà trì", "Hà tri", "ha tri", "cô Trì":
       + BẮT BUỘC nhận diện và trả về customer_name là: "Hà Trì". TUYỆT ĐỐI KHÔNG nhầm sang "Chị hạnh sân bóng hà trì" (trừ khi có ghi rõ chữ "Hạnh" hoặc "chị Hạnh") và TUYỆT ĐỐI KHÔNG nhầm sang "Cồ Hải".
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CỒ HẢI" / "CỔ HẢI":
+      + Khi trên tích kê / hóa đơn ghi chữ "Cồ Hải", "cồ hải", "Cổ Hải", "cổ hải", "Cồ hải", "quán Cồ Hải":
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Cồ hải" (hoặc "Cồ Hải"). TUYỆT ĐỐI KHÔNG nhầm sang "Hà Trì"!
     - Ngày hóa đơn: Đọc ở dòng góc dưới "Ngày [ngày] tháng [tháng] năm 20[năm]" (ví dụ: "16/09/2026").
     - Bỏ qua các nét gạch chéo, nét cong sổ dài khóa hóa đơn, không nhận nhầm thành chữ số.
 4. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):
@@ -1093,6 +1108,30 @@ Chỉ trả về JSON theo đúng cấu trúc:
       }
 
       if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "Cồ Hải" (Cổ Hải) nếu AI nhận diện là cồ hải, cổ hải, co hai...
+        if (
+          cleanDetected.includes('co hai') ||
+          cleanDetectedNoSpace.includes('cohai') ||
+          cleanDetected === 'co hai' ||
+          cleanDetectedNoSpace === 'cohai'
+        ) {
+          const coHaiCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean === 'co hai' && c.isActive && !c.isBadDebt;
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean === 'co hai';
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('co hai');
+          });
+          if (coHaiCust) {
+            matchedCustomerId = coHaiCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
         // Khớp ưu tiên khách "Hà Trì" nếu AI nhận diện là ha tri, ha li, ha lu, ha thi...
         if (
           cleanDetected.includes('ha tri') ||
@@ -1356,6 +1395,30 @@ Chỉ trả về JSON theo đúng cấu trúc:
       's': 'Sườn',
       'suon': 'Sườn',
       'suon bo': 'Sườn',
+      // Sườn xg (xườn xg, sườn xg, sườn xương, x lơn x lơng, xldn xldug...)
+      'suon xg': 'Sườn xg',
+      'sườn xg': 'Sườn xg',
+      'xuon xg': 'Sườn xg',
+      'xườn xg': 'Sườn xg',
+      'suon xuong': 'Sườn xg',
+      'sườn xương': 'Sườn xg',
+      'xuon xuong': 'Sườn xg',
+      'xườn xương': 'Sườn xg',
+      'x lon x long': 'Sườn xg',
+      'x lơn x lơng': 'Sườn xg',
+      'xldn xldug': 'Sườn xg',
+      'xlan xg': 'Sườn xg',
+      'xuan xg': 'Sườn xg',
+      'xion xg': 'Sườn xg',
+      'xian xg': 'Sườn xg',
+      'xian xdang': 'Sườn xg',
+      'x long': 'Sườn xg',
+      'x lơng': 'Sườn xg',
+      'xdug': 'Sườn xg',
+      's xg': 'Sườn xg',
+      'sườn x': 'Sườn xg',
+      'suon x': 'Sườn xg',
+      'x xg': 'Sườn xg',
       // Ánh xạ thịt xô
       'xo': 'xô',
       'thit xo': 'xô',

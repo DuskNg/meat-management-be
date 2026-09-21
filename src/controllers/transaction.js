@@ -802,7 +802,7 @@ Hãy đọc thêm trường "Tên khách hàng" ở phía trên bảng (thườn
 
 Hãy tập trung phân tích BẢNG CHI TIẾT HÀNG HÓA trong hình ảnh. Bảng gồm các cột:
 - STT (Số thứ tự): có thể có hoặc trống.
-- Tên hàng hóa: Tên loại thịt/sản phẩm viết tay (Ví dụ: "Tai", "X", "Tiết").
+- Tên hàng hóa: Tên loại thịt/sản phẩm viết tay (Ví dụ: "Tai", "X", "Tiết"). Đặc biệt lưu ý chữ viết tay địa phương/viết tắt: ví dụ "xườn xg" (nét chữ thảo nhìn lướt qua dễ nhầm thành "x lơn x lơng", "xldn xldug", "xlan xg", "xuan xg", "x lơng") chính là món "Sườn xg" (Sườn xương). Nếu có số bên cạnh (ví dụ: 30) thì ghi nhận quantity = 30.
 - Số lượng: Số lượng (thường tính bằng kg hoặc cái). Có thể sử dụng dấu phẩy làm dấu thập phân (Ví dụ: "2,04" -> 2.04). Nếu trống nhưng có thành tiền, hãy mặc định số lượng là 1.
 - Đơn giá: Giá tiền mỗi đơn vị. NẾU KHÔNG GHI ĐƠN GIÁ, hãy tính Đơn giá = Thành tiền / Số lượng (làm tròn thành số nguyên).
 - Thành tiền: Tổng số tiền cuối cùng của dòng đó. Chữ số viết tay thường ghi tắt hàng nghìn (Ví dụ: "490" nghĩa là 490000, "202" nghĩa là 202000, "43" nghĩa là 43000). Hãy nhân giá trị này với 1,000 để ra số tiền thực tế đầy đủ đơn vị VNĐ.
@@ -1339,7 +1339,7 @@ const uploadBatchInvoices = async (req, res, next) => {
 
     // Xử lý song song các tệp trong lô để tối ưu thời gian tải lên Cloudinary
     const uploadPromises = items.map(async (item, index) => {
-      const { customerId, date, imageBase64, note } = item;
+      const { customerId, date, imageBase64, note, transactionId } = item;
 
       if (!customerId) {
         throw new BadRequestError(`Tệp số ${index + 1} chưa được chọn khách hàng.`);
@@ -1435,15 +1435,26 @@ const uploadBatchInvoices = async (req, res, next) => {
       const startUTC = new Date(Date.UTC(year, monthVal, dayVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
       const endUTC = new Date(Date.UTC(year, monthVal, dayVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
 
-      // Tìm đơn nợ Transaction của khách này trong ngày để đính kèm
-      const existingTransaction = await prisma.transaction.findFirst({
-        where: {
-          userId,
-          customerId,
-          date: { gte: startUTC, lte: endUTC },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
+      // Tìm đơn nợ Transaction của khách này để đính kèm (ưu tiên theo transactionId đích nếu có)
+      let existingTransaction = null;
+      if (transactionId) {
+        existingTransaction = await prisma.transaction.findFirst({
+          where: {
+            id: transactionId,
+            userId,
+          },
+        });
+      }
+      if (!existingTransaction) {
+        existingTransaction = await prisma.transaction.findFirst({
+          where: {
+            userId,
+            customerId,
+            date: { gte: startUTC, lte: endUTC },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
 
       const invoiceRecord = await prisma.transactionInvoice.create({
         data: {

@@ -64,10 +64,10 @@ const getPublicLinkInfo = async (req, res, next) => {
 
     const userId = link.userId;
 
-    // Lấy song song danh sách khách hàng và sản phẩm của chủ buôn
+    // Lấy song song danh sách khách hàng hoạt động bình thường (loại trừ nợ xấu) và sản phẩm của chủ buôn
     const [customers, products] = await Promise.all([
       prisma.customer.findMany({
-        where: { userId, isActive: true },
+        where: { userId, isActive: true, isBadDebt: false },
         select: { id: true, name: true, phone: true, address: true },
         orderBy: { name: 'asc' },
       }),
