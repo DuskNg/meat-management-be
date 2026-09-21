@@ -58,6 +58,12 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
+// Middleware lưu trữ ngữ cảnh request bất đồng bộ (phục vụ tự động ghi nhận thiết bị vào nhật ký hoạt động)
+const { requestStorage } = require('./utils/requestContext');
+app.use((req, res, next) => {
+  requestStorage.run({ req }, next);
+});
+
 // Cấu hình Rate Limiter chung cho toàn bộ ứng dụng (chặn Spam)
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 phút

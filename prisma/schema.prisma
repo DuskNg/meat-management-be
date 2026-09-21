@@ -349,6 +349,7 @@ model ActivityLog {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   action    String   // Loại hành động (ví dụ: 'CREATE_TRANSACTION', 'DELETE_PAYMENT')
   details   String   // Chi tiết mô tả hành động
+  device    String?  // Thiết bị thực hiện thao tác (ví dụ: 'iPhone 11', 'PC Windows'...)
   createdAt DateTime @default(now()) // Thời gian thực hiện hành động
 
   @@index([userId])
