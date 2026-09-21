@@ -473,14 +473,16 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      + "bắp" hoặc "Bắp": BẮT BUỘC trả về tên là "Bắp Bò".
      + "Lá" / "lá" / "la" / "lá vai" / "la vai" / "thịt la" / "thịt lá" / "thịt la vai": Chữ "L" hoa thảo nét cong cao nối liền chữ "á" hoặc "a" (có thể kèm "vai") -> BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "thịt la vai".
       + "Sườn" / "suon" / "sườn bò": Chữ "S" hoa to lượn sóng mềm mại, "ườn" viết liền nét có dấu huyền -> BẮT BUỘC trả về tên là: "Sườn".
-      + PHÂN TÍCH ĐẶC TẢ NÉT CHỮ MÓN "SƯỜN XG" ("xườn xg" / "sườn xg" / "sườn xương"):
-        * Chữ viết tay thực tế: Người viết viết theo thói quen địa phương dùng chữ "x" thay vì "s", viết thành "xườn xg" (hoặc "xườn xương").
-        * Đặc trưng thị giác nét chữ:
-          1) Chữ thứ 1: Bắt đầu bằng chữ "x" viết thường nét lượn cong mềm chéo; tiếp theo là chữ "ư" có móc râu tròn trên đầu và có dấu huyền nhỏ phía trên; tiếp theo nối liền các nét sóng uốn lượn của "ơ-n" (nhìn lướt qua AI OCR rất dễ đọc nhầm thành "x lơn", "xlan", "xldn", "xion", "xian", "xuan", "xơm", "xơn").
-          2) Chữ thứ 2: Chữ "x" nối tiếp chữ "g" viết thảo với vòng tròn bên trên và một nét đuôi sổ thòng sâu xuống dưới dòng kẻ chấm rồi móc lượn sang phải (hoặc viết thảo "xương" -> "xg"). AI OCR rất dễ đọc nhầm thành "xdung", "xldug", "xlang", "xlơng", "xdug", "xling", "x lơng").
-          3) Cột số lượng / số cân bên cạnh: Ví dụ con số viết tay "30" -> số lượng (quantity): 30.
-        * QUY TẮC BẮT BUỘC: Khi ở cột Tên hàng hóa có chữ viết tay nhìn giống "xườn xg", "sườn xg", "x lơn x lơng", "xldn xldug", "xlan xg", "xuan xg", "xuon xg", "sườn xương", "suon xg", "xườn xương", "x lơng", "xian xdang", "s xg", "x xg":
-          => BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Sườn xg", số lượng (quantity) là con số bên cạnh (ví dụ: 30).
+       + PHÂN TÍCH ĐẶC TẢ NÉT CHỮ MÓN "SƯỜN XG" (CẢ DẠNG "SƯỜN XG" LẪN "XƯỜN XG"):
+         * Đặc trưng thị giác chữ viết tay:
+           1) Từ thứ 1: Chữ "S" in hoa uốn lượn cong to mềm mại vươn cao, theo sau là nét "ườn" viết thảo có nét dấu huyền "\" khá dài chém nghiêng phía trên, kết thúc bằng chữ "n" móc tròn xuống dòng (AI OCR rất dễ nhìn nhầm thành: "Sườn", "Suon", "Scion", "Sian", "Sùn", "Scòn", "Siơn", hoặc người viết theo phương ngữ địa phương dùng chữ "x" viết thành "xườn", "x lơn", "xldn", "xuan", "xian", "x long").
+           2) Từ thứ 2: Viết tắt "xG" hoặc "xg" (nghĩa là "xương"):
+              - Ký tự đầu: Chữ "x" hai nét chéo giao nhau (viết nhanh nét chéo nhìn giống chữ "k" / "K").
+              - Ký tự sau: Chữ "G" hoa tròn có nét sổ thẳng và CÓ NÉT GẠCH CHÂN NGANG "_" Ở ĐÁY.
+              - CẢNH BÁO OCR CỰC KỲ NGUY HIỂM: Nét viết "xG" (kèm gạch chân) này rất dễ khiến AI OCR nhìn nhầm thành chữ "KG", "kg", "k.g", "x.g", "xq" (và bị AI hiểu lầm thành đơn vị tính Kilogram).
+         * QUY TẮC BẮT BUỘC: Khi ở cột Tên hàng hóa nhìn thấy chữ viết tay dạng:
+           "Sườn xg", "Sườn xG", "Sườn KG", "Sườn kg", "Suon kg", "Suon KG", "Sườn k.g", "Sườn x.g", "Sườn xq", "Scion kg", "Scion xg", "Sian xg", "Sian kg", "Sùn xg", "Sùn kg", "Scòn xg", "Siơn xg", "xườn xg", "xườn xương", "sườn xương", "x lơn x lơng", "xldn xldug", "xlan xg", "xuan xg", "s xg", "s kg":
+           => BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Sườn xg", số lượng (quantity) là con số bên cạnh.
      + "bò xay" / "bo xay" / "vai xay" / "thịt bò xay" / "xay": BẮT BUỘC trả về tên là: "Vai xay".
       + PHÂN TÍCH NÉT CHỮ MÓN "BÊ" -> "BÊ BA CHỈ" (CỰC KỲ QUAN TRỌNG):
         * Nét chữ viết tay: Chữ "b" có nét khuyết trên vươn rất cao lên tận mép trên của dòng, thân thẳng đứng, bụng dưới tròn có nét thắt loop nhỏ; chữ "e" viết liền mạch hình bầu dục nhỏ nằm sát bên phải nét thắt, phía trên đầu chữ "e" có nét phẩy hoặc dấu mũ nhỏ (nhìn giống "bê", "be", "bè", "bé", "bc", "b.").
@@ -1496,6 +1498,28 @@ Chỉ trả về JSON theo đúng cấu trúc:
       'sườn x': 'Sườn xg',
       'suon x': 'Sườn xg',
       'x xg': 'Sườn xg',
+      'sườn kg': 'Sườn xg',
+      'suon kg': 'Sườn xg',
+      'sườn k.g': 'Sườn xg',
+      'suon k.g': 'Sườn xg',
+      'sườn x.g': 'Sườn xg',
+      'suon x.g': 'Sườn xg',
+      'sườn xq': 'Sườn xg',
+      'suon xq': 'Sườn xg',
+      'scion xg': 'Sườn xg',
+      'scion kg': 'Sườn xg',
+      'sian xg': 'Sườn xg',
+      'sian kg': 'Sườn xg',
+      'sun xg': 'Sườn xg',
+      'sùn xg': 'Sườn xg',
+      'sùn kg': 'Sườn xg',
+      'sun kg': 'Sườn xg',
+      'scon xg': 'Sườn xg',
+      'scòn xg': 'Sườn xg',
+      'sion xg': 'Sườn xg',
+      'siơn xg': 'Sườn xg',
+      's kg': 'Sườn xg',
+      's.kg': 'Sườn xg',
       // Ánh xạ thịt xô
       'xo': 'xô',
       'thit xo': 'xô',
