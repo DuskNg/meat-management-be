@@ -636,6 +636,19 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
       => BẮT BUỘC nhận diện và trả về customer_name là: "794 láng hạ" (hoặc so khớp với "the industree(794 đường láng)").
       => TUYỆT ĐỐI CẤM NHẬN DIỆN THÀNH "Cuốn láng hạ"!
       => CHỈ KHI NÀO chữ đầu tiên viết tay rõ ràng bằng chữ cái "Cuốn", "Cuon", "Cươn" (hoàn toàn không có chữ số 794) thì mới là khách "Cuốn láng hạ".
+    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "126 NGUYỄN KHÁNH TOÀN":
+      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:" (ngay cạnh chữ in "ch hàng:........"):
+        1) 3 CON SỐ ĐẦU TIÊN LÀ "126":
+           - Số "1": Nét sổ thẳng đứng hoặc hơi nghiêng nhẹ sang phải dứt khoát từ trên xuống.
+           - Số "2": Vòng cung trên tròn uốn xuống chéo trái, đặc biệt ở góc chân có VÒNG XOẮN THẮT NÚT (loop) nhỏ rồi vung ngang sang phải.
+           - Số "6": Nét cao từ trên uốn cong nhẹ sang trái rồi kéo xuống đáy, vòng cung tròn khép kín hoàn toàn vào thân ở bụng dưới.
+           - Tuyệt đối không đọc nhầm số "126" thành "120", "12b", "128", "124", "16" hay "12C".
+        2) CỤM CHỮ TIẾP THEO LÀ "Nguyễn Khánh Toàn":
+           - Chữ "N" hoa nét to rộng móc nối sang "g", đuôi chữ "g" thòng sâu xuống dưới dòng kẻ.
+           - Chữ "K" hoa nét thẳng đứng cao vượt trội, nối sang "h", vần "ánh" có dấu sắc.
+           - Chữ "T" hoa nét vòm lượn sóng cổ điển trên đầu nối sang "oàn".
+      + QUY TẮC BẮT BUỘC: Khi đọc được cụm chữ số "126", hoặc "126 nguyễn khánh toàn", "126 khánh toàn", "nguyễn khánh toàn", "khanh toan":
+      => BẮT BUỘC nhận diện và trả về customer_name là: "126 nguyễn khánh toàn" (để hệ thống khớp chính xác vào khách hàng trong danh bạ).
     - Ngày hóa đơn: Đọc ở dòng góc dưới "Ngày [ngày] tháng [tháng] năm 20[năm]" (ví dụ: "16/09/2026").
     - Bỏ qua các nét gạch chéo, nét cong sổ dài khóa hóa đơn, không nhận nhầm thành chữ số.
 4. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):
