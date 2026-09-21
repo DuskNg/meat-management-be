@@ -91,7 +91,7 @@ const fetchFileAsBase64 = async (url) => {
             mimeType = 'video/webm';
           }
         }
-      } catch {}
+      } catch { }
     }
 
     return {
@@ -529,15 +529,6 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      * Trường hợp hóa đơn có số tiền ở cột "Thành tiền" của từng món: lấy amount = số tiền ở cột Thành tiền * 1000.
      * Trường hợp hóa đơn chỉ có duy nhất 1 con số tổng cộng ở đáy (ví dụ "1146" hay "3814"): trả về 1 dòng "Thịt lẻ" với price = amount = tổng tiền * 1000, quantity = 1.
      * Trường hợp hóa đơn ghi rõ số kg thập phân (ví dụ "5,2" hoặc "1,95") và đơn giá thông thường: tính amount = Math.round(quantity * price).
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN BIỆT SỐ CÂN "4.9" VỚI "1.9":
-      + Quan sát nét chữ số 4 viết thảo ở cột "Số lượng" / số cân:
-        1) Nét 1: Nét xiên chéo dài từ trên cao vươn sát mép chữ in kéo xuống dưới trái.
-        2) Nét 2: Nét gập ngang thắt góc nhọn ở thân tạo thành khoảng tam giác khép kín ở bụng số 4.
-        3) Nét 3: Nét sổ dọc cắt qua nét ngang kéo thẳng xuống đáy tạo thành 2 NHÁNH CHÂN RÕ RỆT (nhánh chân xiên bên trái và nhánh chân thẳng đứng bên phải).
-      + NGUYÊN NHÂN AI DỄ BỊ ẢO GIÁC NHÌN NHẦM THÀNH "1.9": Do nét xiên chéo trên đỉnh kéo rất dài và nổi bật, OCR dễ nhìn nhầm nét xiên đó thành thân số "1", còn phần thắt ngang và 2 chân phía dưới bị coi là chân đế của số "1".
-      + QUY TẮC BẮT BUỘC: Khi nhìn thấy con số có 2 nhánh chân chĩa xuống đáy dòng kẻ và có nét thắt ngang/tam giác ở thân, theo sau là dấu phẩy/chấm và số 9 cong tròn:
-      => BẮT BUỘC nhận diện khối lượng (quantity) là: 4.9 (hoặc "4.9" kg)!
-      => TUYỆT ĐỐI CẤM NHẬN DIỆN THÀNH 1.9!
 
 3. TÊN KHÁCH HÀNG & NGÀY THÁNG:
    - Tên khách hàng: Thường nằm ở dòng "Tên khách hàng:" (ví dụ: "A Thang", "Yến Mễ Trì", "Lam nghi"...). Hãy so khớp với danh sách khách hàng quen thuộc ở trên. Nếu không rõ, trả về null.
@@ -645,19 +636,6 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
       => BẮT BUỘC nhận diện và trả về customer_name là: "794 láng hạ" (hoặc so khớp với "the industree(794 đường láng)").
       => TUYỆT ĐỐI CẤM NHẬN DIỆN THÀNH "Cuốn láng hạ"!
       => CHỈ KHI NÀO chữ đầu tiên viết tay rõ ràng bằng chữ cái "Cuốn", "Cuon", "Cươn" (hoàn toàn không có chữ số 794) thì mới là khách "Cuốn láng hạ".
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "126 NGUYỄN KHÁNH TOÀN":
-      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:" (ngay cạnh chữ in "ch hàng:........"):
-        1) 3 CON SỐ ĐẦU TIÊN LÀ "126":
-           - Số "1": Nét sổ thẳng đứng hoặc hơi nghiêng nhẹ sang phải dứt khoát từ trên xuống.
-           - Số "2": Vòng cung trên tròn uốn xuống chéo trái, đặc biệt ở góc chân có VÒNG XOẮN THẮT NÚT (loop) nhỏ rồi vung ngang sang phải.
-           - Số "6": Nét cao từ trên uốn cong nhẹ sang trái rồi kéo xuống đáy, vòng cung tròn khép kín hoàn toàn vào thân ở bụng dưới.
-           - Tuyệt đối không đọc nhầm số "126" thành "120", "12b", "128", "124", "16" hay "12C".
-        2) CỤM CHỮ TIẾP THEO LÀ "Nguyễn Khánh Toàn":
-           - Chữ "N" hoa nét to rộng móc nối sang "g", đuôi chữ "g" thòng sâu xuống dưới dòng kẻ.
-           - Chữ "K" hoa nét thẳng đứng cao vượt trội, nối sang "h", vần "ánh" có dấu sắc.
-           - Chữ "T" hoa nét vòm lượn sóng cổ điển trên đầu nối sang "oàn".
-      + QUY TẮC BẮT BUỘC: Khi đọc được cụm chữ số "126", hoặc "126 nguyễn khánh toàn", "126 khánh toàn", "nguyễn khánh toàn", "khanh toan":
-      => BẮT BUỘC nhận diện và trả về customer_name là: "126 nguyễn khánh toàn" (để hệ thống khớp chính xác vào khách hàng trong danh bạ).
     - Ngày hóa đơn: Đọc ở dòng góc dưới "Ngày [ngày] tháng [tháng] năm 20[năm]" (ví dụ: "16/09/2026").
     - Bỏ qua các nét gạch chéo, nét cong sổ dài khóa hóa đơn, không nhận nhầm thành chữ số.
 4. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):
@@ -667,17 +645,6 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      + BẮT BUỘC đặt "note": "[Trả lại hàng]".
      + Vẫn bóc tách chính xác customer_name và danh sách các món thịt (name, quantity, price, amount).
      + TUYỆT ĐỐI CẤM đưa các chữ "trả", "trả hàng", "gửi về", "trả về", "trả lại", "hàng trả" vào tên khách hàng hay tên món thịt!
-   - PHÂN BIỆT RÕ MÓN "TRÀNG BÒ" (TUYỆT ĐỐI CẤM NHẬN NHẦM THÀNH "QUẢ TRẮNG" HAY "TRẮNG BÒ"):
-     + Quan sát nét chữ viết tay:
-       1) Chữ thứ 1 "Tràng": Chữ "Tr" viết hoa kiểu thảo lượn sóng mềm mại nối liền sang "ang", đuôi chữ "g" thòng sâu xuống dưới dòng kẻ, có nét dấu huyền "\" trên đầu.
-       2) Chữ thứ 2 "bò": Chữ "b" vươn cao bụng tròn nối sang chữ "o" có dấu huyền "\".
-     + BẮT BUỘC nhận diện tên món thịt là "Tràng bò" (hoặc "Tràng").
-     + TUYỆT ĐỐI CẤM đọc thành "Quả trắng" hay "Trắng bò"!
-
-   - ĐẶC BIỆT QUY TẮC RIÊNG CHO KHÁCH HÀNG "CHỊ TUYẾT" (HOẶC "TUYẾT"):
-     + Khi hóa đơn / tích kê là của khách hàng "Chị Tuyết" (hoặc "Tuyết"): nếu có chữ viết tay "gửi về", "trả về", "trả lại", "gửi lại" mà KHÔNG ghi rõ tên món thịt (chỉ có số cân / kg, hoặc chỉ ghi "Chị Tuyết gửi về: 2.5", "Trả về 3.2", "Gửi về 1.8kg"):
-       => BẮT BUỘC nhận diện tên món thịt ("name") là: "Thịt chín" (hoặc "Chín")!
-       => TUYỆT ĐỐI CẤM để trống tên món thịt, cấm bỏ qua món, cấm đoán thành món khác khi khách Chị Tuyết gửi về / trả về!
 
 Chỉ trả về JSON theo đúng cấu trúc:
 {
@@ -1066,7 +1033,7 @@ Chỉ trả về JSON theo đúng cấu trúc:
         // 1) Nếu có chữ "bun hue", "bunhue", "bun bo hue", hoặc có cả "bun" và "van khe" -> Khách "Bún huế van khe"
         const hasBunHue = cleanDetected.includes('bun hue') || cleanDetected.includes('bun bo hue') ||
           cleanDetectedNoSpace.includes('bunhue') || (cleanDetected.includes('bun') && cleanDetected.includes('van khe'));
-        
+
         // 2) Nếu CHỈ CÓ "van khe" hoặc "vankhe" (hoàn toàn KHÔNG có chữ "bun" hay "hue") -> Khách "văn khê"
         const isOnlyVanKhe = (cleanDetected.includes('van khe') || cleanDetectedNoSpace.includes('vankhe')) && !hasBunHue && !cleanDetected.includes('bun') && !cleanDetected.includes('hue');
 
@@ -1437,30 +1404,6 @@ Chỉ trả về JSON theo đúng cấu trúc:
     const isHuongCustomer = cleanCustDetected.includes('huong') ||
       (matchedCustomerId && customers.some((c) => c.id === matchedCustomerId && removeDiacritics(c.name.toLowerCase()).includes('huong')));
 
-        // Xử lý đặc thù cho khách hàng "Chị Tuyết": gửi về, trả về... mà không có tên thịt thì sẽ là thịt chín
-    const isTuyetCustomer = cleanCustDetected.includes('tuyet') ||
-      (matchedCustomerId && (
-        matchedCustomerId === '585fa225-f5e2-407d-89ea-c0afecc8263b' ||
-        customers.some((c) => c.id === matchedCustomerId && removeDiacritics(c.name.toLowerCase()).includes('tuyet'))
-      ));
-    const isReturnOrder = isReturn || Boolean(parsedResult?.is_return) || (parsedResult?.note && /(trả|gửi về|trả về|trả lại|gửi lại|hàng trả)/i.test(parsedResult.note));
-
-    if (isTuyetCustomer) {
-      const returnKeywordsRegex = /\b(trả hàng|gửi về|trả về|trả lại|gửi lại|hàng trả|thu hồi|bắn về|quay đầu|đổi trả|hoàn hàng|tra hang|gui ve|tra ve|tra lai|gui lai|hang tra|quay dau|doi tra|hoan hang|tra|trả)\b/gi;
-      rawItems.forEach((item) => {
-        const itemClean = removeDiacritics((item.name || '').toLowerCase().trim());
-        const cleanedName = (item.name || '').replace(returnKeywordsRegex, '').replace(/[-–—:()]/g, ' ').replace(/\s+/g, ' ').trim();
-        const cleanedClean = removeDiacritics(cleanedName.toLowerCase());
-        const isItemReturn = isReturnOrder || returnKeywordsRegex.test(item.name || '') || /(trả|gửi về|trả về|trả lại|gửi lại)/i.test(item.name || '');
-
-        if (isItemReturn || !itemClean || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', ''].includes(itemClean)) {
-          if (!cleanedClean || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', ''].includes(cleanedClean)) {
-            item.name = 'Thịt chín';
-          }
-        }
-      });
-    }
-
     if (isVideo && isHuongCustomer) {
       rawItems.forEach((item) => {
         const itemClean = removeDiacritics((item.name || '').toLowerCase().trim());
@@ -1487,7 +1430,7 @@ Chỉ trả về JSON theo đúng cấu trúc:
               if (item.price == null) item.price = customerPriceMap.get(firstProdId);
             }
           } else if (cleanCustDetected.includes('tuyet')) {
-            item.name = isReturnOrder ? 'Thịt chín' : 'Thăn';
+            item.name = 'Thăn';
           } else if (cleanCustDetected.includes('hai')) {
             item.name = 'Thịt lạm';
           } else if (cleanCustDetected.includes('tuong') || cleanCustDetected.includes('luyen')) {
@@ -1640,21 +1583,18 @@ Chỉ trả về JSON theo đúng cấu trúc:
       'quả bằng': 'quả bằng',
       'thit bang': 'quả bằng',
       'thịt bằng': 'quả bằng',
-      // Tràng bò
-      'trang bo': 'Tràng bò',
-      'tràng bò': 'Tràng bò',
-      'trangbo': 'Tràng bò',
-      'thit trang bo': 'Tràng bò',
-      'thịt tràng bò': 'Tràng bò',
-      'long trang': 'Tràng bò',
-      'lòng tràng': 'Tràng bò',
       // Quả trắng
+      'trang': 'quả trắng',
+      'trắng': 'quả trắng',
+      'trang bo': 'quả trắng',
+      'trắng bò': 'quả trắng',
+      'trangbo': 'quả trắng',
+      'trang bo': 'quả trắng',
+      'tráng bò': 'quả trắng',
       'qua trang': 'quả trắng',
       'quả trắng': 'quả trắng',
       'thit trang': 'quả trắng',
       'thịt trắng': 'quả trắng',
-      'trang': 'quả trắng',
-      'trắng': 'quả trắng',
       // Quạt
       'quat': 'quạt',
       'quạt': 'quạt',
@@ -1723,13 +1663,6 @@ Chỉ trả về JSON theo đúng cấu trúc:
         .replace(/\b(lay them|lấy thêm|lay|lấy|them|thêm|cho chi tuyet|cho chị tuyết|chi tuyet|chị tuyết|cua chi tuyet|của chị tuyết|gui ve|gửi về|tra hang|trả hàng|tra ve|trả về|tra lai|trả lại|gui lai|gửi lại|hang tra|hàng trả|thu hoi|thu hồi|quay dau|quay đầu|doi tra|đổi trả|hoan hang|hoàn hàng|tra|trả)\b/gi, '')
         .trim();
       const cleanLower = removeDiacritics(cleanedRaw || rawLower);
-
-      // Quy tắc: chị tuyết gửi về, trả về... mà không có tên thịt thì sẽ là thịt chín
-      if (isTuyetCustomer && (isReturnOrder || /(trả|gửi về|trả về|trả lại|gửi lại|hàng trả)/i.test(rawOriginal))) {
-        if (!cleanedRaw || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai'].includes(cleanLower)) {
-          cleanedRaw = 'Thịt chín';
-        }
-      }
 
       // Ưu tiên chuẩn hóa theo quy tắc từ lóng
       const normalizedName =
