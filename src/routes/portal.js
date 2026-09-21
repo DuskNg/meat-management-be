@@ -20,7 +20,10 @@ router.get('/branches-debt/:token', portalController.getBranchesDebtByMonth);
 // Gửi phản hồi / khiếu nại / báo lệch từ cổng portal
 router.post('/feedback/:token', portalController.submitPortalFeedback);
 
-// Công bố số liệu mới trực tiếp bằng token (yêu cầu là chủ buôn)
+// Đồng bộ video/ảnh hóa đơn lên Cloudinary qua portal (không cần auth Bearer, xác thực qua portal token + session)
+router.post('/sync-invoice/:token/:invoiceId', portalController.syncInvoiceViaPortal);
+
+// Chủ buôn công bố số liệu trực tiếp ngay trên portal
 router.post('/publish/:token', portalController.publishByToken);
 
 // ─── 2. CÁC TUYẾN ĐƯỜNG QUẢN LÝ DÀNH CHO CHỦ BUÔN TRÊN APP ───

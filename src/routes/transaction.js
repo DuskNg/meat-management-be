@@ -39,6 +39,9 @@ router.post('/invoices/batch', transactionController.uploadBatchInvoices);
 // Xóa một ảnh hóa đơn
 router.delete('/invoices/:id', transactionController.deleteInvoiceImage);
 
+// Đồng bộ ảnh/video hóa đơn lên Cloudinary khi vẫn còn lưu tạm trên máy chủ cục bộ
+router.post('/invoices/:id/sync-cloud', transactionController.syncCloudInvoice);
+
 // Kiểm tra từng cặp (khách hàng + ngày) có giao dịch công nợ nào không — để cảnh báo sót công nợ khi lưu ảnh
 router.post('/check-debt-existence', transactionController.checkDebtExistence);
 

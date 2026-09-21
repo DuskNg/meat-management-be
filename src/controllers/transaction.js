@@ -1740,6 +1740,87 @@ const checkDebtExistence = async (req, res, next) => {
   }
 };
 
+/**
+ * Đồng bộ ảnh/video hóa đơn TransactionInvoice lên Cloudinary khi còn lưu tạm ở /uploads/
+ * POST /invoices/:id/sync-cloud
+ */
+const syncCloudInvoice = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { id } = req.params;
+    const fs = require('fs');
+    const path = require('path');
+
+    const invoice = await prisma.transactionInvoice.findFirst({
+      where: { id, userId },
+    });
+
+    if (!invoice) {
+      throw new NotFoundError('Không tìm thấy ảnh hóa đơn hoặc bạn không có quyền truy cập.');
+    }
+
+    // Nếu đã có link Cloudinary hoặc HTTP/HTTPS rồi thì trả về luôn
+    if (invoice.imageUrl && (invoice.imageUrl.startsWith('http://') || invoice.imageUrl.startsWith('https://'))) {
+      return res.json({
+        success: true,
+        message: 'Tệp đã được lưu trữ trên đám mây.',
+        data: { id: invoice.id, imageUrl: invoice.imageUrl },
+      });
+    }
+
+    // Nếu vẫn còn link /uploads/ cục bộ
+    if (invoice.imageUrl && invoice.imageUrl.startsWith('/uploads/')) {
+      const relativePath = invoice.imageUrl.replace(/^\//, '');
+      const diskPath = path.join(__dirname, '../../', relativePath);
+
+      if (fs.existsSync(diskPath)) {
+        const isVideo = /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(diskPath);
+        const uploadRes = await uploadToCloudinary(diskPath, {
+          filePath: diskPath,
+          folder: 'meat_invoices/videos',
+          resource_type: isVideo ? 'video' : 'image',
+        });
+
+        if (uploadRes && uploadRes.secure_url) {
+          const cloudUrl = uploadRes.secure_url;
+          // Cập nhật TransactionInvoice sang URL Cloudinary
+          await prisma.transactionInvoice.update({
+            where: { id: invoice.id },
+            data: { imageUrl: cloudUrl },
+          });
+
+          // Đồng bộ ngược sang StaffSubmission nếu có liên kết
+          await prisma.staffSubmission.updateMany({
+            where: { fileUrl: invoice.imageUrl },
+            data: { fileUrl: cloudUrl },
+          });
+
+          return res.json({
+            success: true,
+            message: 'Đồng bộ tệp lên đám mây thành công!',
+            data: { id: invoice.id, imageUrl: cloudUrl },
+          });
+        }
+      }
+
+      // File không còn trên đĩa (do server restart/redeploy)
+      return res.json({
+        success: false,
+        isMissingFile: true,
+        message: 'Tệp video tạm trên máy chủ đã hết hạn. Dữ liệu đơn nợ vẫn còn nguyên vẹn trong hệ thống.',
+        data: { id: invoice.id, imageUrl: invoice.imageUrl },
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: { id: invoice.id, imageUrl: invoice.imageUrl },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createTransaction,
   getTransactions,
@@ -1752,4 +1833,5 @@ module.exports = {
   deleteInvoiceImage,
   getInvoiceImages,
   checkDebtExistence,
+  syncCloudInvoice,
 };

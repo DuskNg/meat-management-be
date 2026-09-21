@@ -597,6 +597,43 @@ const approveStaffSubmission = async (req, res, next) => {
     const finalDate = date ? new Date(date) : submission.date;
     const finalNote = note !== undefined ? note : (submission.note || 'Lên đơn từ hóa đơn Zalo nhân viên');
 
+    // ─── SYNC CLOUDINARY TRƯỚC KHI APPROVE ───────────────────────────────────
+    // Nếu fileUrl vẫn còn là link /uploads/ cục bộ (Cloudinary chưa kịp upload xong
+    // trong background), chủ động upload ngay tại đây trước khi tạo TransactionInvoice.
+    // Điều này ngăn race condition: approve xảy ra SAU khi background job chạy →
+    // TransactionInvoice lưu local URL → portal phát video bị lỗi ERR_FORMAT_NOT_SUPPORTED.
+    const originalLocalUrl = submission.fileUrl;
+    let approvedFileUrl = submission.fileUrl;
+    if (approvedFileUrl && approvedFileUrl.startsWith('/uploads/')) {
+      try {
+        const relativePath = approvedFileUrl.replace(/^\//, '');
+        const diskPath = path.join(__dirname, '../../', relativePath);
+        if (fs.existsSync(diskPath)) {
+          const isVideoFile = submission.fileType === 'VIDEO' || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(diskPath);
+          const uploadRes = await uploadToCloudinary(diskPath, {
+            filePath: diskPath,
+            folder: `meat_manager/${userId}/staff_submissions`,
+            resource_type: isVideoFile ? 'video' : 'image',
+          });
+          if (uploadRes && uploadRes.secure_url) {
+            approvedFileUrl = uploadRes.secure_url;
+            submission.fileUrl = approvedFileUrl; // Cập nhật biến trong bộ nhớ để các khối bên dưới sử dụng
+            // Cập nhật lại staffSubmission với Cloudinary URL vừa upload
+            await prisma.staffSubmission.update({
+              where: { id: submission.id },
+              data: { fileUrl: approvedFileUrl },
+            });
+            console.log(`[APPROVE_SYNC] Upload Cloudinary thành công trước khi approve: ${approvedFileUrl}`);
+          }
+        }
+      } catch (syncErr) {
+        // Không được để lỗi sync chặn quá trình approve đơn
+        // Tiếp tục với local URL và phần reactive fix (InvoiceImageViewerModal) sẽ xử lý sau
+        console.warn('[APPROVE_SYNC] Không thể upload Cloudinary trước khi approve, dùng local URL tạm:', syncErr.message);
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Tính tổng tiền đơn hàng
     let totalAmount = 0;
     let totalCost = 0;
@@ -765,8 +802,15 @@ const approveStaffSubmission = async (req, res, next) => {
 
         // 2. Tạo/Cập nhật ảnh hóa đơn đính kèm nếu có
         if (submission.fileUrl) {
+          const searchInvConditions = [{ imageUrl: submission.fileUrl }];
+          if (originalLocalUrl && originalLocalUrl !== submission.fileUrl) {
+            searchInvConditions.push({ imageUrl: originalLocalUrl });
+          }
           const existingInv = await tx.transactionInvoice.findFirst({
-            where: { userId, imageUrl: submission.fileUrl },
+            where: {
+              userId,
+              OR: searchInvConditions,
+            },
           });
           if (existingInv) {
             await tx.transactionInvoice.update({
@@ -775,6 +819,7 @@ const approveStaffSubmission = async (req, res, next) => {
                 customerId: finalCustomerId,
                 transactionId: null,
                 date: finalDate,
+                imageUrl: submission.fileUrl,
                 note: submission.senderName ? `Trả hàng - NV: ${submission.senderName}` : 'Đơn trả hàng nhân viên gửi',
               },
             });
@@ -845,13 +890,17 @@ const approveStaffSubmission = async (req, res, next) => {
 
         // Tạo/Cập nhật ảnh/video hóa đơn TransactionInvoice đính kèm trực tiếp vào đơn nợ này
         if (submission.fileUrl) {
+          const searchInvConditions = [
+            { imageUrl: submission.fileUrl },
+            { transactionId: trans.id },
+          ];
+          if (originalLocalUrl && originalLocalUrl !== submission.fileUrl) {
+            searchInvConditions.push({ imageUrl: originalLocalUrl });
+          }
           const existingInv = await tx.transactionInvoice.findFirst({
             where: {
               userId,
-              OR: [
-                { imageUrl: submission.fileUrl },
-                { transactionId: trans.id },
-              ],
+              OR: searchInvConditions,
             },
           });
           if (existingInv) {
