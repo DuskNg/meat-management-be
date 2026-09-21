@@ -665,7 +665,8 @@ Chỉ trả về JSON theo đúng cấu trúc:
 (NẾU ẢNH LÀ GIẤY NHÁP / MẶT SAU / KHÔNG CÓ BỐ CỤC HÓA ĐƠN BÁN HÀNG: đặt "is_valid_invoice": false, "items": [], "customer_name": null)`;
     }
 
-    // 5. Gọi Gemini API
+    // 5. [TẠM THỜI COMMENT GỌI GEMINI AI ĐỂ TEST TẢI NHANH 60 ẢNH VÀO MODAL]
+    /*
     const geminiResult = await callGeminiWithRetry({
       apiKey: process.env.GEMINI_API_KEY,
       contents: [
@@ -712,6 +713,20 @@ Chỉ trả về JSON theo đúng cấu trúc:
     });
 
     const parsedJson = JSON.parse(geminiResult.text.trim() || '{}');
+    */
+
+    const parsedJson = {
+      is_valid_invoice: true,
+      customer_name: null,
+      items: [
+        { name: 'Thịt lẻ (Test)', quantity: 1, price: 0, amount: 0 }
+      ]
+    };
+    const geminiResult = {
+      text: JSON.stringify(parsedJson),
+      model: 'test-mock',
+      usageMetadata: {}
+    };
     // Kiểm tra xem ảnh có bố cục của một hóa đơn bán hàng hợp lệ không
     const isValidInvoice = isVideo || parsedJson.is_valid_invoice !== false;
     const rawItems = (isValidInvoice && Array.isArray(parsedJson.items)) ? parsedJson.items : [];
