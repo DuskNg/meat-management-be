@@ -165,6 +165,10 @@ const fetchFileAsBase64 = async (url) => {
  * @param {string} submissionId - ID bản ghi StaffSubmission cần phân tích
  */
 const parseStaffSubmission = async (submissionId) => {
+  // [TẠM THỜI TẮT AI PHÂN TÍCH ĐỂ TEST GỬI HÀNG LOẠT KHÔNG MẤT PHÍ]
+  console.log(`[AI_PARSER_DISABLED] Tạm thời tắt phân tích AI cho submissionId: ${submissionId} (tránh mất phí khi test hàng loạt)`);
+  return;
+
   const submission = await prisma.staffSubmission.findUnique({
     where: { id: submissionId },
     include: {

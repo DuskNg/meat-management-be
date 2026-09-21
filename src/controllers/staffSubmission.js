@@ -305,10 +305,12 @@ const submitBatchFromStaff = async (req, res, next) => {
               }
             }
 
-            // Gọi AI phân tích hóa đơn ngầm
+            // Tạm thời comment logic gọi AI phân tích để test gửi hàng loạt ảnh/video mà không mất phí
+            /*
             parseStaffSubmission(item.submissionId).catch((err) => {
               console.error(`[BACKGROUND_AI_ERROR] Lỗi phân tích submission ${item.submissionId}:`, err);
             });
+            */
           } catch (itemErr) {
             console.error('[BACKGROUND_ITEM_ERR]', itemErr);
           }
