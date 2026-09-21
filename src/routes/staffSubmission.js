@@ -36,6 +36,9 @@ router.post('/batch-reject', authenticateToken, resolveWorkspace, staffSubmissio
 // Bác bỏ/xóa hóa đơn
 router.post('/:id/reject', authenticateToken, resolveWorkspace, staffSubmissionController.rejectStaffSubmission);
 
+// Đồng bộ video/ảnh lên đám mây Cloudinary
+router.post('/:id/sync-cloud', authenticateToken, resolveWorkspace, staffSubmissionController.syncCloudSubmission);
+
 // Quét lại bằng AI
 router.post('/:id/reparse', authenticateToken, resolveWorkspace, staffSubmissionController.reparseStaffSubmission);
 

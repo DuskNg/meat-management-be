@@ -85,7 +85,12 @@ const uploadToCloudinary = async (fileData, options = {}) => {
       let result = null;
       // Nếu là video và có file path trên đĩa cứng, ưu tiên dùng upload_large truyền luồng file
       if (isVideo && localFilePath && fs.existsSync(localFilePath)) {
-        result = await cloudinary.uploader.upload_large(localFilePath, uploadOptions);
+        result = await new Promise((resolve, reject) => {
+          cloudinary.uploader.upload_large(localFilePath, uploadOptions, (err, res) => {
+            if (err) return reject(err);
+            resolve(res);
+          });
+        });
       } else {
         const sourceToUpload = localFilePath || fileData;
         result = await cloudinary.uploader.upload(sourceToUpload, uploadOptions);

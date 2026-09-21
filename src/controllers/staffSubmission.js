@@ -1324,6 +1324,83 @@ const reparseStaffSubmission = async (req, res, next) => {
   }
 };
 
+/**
+ * Đồng bộ hoặc tải tệp video/ảnh cục bộ lên Cloudinary theo yêu cầu chủ buôn
+ */
+const syncCloudSubmission = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.workspaceUserId || req.user.id;
+
+    const submission = await prisma.staffSubmission.findFirst({
+      where: { id, userId },
+    });
+
+    if (!submission) {
+      throw new NotFoundError('Không tìm thấy lượt nộp hóa đơn/video.');
+    }
+
+    // Nếu đã có link Cloudinary hoặc HTTP/HTTPS
+    if (submission.fileUrl && (submission.fileUrl.startsWith('http://') || submission.fileUrl.startsWith('https://'))) {
+      return res.json({
+        success: true,
+        message: 'Tệp đã được lưu trữ trên đám mây.',
+        data: { id: submission.id, fileUrl: submission.fileUrl },
+      });
+    }
+
+    // Nếu là link /uploads/...
+    if (submission.fileUrl && submission.fileUrl.startsWith('/uploads/')) {
+      const relativePath = submission.fileUrl.replace(/^\//, '');
+      const diskPath = path.join(__dirname, '../../', relativePath);
+
+      if (fs.existsSync(diskPath)) {
+        const isVideo = submission.fileType === 'VIDEO' || /\.(mp4|mov|webm|avi|mkv)$/i.test(diskPath);
+        const uploadRes = await uploadToCloudinary(diskPath, {
+          filePath: diskPath,
+          folder: `meat_manager/${userId}/staff_submissions`,
+          resource_type: isVideo ? 'video' : 'image',
+        });
+
+        if (uploadRes && uploadRes.secure_url) {
+          const cloudUrl = uploadRes.secure_url;
+          await prisma.staffSubmission.update({
+            where: { id: submission.id },
+            data: { fileUrl: cloudUrl },
+          });
+
+          // Đồng bộ sang TransactionInvoice nếu đã tạo
+          await prisma.transactionInvoice.updateMany({
+            where: { imageUrl: submission.fileUrl },
+            data: { imageUrl: cloudUrl },
+          });
+
+          return res.json({
+            success: true,
+            message: 'Đồng bộ tệp lên đám mây thành công!',
+            data: { id: submission.id, fileUrl: cloudUrl },
+          });
+        }
+      }
+
+      // File không còn trên đĩa (do server restart/redeploy)
+      return res.json({
+        success: false,
+        isMissingFile: true,
+        message: 'Tệp video tạm thời trên máy chủ đã hết hạn lưu trữ. Toàn bộ dữ liệu AI nhận diện (tên khách, khối lượng, đơn giá) đã được lưu an toàn, bạn có thể kiểm tra và bấm [NHẬP CÔNG NỢ] bình thường.',
+        data: { id: submission.id, fileUrl: submission.fileUrl },
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: { id: submission.id, fileUrl: submission.fileUrl },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getPublicLinkInfo,
   verifyLinkPin,
@@ -1336,6 +1413,7 @@ module.exports = {
   rejectStaffSubmission,
   batchRejectStaffSubmissions,
   reparseStaffSubmission,
+  syncCloudSubmission,
   getSubmissionLinks,
   createSubmissionLink,
   updateSubmissionLink,
