@@ -308,6 +308,10 @@ initRecurringDebtScheduler();
 const { initStaffSubmissionRecoveryScheduler } = require('./schedulers/staffSubmissionRecoveryScheduler');
 initStaffSubmissionRecoveryScheduler();
 
+// Khởi chạy tiến trình tự động công bố số liệu portal lúc 20:00 hàng ngày (giờ VN)
+const { initPortalAutoPublishScheduler } = require('./schedulers/portalAutoPublishScheduler');
+initPortalAutoPublishScheduler();
+
 // Tạo HTTP server và khởi tạo Socket.IO
 const http = require('http');
 const { initSocket } = require('./utils/socket');
