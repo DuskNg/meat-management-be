@@ -1353,13 +1353,23 @@ Chỉ trả về JSON theo đúng cấu trúc:
       }
 
       if (!matchedCustomerId) {
-        // Sắp xếp khách hàng theo độ dài tên giảm dần để ưu tiên tên dài, cụ thể hơn
+        // 1. Ưu tiên khớp CHÍNH XÁC 100% (Exact Match) trước (Tránh trường hợp "Kcc" bị nhận nhầm sang "Kcc1")
+        const exactCust = customers.find((c) => {
+          const cName = removeDiacritics(c.name.toLowerCase().trim());
+          const cNameNoSpace = cName.replace(/\s+/g, '');
+          return cName === cleanDetected || cNameNoSpace === cleanDetectedNoSpace;
+        });
+        if (exactCust) {
+          matchedCustomerId = exactCust.id;
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // 2. Chỉ khi không có khách nào khớp 100% mới so khớp chứa một phần (includes)
         const sortedCusts = [...customers].sort((a, b) => b.name.length - a.name.length);
         const matchedCust = sortedCusts.find((c) => {
           const cName = removeDiacritics(c.name.toLowerCase().trim());
           const cNameNoSpace = cName.replace(/\s+/g, '');
-          if (cName === cleanDetected || cNameNoSpace === cleanDetectedNoSpace) return true;
-          // Chỉ cho phép includes khi tên khách có ít nhất 3 ký tự (tránh khách 1 ký tự như "N")
           if (cName.length >= 3 && cleanDetected.includes(cName)) return true;
           if (cNameNoSpace.length >= 3 && cleanDetectedNoSpace.includes(cNameNoSpace)) return true;
           if (cleanDetected.length >= 3 && cName.includes(cleanDetected)) return true;
