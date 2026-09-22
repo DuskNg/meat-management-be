@@ -696,6 +696,7 @@ const approveStaffSubmission = async (req, res, next) => {
       let payment = null;
       let trans = null;
       let newTxId = null;
+      let returnNote = '';
 
       if (isReturnOrder) {
         // Kiểm tra xem đơn trả hàng này là dạng chi tiết hay trả nhanh
@@ -709,7 +710,6 @@ const approveStaffSubmission = async (req, res, next) => {
           .replace(/^Trả hàng nhanh\s*[:-]?\s*/gi, '')
           .trim();
 
-        let returnNote = '';
         if (isQuickOrder) {
           returnNote = cleanExtraNote ? `[Trả lại hàng] Trả hàng nhanh - ${cleanExtraNote}` : `[Trả lại hàng] Trả hàng nhanh`;
         } else {
