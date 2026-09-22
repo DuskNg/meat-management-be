@@ -35,7 +35,7 @@ const recoverStuckSubmissions = async () => {
       }
     }
 
-    // 2. Phục hồi các bản ghi video/ảnh còn link nội bộ /uploads/ nếu file còn trên ổ đĩa
+    // 2. Phục hồi các bản ghi video/ảnh StaffSubmission còn link nội bộ /uploads/ nếu file còn trên ổ đĩa
     const localUploads = await prisma.staffSubmission.findMany({
       where: {
         fileUrl: { startsWith: '/uploads/' },
@@ -73,6 +73,54 @@ const recoverStuckSubmissions = async () => {
         }
       } catch (uploadErr) {
         console.warn(`[AUTO_RECOVERY] Không thể tải file ${sub.id} lên Cloudinary:`, uploadErr.message);
+      }
+    }
+
+    // 3. Tự động đồng bộ hóa đơn TransactionInvoice còn link /uploads/ lên Cloudinary vĩnh viễn
+    //    Đảm bảo video/ảnh không bị mất khi server restart trước khi user kịp mở xem
+    const localInvoices = await prisma.transactionInvoice.findMany({
+      where: {
+        imageUrl: { startsWith: '/uploads/' },
+      },
+      take: 10,
+    });
+
+    for (const invoice of localInvoices) {
+      try {
+        const relativePath = invoice.imageUrl.replace(/^\//, '');
+        const diskPath = path.join(__dirname, '../../', relativePath);
+
+        if (fs.existsSync(diskPath)) {
+          console.log(`[AUTO_RECOVERY] Đang đồng bộ hóa đơn lên Cloudinary: ${invoice.imageUrl}`);
+          const isVideo = /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(diskPath);
+          const uploadRes = await uploadToCloudinary(diskPath, {
+            filePath: diskPath,
+            folder: isVideo ? 'meat_invoices/videos' : 'meat_invoices',
+            resource_type: isVideo ? 'video' : 'image',
+          });
+
+          if (uploadRes && uploadRes.secure_url) {
+            const cloudUrl = uploadRes.secure_url;
+
+            // Cập nhật TransactionInvoice sang URL Cloudinary vĩnh viễn
+            await prisma.transactionInvoice.update({
+              where: { id: invoice.id },
+              data: { imageUrl: cloudUrl },
+            });
+
+            // Đồng bộ ngược sang StaffSubmission nếu có liên kết cùng URL cũ
+            await prisma.staffSubmission.updateMany({
+              where: { fileUrl: invoice.imageUrl },
+              data: { fileUrl: cloudUrl },
+            });
+
+            console.log(`[AUTO_RECOVERY] ✅ Đã đồng bộ hóa đơn ${invoice.id} lên Cloudinary: ${cloudUrl}`);
+          }
+        } else {
+          console.warn(`[AUTO_RECOVERY] ⚠️ File hóa đơn ${invoice.id} không còn trên đĩa (đã hết hạn): ${diskPath}`);
+        }
+      } catch (uploadErr) {
+        console.warn(`[AUTO_RECOVERY] Không thể đồng bộ hóa đơn ${invoice.id} lên Cloudinary:`, uploadErr.message);
       }
     }
   } catch (error) {

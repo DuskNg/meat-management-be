@@ -464,7 +464,8 @@ const updateSupplierTransaction = async (req, res, next) => {
       changes.push(`Ghi chú: "${transaction.note || 'Không'}" ➔ "${updated.note || 'Không'}"`);
     }
 
-    const logDetail = `Cập nhật đơn nhập hàng của nhà cung cấp ${transaction.supplier.name}:\n• ${changes.join('\n• ')}`;
+    const dateDisplay = oldDateStr ? ` ngày ${oldDateStr}` : '';
+    const logDetail = `Cập nhật đơn nhập hàng${dateDisplay} của nhà cung cấp ${transaction.supplier.name}:\n• ${changes.join('\n• ')}`;
 
     await logActivity(
       userId,
@@ -510,11 +511,15 @@ const deleteSupplierTransaction = async (req, res, next) => {
       where: { id },
     });
 
+    const transDateStr = transaction.date
+      ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(transaction.date))
+      : '';
+    const dateDisplay = transDateStr ? ` ngày ${transDateStr}` : '';
     const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
     await logActivity(
       userId,
       'DELETE_SUPPLIER_TRANSACTION',
-      `Xóa đơn nhập hàng của nhà cung cấp ${transaction.supplier.name}: ${formatCurrency(transaction.totalAmount)}`
+      `Xóa đơn nhập hàng${dateDisplay} của nhà cung cấp ${transaction.supplier.name}: ${formatCurrency(transaction.totalAmount)}`
     );
 
     res.status(200).json({

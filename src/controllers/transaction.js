@@ -284,10 +284,13 @@ const createTransaction = async (req, res, next) => {
       methodTag = '[Giọng nói AI]';
     }
 
+    const transDate = date ? new Date(date) : new Date();
+    const dateStr = new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(transDate);
+
     await logActivity(
       userId,
       'CREATE_TRANSACTION',
-      `${methodTag} Ghi nợ đơn hàng mới cho khách ${customer.name}: Tổng tiền ${calculatedTotal.toLocaleString('vi-VN')}đ`
+      `${methodTag} Ghi nợ đơn hàng ngày ${dateStr} cho khách ${customer.name}: Tổng tiền ${calculatedTotal.toLocaleString('vi-VN')}đ`
     );
     notifyCustomerUpdate(userId, 'CREATE_TRANSACTION', { customerId, transactionId: newTransaction.id });
 
@@ -658,14 +661,15 @@ const updateTransaction = async (req, res, next) => {
 
     const extraChanges = [];
     if (date && oldDateStr !== newDateStr) {
-      extraChanges.push(`Ngày: ${oldDateStr} ➔ ${newDateStr}`);
+      extraChanges.push(`Đổi ngày: ${oldDateStr} ➔ ${newDateStr}`);
     }
     if (note !== undefined && (note || '') !== (existingTransaction.note || '')) {
       extraChanges.push(`Ghi chú: "${existingTransaction.note || 'Không'}" ➔ "${note || 'Không'}"`);
     }
     const extraInfoStr = extraChanges.length > 0 ? ` (${extraChanges.join(' | ')})` : '';
 
-    const logDetail = `Cập nhật đơn nợ của khách hàng ${customerName}${extraInfoStr}:\n• Trước: ${oldTotalStr} [${oldItemsSummary || 'Trống'}]\n• Sau: ${newTotalStr} [${newItemsSummary || 'Trống'}]`;
+    const dateDisplay = oldDateStr ? ` ngày ${oldDateStr}` : '';
+    const logDetail = `Cập nhật đơn nợ${dateDisplay} của khách hàng ${customerName}${extraInfoStr}:\n• Trước: ${oldTotalStr} [${oldItemsSummary || 'Trống'}]\n• Sau: ${newTotalStr} [${newItemsSummary || 'Trống'}]`;
 
     await logActivity(
       userId,
@@ -1275,13 +1279,20 @@ const deleteTransaction = async (req, res, next) => {
     // Kiểm tra giao dịch có tồn tại và thuộc chủ buôn này không
     const existing = await prisma.transaction.findFirst({
       where: { id, userId },
+      include: {
+        items: {
+          include: {
+            product: { select: { name: true, unit: true } },
+          },
+        },
+      },
     });
     if (!existing) {
       throw new NotFoundError('Giao dịch không tồn tại hoặc không thuộc quyền quản lý của bạn.');
     }
 
     const customer = await prisma.customer.findUnique({
-      where: { id: existing.customerId }
+      where: { id: existing.customerId },
     });
 
     // Kiểm tra bảo vệ dữ liệu chéo: Nhân viên chỉ được xóa dữ liệu do chính mình tạo. Chủ Workspace và Admin tối cao có toàn quyền.
@@ -1296,10 +1307,19 @@ const deleteTransaction = async (req, res, next) => {
       where: { id },
     });
 
+    const transDateStr = existing.date
+      ? new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date(existing.date))
+      : '';
+    const dateDisplay = transDateStr ? ` ngày ${transDateStr}` : '';
+    const itemsSummary = (existing.items || [])
+      .map((it) => `${it.product?.name || 'Món'}: ${it.quantity}${it.product?.unit || 'kg'} x ${Number(it.price).toLocaleString('vi-VN')}đ`)
+      .join(', ');
+    const itemsStr = itemsSummary ? ` [${itemsSummary}]` : '';
+
     await logActivity(
       userId,
       'DELETE_TRANSACTION',
-      `Xóa đơn nợ của khách hàng ${customer?.name || 'ẩn'}: Số tiền ${existing.totalAmount.toLocaleString('vi-VN')}đ`
+      `Xóa đơn nợ${dateDisplay} của khách hàng ${customer?.name || 'ẩn'}: Số tiền ${Number(existing.totalAmount).toLocaleString('vi-VN')}đ${itemsStr}`
     );
     notifyCustomerUpdate(userId, 'DELETE_TRANSACTION', { customerId: existing.customerId, transactionId: id });
 
@@ -1405,6 +1425,7 @@ const uploadBatchInvoices = async (req, res, next) => {
       let imageUrl = `/uploads/invoices/${fileName}`;
 
       // Nếu đã cấu hình Cloudinary, tải ảnh/video lên đám mây và lưu link Cloudinary vĩnh viễn (res.cloudinary.com)
+      let cloudinaryFailed = false;
       if (isCloudinaryConfigured()) {
         try {
           const dataUri = `data:${mimeType};base64,${cleanBase64}`;
@@ -1416,7 +1437,8 @@ const uploadBatchInvoices = async (req, res, next) => {
             imageUrl = uploadRes.secure_url;
           }
         } catch (cloudErr) {
-          console.warn('[UPLOAD] Lỗi tải lên Cloudinary, giữ đường dẫn file máy chủ:', cloudErr.message);
+          console.warn('[UPLOAD] Lỗi tải lên Cloudinary, giữ đường dẫn file máy chủ tạm:', cloudErr.message);
+          cloudinaryFailed = true;
         }
       }
 
@@ -1475,6 +1497,15 @@ const uploadBatchInvoices = async (req, res, next) => {
     });
 
     const savedInvoices = await Promise.all(uploadPromises);
+
+    // Nếu có hóa đơn nào Cloudinary thất bại lúc upload ban đầu → trigger retry ngay trong background
+    // để tránh phụ thuộc hoàn toàn vào scheduler 3 phút (file có thể mất nếu server restart trước đó)
+    setImmediate(async () => {
+      const { recoverStuckSubmissions } = require('../schedulers/staffSubmissionRecoveryScheduler');
+      try {
+        await recoverStuckSubmissions();
+      } catch (_) {}
+    });
 
     // Ghi log nhật ký hoạt động
     await logActivity(
