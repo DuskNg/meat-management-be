@@ -197,6 +197,74 @@ const checkIsOwner = (req, portalLink) => {
   return false;
 };
 
+// Lấy danh sách ảnh/video gắn với các lượt thanh toán / trả hàng
+const fetchInvoicesForPayments = async (paymentIds, userId) => {
+  const invoicesByPaymentId = {};
+  if (!paymentIds || paymentIds.length === 0) return invoicesByPaymentId;
+
+  const [staffSubs, transInvs] = await Promise.all([
+    prisma.staffSubmission.findMany({
+      where: {
+        transactionId: { in: paymentIds },
+        fileUrl: { not: '' },
+      },
+      select: {
+        id: true,
+        fileUrl: true,
+        fileType: true,
+        transactionId: true,
+        date: true,
+        senderName: true,
+      },
+    }),
+    prisma.transactionInvoice.findMany({
+      where: {
+        userId,
+        OR: paymentIds.map((pid) => ({ note: { contains: `[paymentId:${pid}]` } })),
+      },
+      select: {
+        id: true,
+        imageUrl: true,
+        note: true,
+        date: true,
+      },
+    }),
+  ]);
+
+  staffSubs.forEach((sub) => {
+    if (!invoicesByPaymentId[sub.transactionId]) {
+      invoicesByPaymentId[sub.transactionId] = [];
+    }
+    invoicesByPaymentId[sub.transactionId].push({
+      id: sub.id,
+      imageUrl: sub.fileUrl,
+      fileType: sub.fileType,
+      note: sub.senderName ? `NV: ${sub.senderName}` : 'Đơn trả hàng',
+      date: sub.date,
+    });
+  });
+
+  transInvs.forEach((inv) => {
+    const match = inv.note?.match(/\[paymentId:([a-f0-9\-]+)\]/i);
+    const pid = match ? match[1] : null;
+    if (pid && paymentIds.includes(pid)) {
+      if (!invoicesByPaymentId[pid]) {
+        invoicesByPaymentId[pid] = [];
+      }
+      if (!invoicesByPaymentId[pid].some((item) => item.imageUrl === inv.imageUrl)) {
+        invoicesByPaymentId[pid].push({
+          id: inv.id,
+          imageUrl: inv.imageUrl,
+          note: inv.note.replace(/\[paymentId:[a-f0-9\-]+\]\s*/i, ''),
+          date: inv.date,
+        });
+      }
+    }
+  });
+
+  return invoicesByPaymentId;
+};
+
 // [GET] /api/v1/portal/data/:token
 // Lấy dữ liệu công nợ, đơn hàng, bảng giá thịt an toàn (Zero-leakage)
 const getPublicPortalData = async (req, res, next) => {
@@ -378,6 +446,7 @@ const getPublicPortalData = async (req, res, next) => {
           }))
         }));
 
+        const chainPaymentInvoices = await fetchInvoicesForPayments(chainPayments.map(p => p.id), portalLink.userId);
         const safePayments = chainPayments.map(pm => ({
           id: pm.id,
           amount: Number(pm.amount),
@@ -385,7 +454,8 @@ const getPublicPortalData = async (req, res, next) => {
           note: pm.note,
           method: pm.method,
           customerId: pm.customerId,
-          customerName: pm.customer?.name || null
+          customerName: pm.customer?.name || null,
+          invoices: chainPaymentInvoices[pm.id] || [],
         }));
 
         const chainData = {
@@ -499,11 +569,13 @@ const getPublicPortalData = async (req, res, next) => {
         price: Number(cp.price)
       }));
 
+      const singlePaymentInvoices = await fetchInvoicesForPayments(payments.map(p => p.id), portalLink.userId);
       const safePayments = payments.map(p => ({
         id: p.id,
         paidAt: p.paidAt,
         amount: Number(p.amount),
-        note: p.note
+        note: p.note,
+        invoices: singlePaymentInvoices[p.id] || [],
       }));
 
       const singleCustomerData = {

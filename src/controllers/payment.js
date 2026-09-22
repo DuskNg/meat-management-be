@@ -149,9 +149,81 @@ const getPayments = async (req, res, next) => {
       },
     });
 
+    // Bổ sung danh sách ảnh/video hóa đơn hoặc đơn trả hàng cho từng Payment
+    const paymentIds = payments.map((p) => p.id);
+    const invoicesByPaymentId = {};
+
+    if (paymentIds.length > 0) {
+      // 1. Tìm từ StaffSubmission liên kết trực tiếp với Payment (khi duyệt đơn trả hàng do nhân viên gửi)
+      const staffSubs = await prisma.staffSubmission.findMany({
+        where: {
+          transactionId: { in: paymentIds },
+          fileUrl: { not: '' },
+        },
+        select: {
+          id: true,
+          fileUrl: true,
+          fileType: true,
+          transactionId: true,
+          date: true,
+          senderName: true,
+        },
+      });
+
+      staffSubs.forEach((sub) => {
+        if (!invoicesByPaymentId[sub.transactionId]) {
+          invoicesByPaymentId[sub.transactionId] = [];
+        }
+        invoicesByPaymentId[sub.transactionId].push({
+          id: sub.id,
+          imageUrl: sub.fileUrl,
+          fileType: sub.fileType,
+          note: sub.senderName ? `NV: ${sub.senderName}` : 'Đơn trả hàng',
+          date: sub.date,
+        });
+      });
+
+      // 2. Tìm từ TransactionInvoice được gắn tag [paymentId:xxx]
+      const transInvs = await prisma.transactionInvoice.findMany({
+        where: {
+          userId,
+          OR: paymentIds.map((pid) => ({ note: { contains: `[paymentId:${pid}]` } })),
+        },
+        select: {
+          id: true,
+          imageUrl: true,
+          note: true,
+          date: true,
+        },
+      });
+
+      transInvs.forEach((inv) => {
+        const match = inv.note?.match(/\[paymentId:([a-f0-9\-]+)\]/i);
+        const pid = match ? match[1] : null;
+        if (pid && paymentIds.includes(pid)) {
+          if (!invoicesByPaymentId[pid]) {
+            invoicesByPaymentId[pid] = [];
+          }
+          if (!invoicesByPaymentId[pid].some((item) => item.imageUrl === inv.imageUrl)) {
+            invoicesByPaymentId[pid].push({
+              id: inv.id,
+              imageUrl: inv.imageUrl,
+              note: inv.note.replace(/\[paymentId:[a-f0-9\-]+\]\s*/i, ''),
+              date: inv.date,
+            });
+          }
+        }
+      });
+    }
+
+    const paymentsWithInvoices = payments.map((p) => ({
+      ...p,
+      invoices: invoicesByPaymentId[p.id] || [],
+    }));
+
     res.status(200).json({
       success: true,
-      data: payments,
+      data: paymentsWithInvoices,
     });
   } catch (error) {
     next(error);

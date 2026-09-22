@@ -832,6 +832,7 @@ const approveStaffSubmission = async (req, res, next) => {
               OR: searchInvConditions,
             },
           });
+          const returnInvNote = `[paymentId:${payment.id}] ` + (submission.senderName ? `Trả hàng - NV: ${submission.senderName}` : 'Đơn trả hàng nhân viên gửi');
           if (existingInv) {
             await tx.transactionInvoice.update({
               where: { id: existingInv.id },
@@ -840,7 +841,7 @@ const approveStaffSubmission = async (req, res, next) => {
                 transactionId: null,
                 date: finalDate,
                 imageUrl: submission.fileUrl,
-                note: submission.senderName ? `Trả hàng - NV: ${submission.senderName}` : 'Đơn trả hàng nhân viên gửi',
+                note: returnInvNote,
               },
             });
           } else {
@@ -851,7 +852,7 @@ const approveStaffSubmission = async (req, res, next) => {
                 transactionId: null,
                 date: finalDate,
                 imageUrl: submission.fileUrl,
-                note: submission.senderName ? `Trả hàng - NV: ${submission.senderName}` : 'Đơn trả hàng nhân viên gửi',
+                note: returnInvNote,
               },
             });
           }
