@@ -698,20 +698,40 @@ const approveStaffSubmission = async (req, res, next) => {
       let newTxId = null;
 
       if (isReturnOrder) {
-        // Chuẩn bị ghi chú chi tiết danh sách thịt trả lại
-        const itemsDesc = finalItems
-          .map((it) => {
-            const q = it.quantity != null && it.quantity !== '' ? `${it.quantity}kg` : '';
-            const n = it.rawName || 'Thịt';
-            const a = it.amount != null && it.amount !== '' ? `(${new Intl.NumberFormat('vi-VN').format(Math.round(it.amount))}đ)` : '';
-            return `${q} ${n} ${a}`.trim();
-          })
-          .filter(Boolean)
-          .join(', ');
+        // Kiểm tra xem đơn trả hàng này là dạng chi tiết hay trả nhanh
+        const isQuickOrder = req.body.orderMode === 'quick' || (
+          finalItems.length === 1 &&
+          (!finalItems[0].rawName || finalItems[0].rawName === 'Tiền hàng' || finalItems[0].rawName === 'Trả hàng nhanh' || (!finalItems[0].quantity || parseFloat(finalItems[0].quantity) <= 0))
+        );
 
-        let returnNote = finalNote || '';
-        if (!returnNote.includes('[Trả lại hàng]') && !returnNote.includes('[Trả hàng]')) {
-          returnNote = `[Trả lại hàng] ${itemsDesc}${returnNote ? ` - ${returnNote}` : ''}`.trim();
+        let cleanExtraNote = (finalNote || '')
+          .replace(/\[Trả lại hàng\]|\[Trả hàng nhanh\]|\[Trả hàng\]/gi, '')
+          .replace(/^Trả hàng nhanh\s*[:-]?\s*/gi, '')
+          .trim();
+
+        let returnNote = '';
+        if (isQuickOrder) {
+          returnNote = cleanExtraNote ? `[Trả lại hàng] Trả hàng nhanh - ${cleanExtraNote}` : `[Trả lại hàng] Trả hàng nhanh`;
+        } else {
+          // Chuẩn bị danh sách thịt chi tiết chuẩn format hệ thống: "1.5kg Bắp bò (300.000), 2kg Nạc (200.000)"
+          const itemsDesc = finalItems
+            .map((it) => {
+              const q = it.quantity != null && it.quantity !== '' && parseFloat(it.quantity) > 0 ? `${it.quantity}kg ` : '';
+              const n = it.rawName || 'Thịt';
+              const amtNum = it.amount != null && it.amount !== '' ? Math.round(it.amount) : Math.round((parseFloat(it.quantity) || 0) * (parseFloat(it.price) || 0));
+              const a = amtNum > 0 ? `(${new Intl.NumberFormat('vi-VN').format(amtNum)})` : '';
+              return `${q}${n} ${a}`.trim();
+            })
+            .filter(Boolean)
+            .join(', ');
+
+          // Cắt bỏ phần danh sách món cũ nếu note cũ có ngoặc tròn
+          if (cleanExtraNote.includes('(') && cleanExtraNote.includes(')')) {
+            const lastParen = cleanExtraNote.lastIndexOf(')');
+            cleanExtraNote = cleanExtraNote.substring(lastParen + 1).replace(/^-+\s*/, '').trim();
+          }
+
+          returnNote = cleanExtraNote ? `[Trả lại hàng] ${itemsDesc} - ${cleanExtraNote}` : `[Trả lại hàng] ${itemsDesc}`;
         }
 
         // 1. Kiểm tra xem submission này trước đó đã có Transaction hay Payment chưa để cập nhật hoặc tạo mới
@@ -936,7 +956,7 @@ const approveStaffSubmission = async (req, res, next) => {
           status: 'APPROVED',
           matchedCustomerId: finalCustomerId,
           date: finalDate,
-          note: finalNote,
+          note: isReturnOrder ? returnNote : finalNote,
           transactionId: newTxId,
           approvedAt: new Date(),
         },
@@ -955,7 +975,7 @@ const approveStaffSubmission = async (req, res, next) => {
 
         return {
           submissionId: id,
-          rawName: it.rawName || it.name || 'Thịt lẻ',
+          rawName: it.rawName || it.name || (isReturnOrder ? 'Thịt trả lại' : 'Thịt'),
           matchedProductId: it.matchedProductId || null,
           quantity: qty,
           price,
