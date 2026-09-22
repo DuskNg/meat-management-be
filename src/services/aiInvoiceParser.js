@@ -1060,6 +1060,36 @@ Chỉ trả về JSON theo đúng cấu trúc:
       }
 
       if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "Bếp 3 Miền Kim Liên" nếu AI nhận diện là 3mien, 3 miền, ba miền, kim liên, bếp 3 miền...
+        if (
+          cleanDetectedNoSpace === '3mien' ||
+          cleanDetectedNoSpace.includes('3mien') ||
+          cleanDetectedNoSpace === '3m' ||
+          cleanDetected.includes('3 mien') ||
+          cleanDetected.includes('ba mien') ||
+          cleanDetected.includes('bep 3 mien') ||
+          cleanDetected.includes('kim lien') ||
+          cleanDetectedNoSpace.includes('kimlien') ||
+          cleanDetectedNoSpace.includes('bep3mien') ||
+          cleanDetectedNoSpace.includes('bamien')
+        ) {
+          const bep3MienCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            const cNoSpace = cClean.replace(/\s+/g, '');
+            return (cClean.includes('3 mien') || cNoSpace.includes('3mien') || cClean.includes('ba mien')) && cClean.includes('kim lien');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            const cNoSpace = cClean.replace(/\s+/g, '');
+            return cClean.includes('3 mien') || cNoSpace.includes('3mien') || cClean.includes('ba mien') || cClean.includes('bep 3 mien');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('kim lien');
+          });
+          if (bep3MienCust) matchedCustomerId = bep3MienCust.id;
+        }
+      }
+
+      if (!matchedCustomerId) {
         // Khớp ưu tiên B1, B2, B3, B4 (Bếp hàng xóm 1, 2, 3 và Nhà hàng vườn xanh)
         if (
           cleanDetectedNoSpace === 'b1' ||

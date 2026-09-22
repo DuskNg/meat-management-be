@@ -1119,11 +1119,15 @@ QUY TẮC BẮT BUỘC: Nếu câu thoại không liên quan đến ghi nợ hay
       // 1. Khớp chính xác hoàn toàn
       matchedCustomer = customers.find(c => normalizeName(c.name) === cleanSearchName);
       
-      // 2. Khớp bán phần (chứa trong nhau)
+      // 2. Khớp bán phần (chứa trong nhau hoặc bỏ khoảng trắng như 3mien khớp Bếp 3 Miền)
       if (!matchedCustomer) {
-        matchedCustomer = customers.find(c =>
-          normalizeName(c.name).includes(cleanSearchName) || cleanSearchName.includes(normalizeName(c.name))
-        );
+        const searchNoSpace = cleanSearchName.replace(/\s+/g, '');
+        matchedCustomer = customers.find(c => {
+          const cNorm = normalizeName(c.name);
+          const cNoSpace = cNorm.replace(/\s+/g, '');
+          return cNorm.includes(cleanSearchName) || cleanSearchName.includes(cNorm) ||
+                 (searchNoSpace.length >= 3 && (cNoSpace.includes(searchNoSpace) || searchNoSpace.includes(cNoSpace)));
+        });
       }
 
       // 3. Khớp gần giống bằng độ tương đồng từ (Fuzzy Word Match)
