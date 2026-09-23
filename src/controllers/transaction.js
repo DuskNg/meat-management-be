@@ -1363,7 +1363,7 @@ const uploadBatchInvoices = async (req, res, next) => {
 
     // Xử lý song song các tệp trong lô để tối ưu thời gian tải lên Cloudinary
     const uploadPromises = items.map(async (item, index) => {
-      const { customerId, date, imageBase64, note, transactionId } = item;
+      const { customerId, date, imageBase64, note, transactionId, paymentId } = item;
 
       if (!customerId) {
         throw new BadRequestError(`Tệp số ${index + 1} chưa được chọn khách hàng.`);
@@ -1461,8 +1461,10 @@ const uploadBatchInvoices = async (req, res, next) => {
       const startUTC = new Date(Date.UTC(year, monthVal, dayVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
       const endUTC = new Date(Date.UTC(year, monthVal, dayVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
 
-      // Tìm đơn nợ Transaction của khách này để đính kèm (ưu tiên theo transactionId đích nếu có)
+      // Tìm đơn nợ Transaction hoặc đơn trả hàng Payment của khách này để đính kèm
+      let targetPaymentId = paymentId || null;
       let existingTransaction = null;
+
       if (transactionId) {
         existingTransaction = await prisma.transaction.findFirst({
           where: {
@@ -1470,8 +1472,17 @@ const uploadBatchInvoices = async (req, res, next) => {
             userId,
           },
         });
+        if (!existingTransaction && !targetPaymentId) {
+          const checkPayment = await prisma.payment.findFirst({
+            where: { id: transactionId, customer: { userId } },
+          });
+          if (checkPayment) {
+            targetPaymentId = checkPayment.id;
+          }
+        }
       }
-      if (!existingTransaction) {
+
+      if (!existingTransaction && !targetPaymentId) {
         existingTransaction = await prisma.transaction.findFirst({
           where: {
             userId,
@@ -1480,6 +1491,26 @@ const uploadBatchInvoices = async (req, res, next) => {
           },
           orderBy: { createdAt: 'desc' },
         });
+
+        // Nếu không có đơn nợ nhưng có đơn trả hàng / thanh toán của khách trong ngày
+        if (!existingTransaction) {
+          const existingPayment = await prisma.payment.findFirst({
+            where: {
+              customerId,
+              customer: { userId },
+              paidAt: { gte: startUTC, lte: endUTC },
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (existingPayment) {
+            targetPaymentId = existingPayment.id;
+          }
+        }
+      }
+
+      let finalNote = note || null;
+      if (targetPaymentId) {
+        finalNote = `[paymentId:${targetPaymentId}] ` + (note ? `${note}` : 'Đơn trả hàng');
       }
 
       const invoiceRecord = await prisma.transactionInvoice.create({
@@ -1488,7 +1519,7 @@ const uploadBatchInvoices = async (req, res, next) => {
           customerId,
           date: invoiceDate,
           imageUrl,
-          note: note || null,
+          note: finalNote,
           transactionId: existingTransaction ? existingTransaction.id : null,
         },
         include: {
@@ -1737,19 +1768,31 @@ const checkDebtExistence = async (req, res, next) => {
       const isoKey = `${customerId}_${dayStart.toISOString().split('T')[0]}`;
       const pairKey = effectiveDateStr ? `${customerId}_${effectiveDateStr}` : null;
 
-      // Kiểm tra có bất kỳ giao dịch ghi nợ (Transaction) nào của khách trong ngày đó không
-      const count = await prisma.transaction.count({
-        where: {
-          userId,
-          customerId,
-          date: {
-            gte: dayStart,
-            lte: dayEnd,
+      // Kiểm tra có bất kỳ giao dịch ghi nợ (Transaction) hoặc đơn trả hàng/thanh toán (Payment) nào của khách trong ngày đó không
+      const [transCount, payCount] = await Promise.all([
+        prisma.transaction.count({
+          where: {
+            userId,
+            customerId,
+            date: {
+              gte: dayStart,
+              lte: dayEnd,
+            },
           },
-        },
-      });
+        }),
+        prisma.payment.count({
+          where: {
+            customerId,
+            customer: { userId },
+            paidAt: {
+              gte: dayStart,
+              lte: dayEnd,
+            },
+          },
+        }),
+      ]);
 
-      const hasDebt = count > 0;
+      const hasDebt = (transCount + payCount) > 0;
       result[isoKey] = hasDebt;
       if (pairKey) result[pairKey] = hasDebt;
 

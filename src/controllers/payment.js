@@ -1,8 +1,88 @@
 // meat-management-be/src/controllers/payment.js
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
 const { emitWorkspaceEvent } = require('../utils/socket');
+const { uploadToCloudinary, isCloudinaryConfigured } = require('../utils/cloudinary');
+
+// Thư mục lưu trữ hóa đơn cục bộ
+const uploadsDir = path.join(__dirname, '../../uploads/invoices');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Helper lưu tệp ảnh / video đính kèm (hỗ trợ cả Base64 Data URI và Cloudinary)
+const processMediaUpload = async (mediaInput, userId) => {
+  if (!mediaInput || typeof mediaInput !== 'string') return null;
+
+  // Nếu đã là link web hoặc link server
+  if (mediaInput.startsWith('http://') || mediaInput.startsWith('https://') || mediaInput.startsWith('/uploads/')) {
+    return mediaInput;
+  }
+
+  let fileExt = 'jpg';
+  let isVideo = false;
+  let mimeType = 'image/jpeg';
+  let cleanBase64 = mediaInput;
+
+  if (mediaInput.startsWith('data:video/')) {
+    isVideo = true;
+    const match = mediaInput.match(/^data:video\/([a-zA-Z0-9+.\-_]+);base64,(.+)$/);
+    if (match && match.length === 3) {
+      const subType = match[1].toLowerCase();
+      fileExt = subType === 'quicktime' ? 'mov' : subType.split('+')[0];
+      mimeType = `video/${match[1]}`;
+      cleanBase64 = match[2];
+    } else {
+      fileExt = 'mp4';
+      mimeType = 'video/mp4';
+      cleanBase64 = mediaInput.split(',')[1] || mediaInput;
+    }
+  } else if (mediaInput.startsWith('data:image/')) {
+    const match = mediaInput.match(/^data:image\/([a-zA-Z0-9+.\-_]+);base64,(.+)$/);
+    if (match && match.length === 3) {
+      const subType = match[1].toLowerCase();
+      fileExt = subType === 'jpeg' ? 'jpg' : subType;
+      mimeType = `image/${match[1]}`;
+      cleanBase64 = match[2];
+    } else {
+      fileExt = 'jpg';
+      mimeType = 'image/jpeg';
+      cleanBase64 = mediaInput.split(',')[1] || mediaInput;
+    }
+  }
+
+  // Lưu file cục bộ vào thư mục uploads/invoices
+  const prefix = isVideo ? 'vid' : 'inv';
+  const fileName = `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${fileExt}`;
+  const filePath = path.join(uploadsDir, fileName);
+  const buffer = Buffer.from(cleanBase64, 'base64');
+  await fs.promises.writeFile(filePath, buffer);
+
+  let finalUrl = `/uploads/invoices/${fileName}`;
+
+  // Đẩy lên Cloudinary nếu có cấu hình
+  if (isCloudinaryConfigured()) {
+    try {
+      const dataUri = `data:${mimeType};base64,${cleanBase64}`;
+      const uploadRes = await uploadToCloudinary(dataUri, {
+        filePath,
+        folder: isVideo ? 'meat_invoices/videos' : 'meat_invoices',
+        resource_type: isVideo ? 'video' : 'image',
+      });
+      if (uploadRes && (uploadRes.secure_url || uploadRes.url)) {
+        finalUrl = uploadRes.secure_url || uploadRes.url;
+      }
+    } catch (cloudErr) {
+      console.warn('[PAYMENT_UPLOAD] Lỗi tải lên Cloudinary, giữ link cục bộ:', cloudErr.message);
+    }
+  }
+
+  return finalUrl;
+};
 
 // Helper gửi socket event thông báo thanh toán / nợ khách hàng thay đổi
 const notifyCustomerUpdate = (userId, action, payload = {}) => {
@@ -18,7 +98,7 @@ const notifyCustomerUpdate = (userId, action, payload = {}) => {
 const createPayment = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId, amount, paidAt, note } = req.body;
+    const { customerId, amount, paidAt, note, imageUrl, mediaData, imageBase64, images } = req.body;
 
     if (!customerId || amount === undefined) {
       throw new BadRequestError('Khách hàng và số tiền thanh toán là bắt buộc.');
@@ -78,16 +158,61 @@ const createPayment = async (req, res, next) => {
       },
     });
 
+    // Lưu các ảnh / video hóa đơn / chứng từ trả hàng đính kèm nếu có
+    const mediaInputs = [];
+    if (Array.isArray(images) && images.length > 0) {
+      mediaInputs.push(...images);
+    } else if (mediaData) {
+      mediaInputs.push(mediaData);
+    } else if (imageBase64) {
+      mediaInputs.push(imageBase64);
+    } else if (imageUrl) {
+      mediaInputs.push(imageUrl);
+    }
+
+    const createdInvoices = [];
+    if (mediaInputs.length > 0) {
+      for (const item of mediaInputs) {
+        try {
+          const finalUrl = await processMediaUpload(item, userId);
+          if (finalUrl) {
+            const returnNote = `[paymentId:${payment.id}] ` + (note ? `${note}` : 'Đơn trả hàng');
+            const inv = await prisma.transactionInvoice.create({
+              data: {
+                userId,
+                customerId,
+                date: paymentPaidAt,
+                imageUrl: finalUrl,
+                note: returnNote,
+                transactionId: null,
+              },
+            });
+            createdInvoices.push({
+              id: inv.id,
+              imageUrl: inv.imageUrl,
+              note: inv.note.replace(/\[paymentId:[a-f0-9\-]+\]\s*/i, ''),
+              date: inv.date,
+            });
+          }
+        } catch (mediaErr) {
+          console.warn('[CREATE_PAYMENT_MEDIA_ERR]', mediaErr.message);
+        }
+      }
+    }
+
     await logActivity(
       userId,
       'CREATE_PAYMENT',
-      `Thu tiền trả nợ từ khách hàng ${customer.name}: Số tiền ${payAmount.toLocaleString('vi-VN')}đ`
+      `Thu tiền trả nợ / trả hàng từ khách hàng ${customer.name}: Số tiền ${payAmount.toLocaleString('vi-VN')}đ`
     );
     notifyCustomerUpdate(userId, 'CREATE_PAYMENT', { customerId, paymentId: payment.id });
 
     res.status(201).json({
       success: true,
-      data: payment,
+      data: {
+        ...payment,
+        invoices: createdInvoices,
+      },
     });
   } catch (error) {
     next(error);
@@ -235,9 +360,9 @@ const updatePayment = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
     const { id } = req.params;
-    const { amount, paidAt, note } = req.body;
+    const { amount, paidAt, note, imageUrl, mediaData, imageBase64, images, deletedInvoiceIds } = req.body;
 
-    // Kiểm tra payment tồn tại và thuộc khach hàng của chủ buôn này
+    // Kiểm tra payment tồn tại và thuộc khách hàng của chủ buôn này
     const existing = await prisma.payment.findFirst({
       where: { id, customer: { userId } },
     });
@@ -252,15 +377,76 @@ const updatePayment = async (req, res, next) => {
       if (payAmount <= 0) throw new BadRequestError('Số tiền phải lớn hơn 0.');
     }
 
+    const newPaidAt = paidAt ? new Date(paidAt) : existing.paidAt;
+
     const updated = await prisma.payment.update({
       where: { id },
       data: {
         amount: payAmount,
-        paidAt: paidAt ? new Date(paidAt) : existing.paidAt,
+        paidAt: newPaidAt,
         note: note !== undefined ? (note || null) : existing.note,
       },
       include: { customer: { select: { name: true, phone: true } } },
     });
+
+    // 1. Xóa các hóa đơn bị người dùng gỡ bỏ
+    if (Array.isArray(deletedInvoiceIds) && deletedInvoiceIds.length > 0) {
+      await prisma.transactionInvoice.deleteMany({
+        where: {
+          id: { in: deletedInvoiceIds },
+          userId,
+        },
+      });
+    }
+
+    // 2. Thêm các ảnh/video hóa đơn mới nếu có
+    const mediaInputs = [];
+    if (Array.isArray(images) && images.length > 0) {
+      mediaInputs.push(...images);
+    } else if (mediaData) {
+      mediaInputs.push(mediaData);
+    } else if (imageBase64) {
+      mediaInputs.push(imageBase64);
+    } else if (imageUrl) {
+      mediaInputs.push(imageUrl);
+    }
+
+    if (mediaInputs.length > 0) {
+      for (const item of mediaInputs) {
+        try {
+          const finalUrl = await processMediaUpload(item, userId);
+          if (finalUrl) {
+            const currentNote = updated.note || '';
+            const returnNote = `[paymentId:${id}] ` + (currentNote ? `Trả hàng - ${currentNote}` : 'Đơn trả hàng');
+            await prisma.transactionInvoice.create({
+              data: {
+                userId,
+                customerId: existing.customerId,
+                date: newPaidAt,
+                imageUrl: finalUrl,
+                note: returnNote,
+                transactionId: null,
+              },
+            });
+          }
+        } catch (mediaErr) {
+          console.warn('[UPDATE_PAYMENT_MEDIA_ERR]', mediaErr.message);
+        }
+      }
+    }
+
+    // 3. Đồng bộ lại ngày của các TransactionInvoice liên kết nếu ngày thanh toán thay đổi
+    if (paidAt && new Date(paidAt).getTime() !== new Date(existing.paidAt).getTime()) {
+      await prisma.transactionInvoice.updateMany({
+        where: {
+          userId,
+          note: { contains: `[paymentId:${id}]` },
+        },
+        data: {
+          date: newPaidAt,
+        },
+      });
+    }
 
     const oldAmountStr = `${Number(existing.amount).toLocaleString('vi-VN')}đ`;
     const newAmountStr = `${Number(payAmount).toLocaleString('vi-VN')}đ`;
@@ -316,6 +502,14 @@ const deletePayment = async (req, res, next) => {
     if (!actorIsAdmin && existing.createdBy !== actorId && actorId !== userId) {
       throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
     }
+
+    // Xóa tất cả ảnh/video hóa đơn TransactionInvoice liên kết với payment này
+    await prisma.transactionInvoice.deleteMany({
+      where: {
+        userId,
+        note: { contains: `[paymentId:${id}]` },
+      },
+    }).catch((delErr) => console.warn('[DELETE_PAYMENT_INVOICES_ERR]', delErr.message));
 
     // Thực hiện xóa lượt trả nợ
     await prisma.payment.delete({
