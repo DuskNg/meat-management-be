@@ -403,6 +403,14 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
      + Vẫn bóc tách chính xác customer_name và items (tên món thịt, số cân, giá, tiền).
      + Các từ ngữ "gửi lại", "gửi về", "trả hàng", "trả về", "trả lại", "hàng trả" CHỈ DÙNG ĐỂ XÁC ĐỊNH LOẠI ĐƠN, TUYỆT ĐỐI CẤM đưa vào tên khách hàng (customer_name) hay tên món thịt (name)!
 
+3.1. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN NHẬP HÀNG / MUA THỊT (CỰC KỲ QUAN TRỌNG):
+   - Khi người nói dùng các từ ngữ như: "nhập thịt", "nhập hàng", "mua thịt", "mua hàng", "nhập về", "mua về", "lấy thịt về", "lấy hàng về", "nhập lô", "nhập kho" (ý nghĩa: chủ buôn NHẬP THỊT TỪ NHÀ CUNG CẤP về kho, không phải bán cho khách):
+   - BẮT BUỘC nhận diện đây là ĐƠN NHẬP HÀNG (chủ buôn mua/nhận thịt về, cần trừ vào nợ nhà cung cấp):
+     + BẮT BUỘC đặt "is_return": true.
+     + BẮT BUỘC đặt "note": "NHẬP HÀNG" (chỉ ghi đúng chữ NHẬP HÀNG, không thêm gì khác trừ khi người nói đọc thêm ghi chú cụ thể).
+     + Vẫn bóc tách chính xác customer_name (tên nhà cung cấp nếu có) và items (tên món thịt, số cân, giá, tiền).
+     + Các từ ngữ "nhập thịt", "mua thịt", "nhập hàng", "mua hàng" CHỈ DÙNG ĐỂ XÁC ĐỊNH LOẠI ĐƠN, TUYỆT ĐỐI CẤM đưa vào tên khách hàng hay tên món thịt!
+
 4. Lưu ý:
    - Người nói có thể dùng khẩu ngữ tiếng Việt (cân = kg, lạng = 0.1kg, rưỡi = .5, chẵn...).
    - BẮT BUỘC kết hợp cả nghe giọng nói và nhìn hình ảnh màn hình LED đỏ của cân điện tử để đảm bảo luôn lấy được số cân chính xác nhất.
@@ -731,9 +739,17 @@ Chỉ trả về JSON theo đúng cấu trúc:
       ? (parsedJson.note || 'Ảnh không có bố cục của một hóa đơn bán hàng (giấy nháp/mặt sau), AI đã bỏ qua không quét.')
       : null;
 
+    // Nhận diện đơn NHẬP HÀNG (chủ buôn nhập thịt / mua thịt từ nhà cung cấp)
+    const importRegex = /(nhập thịt|nhập hàng|mua thịt|mua hàng|nhập về|mua về|lấy thịt về|lấy hàng về|nhập lô|nhập kho|nhap thit|nhap hang|mua thit|mua hang|nhap ve|mua ve)/i;
+    const isImportOrder = isVideo && isValidInvoice && Boolean(
+      (parsedJson.note && importRegex.test(parsedJson.note)) ||
+      (submission.note && importRegex.test(submission.note)) ||
+      importRegex.test(geminiResult.text || '')
+    );
+
     // Nhận diện đơn trả hàng (khi khách đọc hoặc viết: gửi về, trả hàng, trả về, trả lại, gửi lại, hàng trả, thu hồi, quay đầu, đổi trả, hoàn hàng...)
     const returnRegex = /(trả hàng|gửi về|trả về|trả lại|gửi lại|hàng trả|thu hồi|bắn về|quay đầu|đổi trả|hoàn hàng|tra hang|gui ve|tra ve|tra lai|gui lai|hang tra|quay dau|doi tra|hoan hang)/i;
-    const isReturnOrder = isValidInvoice && Boolean(
+    const isReturnOrder = !isImportOrder && isValidInvoice && Boolean(
       parsedJson.is_return === true ||
       (parsedJson.note && returnRegex.test(parsedJson.note)) ||
       (submission.note && returnRegex.test(submission.note)) ||
@@ -742,15 +758,15 @@ Chỉ trả về JSON theo đúng cấu trúc:
       returnRegex.test(geminiResult.text || '')
     );
 
-    if (isReturnOrder) {
+    if (isImportOrder || isReturnOrder) {
       parsedJson.is_return = true;
     }
 
-    // Làm sạch tên khách hàng nếu dính các từ khóa trả hàng (ví dụ "Thái Hà trả về", "Gửi lại Cô Thảo", "Trả hàng anh Thắng"...)
+    // Làm sạch tên khách hàng nếu dính các từ khóa trả hàng / nhập hàng
     let cleanDetectedCustomerName = detectedCustomerName;
-    if (cleanDetectedCustomerName && isReturnOrder) {
+    if (cleanDetectedCustomerName && (isReturnOrder || isImportOrder)) {
       cleanDetectedCustomerName = cleanDetectedCustomerName
-        .replace(/\b(trả hàng|gửi về|trả về|trả lại|gửi lại|hàng trả|thu hồi|bắn về|quay đầu|đổi trả|hoàn hàng|tra hang|gui ve|tra ve|tra lai|gui lai|hang tra|quay dau|doi tra|hoan hang|trả|tra)\b/gi, '')
+        .replace(/\b(nhập thịt|nhập hàng|mua thịt|mua hàng|nhập về|mua về|lấy thịt về|lấy hàng về|nhập lô|nhập kho|trả hàng|gửi về|trả về|trả lại|gửi lại|hàng trả|thu hồi|bắn về|quay đầu|đổi trả|hoàn hàng|tra hang|gui ve|tra ve|tra lai|gui lai|hang tra|quay dau|doi tra|hoan hang|trả|tra)\b/gi, '')
         .replace(/[-–—:()]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
@@ -760,6 +776,13 @@ Chỉ trả về JSON theo đúng cấu trúc:
     let submissionNote = submission.note || '';
     if (!isValidInvoice) {
       submissionNote = '[Không phải hóa đơn] Giấy nháp / Mặt sau';
+    } else if (isImportOrder) {
+      // Đơn nhập hàng: ghi chú riêng là NHẬP HÀNG (không dùng [Trả lại hàng])
+      if (!submissionNote.includes('NHẬP HÀNG')) {
+        submissionNote = submissionNote
+          ? `NHẬP HÀNG - ${submissionNote}`
+          : 'NHẬP HÀNG';
+      }
     } else if (isReturnOrder) {
       if (!submissionNote.includes('[Trả lại hàng]') && !submissionNote.includes('[Trả hàng]')) {
         const extraNote = parsedJson.note && !parsedJson.note.includes('[Trả lại hàng]') ? parsedJson.note : '';
