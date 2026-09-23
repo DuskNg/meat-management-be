@@ -1,4 +1,4 @@
-// meat-management-be/src/services/aiInvoiceParser.js
+﻿// meat-management-be/src/services/aiInvoiceParser.js
 const fs = require('fs');
 const path = require('path');
 const prisma = require('../utils/db');
@@ -10,7 +10,6 @@ const removeDiacritics = (str) => {
   if (!str) return '';
   return str
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd')
     .replace(/Đ/g, 'D');
 };
@@ -593,6 +592,12 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
         2) Dòng dưới (ngay dưới dòng 1) ghi chữ "trường Hoàng" (hoặc viết tắt/thảo "trg Hoàng", "Hoang", "Hoàng" với chữ "H" in hoa to, nét "oang" đuôi "g" thòng xuống).
       + QUY TẮC BẮT BUỘC: Bất kể khi nào đọc được chữ "Nguyễn" đi kèm chữ "Hoàng" (hoặc "Nguyễn . Hoàng", "nguyễn hoàng", "nguyễn khuyến", "khuyến hoàng", "nguyễn khuyến hoàng", "trường hoàng", "nguyễn trường hoàng"):
       => BẮT BUỘC nhận diện và trả về customer_name là: "Nguyễn khuyến trường hoàng" (để hệ thống khớp chính xác vào khách "Nguyễn khuyến trường hoàng" trong danh bạ).
+    - QUY TẮC ĐẶC BIỆT CỐT LÕI - KHÁCH "SÀNH LẨU CS1" (CHỈ CÓ NGUYỄN KHUYếN, KHÔNG CÓ TRƯỜNG HOÀNG):
+       + Khi ở dòng Tên khách hàng chỉ đọc được chữ "Nguyễn Khuyến" (hoặc "N.Khuyến", "Ng Khuyến", "nguyễn khuyến", "N Khuyen", "nguyen khuyen") NHƯNG TUYỆT ĐỐI KHÔNG có thêm chữ "Hoàng", "Trường Hoàng", "trg Hoàng", "Trường", "Hoang" ở bất kỳ đâu trên hóa đơn:
+       + Ý NGHĨA: "Nguyễn Khuyến" là tên đường phố, không phải tên người. Khách hàng ở trên đường Nguyễn Khuyến là "Sành lẩu CS1".
+       + QUY TẮC BẮT BUỘC:
+       => BẮT BUỘC nhận diện và trả về customer_name là: "Sành lẩu CS1" (để hệ thống khớp chính xác vào khách "Sành lẩu CS1" trong danh bạ).
+       + LƯỦ Ý PHÂN BIỆT QUAN TRỌNG: "Nguyễn Khuyến" + "Trường Hoàng" (có cả hai) -> "Nguyễn khuyến trường hoàng". Chỉ "Nguyễn Khuyến" đơn độc (không có Hoàng/Trường) -> "Sành lẩu CS1".
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "52 TRẦN THÁI TÔNG":
       + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:":
         Người viết ghi số "52" kèm chữ thảo "Tran Thai Tong" (chữ T hoa nét lượn, đuôi g dài) hoặc người viết CHỈ GHI TẮT CON SỐ "52" (hoặc "52 tran", "52 thai tong"):
@@ -1880,3 +1885,4 @@ Chỉ trả về JSON theo đúng cấu trúc:
 module.exports = {
   parseStaffSubmission,
 };
+
