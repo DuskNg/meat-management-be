@@ -1,4 +1,4 @@
-﻿// meat-management-be/src/services/aiInvoiceParser.js
+// meat-management-be/src/services/aiInvoiceParser.js
 const fs = require('fs');
 const path = require('path');
 const prisma = require('../utils/db');
@@ -244,6 +244,9 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "BÚN HUẾ VĂN KHÊ":
       + Nếu người nói đọc là "bún huế", "Bún Huế", "bún huế văn khê", "quán bún huế", "bún bò huế", "bún bò huế văn khê", "Văn Khê", "quán Văn Khê":
       + BẮT BUỘC nhận diện và trả về customer_name là: "Bún huế văn khê" (hoặc tên khách Bún Huế Văn Khê trong danh mục).
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "BẾP 3 MIỀN KIM LIÊN" (3MIEN / 3 MIỀN):
+      + Nếu người nói đọc là "3mien", "3 mien", "3 Miền", "3 miền", "ba miền", "bếp 3 miền", "kim liên", "bep 3 mien", "bếp ba miền", "quán 3 miền":
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Bếp 3 miền kim liên". Tuyệt đối không để là "3mien" hay nhầm sang khách khác.
     - QUY TẮC ĐẶC BIỆT CHO CÁC BẾP (B1, B2, B3, B4):
       + Nếu đọc là "b1", "b 1", "bê một", "bếp 1", "bếp một", "trường bò 1": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 1".
       + Nếu đọc là "b2", "b 2", "bê hai", "bếp 2", "bếp hai": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 2".
@@ -557,6 +560,12 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
         4) Từ "Khe" (hoặc "Khê"): Chữ "K" nét sổ cao đứng, hai nét xiên chụm nối liền sang chữ "h" và "e" (hoặc "ê"), nằm sát lấn vào chữ in "ĐT:".
       + QUY TẮC QUAN TRỌNG: Bất kể trên tích kê người viết ghi đầy đủ "bun Hue Van Khe" hay CHỈ VIẾT TẮT LÀ "bún huế" (hoặc "bun Hue", "Bún Huế", "bún bò huế"):
       => BẮT BUỘC nhận diện và trả về customer_name là: "Bún huế văn khê" (hoặc so khớp với khách Bún Huế Văn Khê trong danh bạ), TUYỆT ĐỐI KHÔNG để sót hoặc nhầm sang khách khác.
+    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "BẾP 3 MIỀN KIM LIÊN" (3MIEN / 3 MIỀN):
+      + Quan sát nét chữ viết tay ở dòng Tên khách hàng / dưới tiêu đề in đỏ "HÓA ĐƠN BÁN HÀNG":
+        1) Chữ số "3" viết tay rõ nét (hoặc viết liền "3Mien", "3mien", "3 mien", "3 Miền", "3 miền", "3m", "3M").
+        2) Chữ "Mien" (hoặc "Miền", "mien"): Chữ "M" in hoa hoặc viết hoa to, theo sau là nét "ien" (hoặc "iền", "ền").
+      + QUY TẮC BẮT BUỘC: BẤT KỂ KHI NÀO thấy chữ viết tay ở dòng Tên khách hàng ghi là "3Mien", "3mien", "3 mien", "3 Miền", "3 miền", "3m", "3M", "bếp 3 miền", "ba miền", "bep 3 mien", "kim liên", "kim lien", "bếp ba miền", "3 miền kim liên":
+      => BẮT BUỘC nhận diện và trả về customer_name là: "Bếp 3 miền kim liên" (để hệ thống khớp chính xác vào khách "Bếp 3 miền kim liên" trong danh bạ), TUYỆT ĐỐI CẤM trả về "3mien" hay khách khác.
     - QUY TẮC ĐẶC BIỆT CHO CÁC BẾP (B1, B2, B3, B4):
       + Chữ viết tắt "b1", "B1", "B 1", "bếp 1", "bep 1": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 1".
       + Chữ viết tắt "b2", "B2", "B 2", "bếp 2", "bep 2": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 2".
@@ -831,6 +840,36 @@ Chỉ trả về JSON theo đúng cấu trúc:
         });
         if (coThaoCust) {
           matchedCustomerId = coThaoCust.id;
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "Bếp 3 Miền Kim Liên" nếu AI nhận diện là 3mien, 3 miền, ba miền, kim liên, bếp 3 miền...
+        if (
+          cleanDetectedNoSpace === '3mien' ||
+          cleanDetectedNoSpace.includes('3mien') ||
+          cleanDetectedNoSpace === '3m' ||
+          cleanDetected.includes('3 mien') ||
+          cleanDetected.includes('ba mien') ||
+          cleanDetected.includes('bep 3 mien') ||
+          cleanDetected.includes('kim lien') ||
+          cleanDetectedNoSpace.includes('kimlien') ||
+          cleanDetectedNoSpace.includes('bep3mien') ||
+          cleanDetectedNoSpace.includes('bamien')
+        ) {
+          const bep3MienCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            const cNoSpace = cClean.replace(/\s+/g, '');
+            return (cClean.includes('3 mien') || cNoSpace.includes('3mien') || cClean.includes('ba mien')) && cClean.includes('kim lien');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('kim lien');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            const cNoSpace = cClean.replace(/\s+/g, '');
+            return (cClean.includes('3 mien') || cNoSpace.includes('3mien') || cClean.includes('ba mien') || cClean.includes('bep 3 mien')) && c.name.toLowerCase() !== '3mien';
+          });
+          if (bep3MienCust) matchedCustomerId = bep3MienCust.id;
         }
       }
 
