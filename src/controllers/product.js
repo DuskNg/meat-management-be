@@ -222,6 +222,36 @@ const normalizeDateStr = (str) => {
   return trimmed;
 };
 
+// Helper: Chuẩn hóa chuỗi ngày hoặc đối tượng Date thành chuỗi YYYY-MM-DD theo múi giờ Việt Nam (+7)
+const getVnDateString = (input) => {
+  if (!input) return null;
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (trimmed.includes('/')) {
+      const parts = trimmed.split('/');
+      if (parts.length === 3) {
+        const [d, m, y] = parts;
+        return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+      }
+    }
+    if (trimmed.includes('T')) {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) {
+        const vnTime = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+        return vnTime.toISOString().split('T')[0];
+      }
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+  }
+  if (input instanceof Date && !isNaN(input.getTime())) {
+    const vnTime = new Date(input.getTime() + 7 * 60 * 60 * 1000);
+    return vnTime.toISOString().split('T')[0];
+  }
+  return null;
+};
+
 // Helper: Kiểm tra xem sản phẩm có phải là "Tiền hàng" (ghi nợ nhanh / tiền hàng) hay không
 const isQuickMoneyProduct = (name, note) => {
   if (note && (note.toLowerCase().includes('ghi nợ nhanh') || note.toLowerCase().includes('nợ nhanh'))) {
@@ -463,7 +493,7 @@ const getDailyPriceUpdates = async (req, res, next) => {
 const updateCustomerProductPrice = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId, productId, price, transactionId, recalculateOrder } = req.body;
+    const { customerId, productId, price, transactionId, date, recalculateOrder } = req.body;
 
     if (!customerId || !productId || price === undefined) {
       throw new BadRequestError('customerId, productId và price là bắt buộc.');
@@ -537,8 +567,39 @@ const updateCustomerProductPrice = async (req, res, next) => {
         if (targetTx) {
           affectedTransactions.push(targetTx);
         }
-      } else if (recalculateOrder) {
-        // Nếu không chỉ định đơn hàng cụ thể, tìm đơn hàng gần nhất có mặt hàng này
+      }
+
+      // Nếu có ngày cụ thể: nhân lại toàn bộ đơn nợ của khách hàng trong ngày đó có chứa mặt hàng này
+      if (date) {
+        const vnDateStr = getVnDateString(date);
+        if (vnDateStr) {
+          const [year, month, day] = vnDateStr.split('-').map(Number);
+          const dayStart = new Date(Date.UTC(year, month - 1, day, -7, 0, 0, 0));
+          const dayEnd = new Date(Date.UTC(year, month - 1, day, 16, 59, 59, 999));
+
+          const dateTxs = await tx.transaction.findMany({
+            where: {
+              userId,
+              customerId,
+              date: {
+                gte: dayStart,
+                lte: dayEnd,
+              },
+              items: {
+                some: { productId },
+              },
+            },
+            include: { items: true },
+          });
+
+          for (const dTx of dateTxs) {
+            if (!affectedTransactions.some((t) => t.id === dTx.id)) {
+              affectedTransactions.push(dTx);
+            }
+          }
+        }
+      } else if (!transactionId && recalculateOrder) {
+        // Nếu không chỉ định đơn hàng cụ thể và không có ngày, tìm đơn hàng gần nhất có mặt hàng này
         const recentTxs = await tx.transaction.findMany({
           where: {
             userId,
@@ -631,7 +692,7 @@ const updateCustomerProductPrice = async (req, res, next) => {
     );
 
     // Bắn socket thông báo cập nhật đơn nợ và công nợ khách hàng
-    if (transactionId) {
+    if (result.recalculatedCount > 0) {
       notifyCustomerUpdate(userId, 'UPDATE_TRANSACTION', { customerId, transactionId });
     }
     notifyCustomerUpdate(userId, 'UPDATE_CUSTOMER', { customerId });

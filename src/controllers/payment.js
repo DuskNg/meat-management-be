@@ -117,27 +117,8 @@ const createPayment = async (req, res, next) => {
       throw new NotFoundError('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của bạn.');
     }
 
-    // Tính toán ngày thanh toán: nếu ghi chú chỉ định rõ tháng nợ mà không truyền paidAt thì tự động đưa về cuối tháng nợ đó
-    let paymentPaidAt = paidAt ? new Date(paidAt) : new Date();
-    if (!paidAt && note) {
-      const monthMatch = note.match(/Thanh toán (?:nợ|hóa đơn) [Tt]háng (\d{2})\/(\d{4})/i);
-      if (monthMatch) {
-        const targetM = parseInt(monthMatch[1], 10);
-        const targetY = parseInt(monthMatch[2], 10);
-        const lastDay = new Date(targetY, targetM, 0).getDate();
-        paymentPaidAt = new Date(Date.UTC(targetY, targetM - 1, lastDay, 5, 0, 0, 0));
-      } else {
-        const rangeMatch = note.match(/Thanh toán (?:nợ|hóa đơn) từ ngày (\d{2})\/(\d{2})\/(\d{4}) đến ngày (\d{2})\/(\d{2})\/(\d{4})/i);
-        if (rangeMatch) {
-          const toD = parseInt(rangeMatch[4], 10);
-          const toM = parseInt(rangeMatch[5], 10);
-          const toY = parseInt(rangeMatch[6], 10);
-          if (toD && toM && toY) {
-            paymentPaidAt = new Date(Date.UTC(toY, toM - 1, toD, 12, 0, 0, 0));
-          }
-        }
-      }
-    }
+    // Ngày thanh toán: ưu tiên ngày do client truyền (nếu người dùng chủ động chọn ngày), ngược lại mặc định là thời điểm hiện tại
+    const paymentPaidAt = paidAt ? new Date(paidAt) : new Date();
 
     // Lưu lượt trả nợ vào database
     const payment = await prisma.payment.create({
@@ -246,7 +227,11 @@ const getPayments = async (req, res, next) => {
 
         const startUTC = new Date(Date.UTC(year, monthVal, dayVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
         const endUTC = new Date(Date.UTC(year, monthVal, dayVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
-        whereClause.paidAt = { gte: startUTC, lte: endUTC };
+        // Lấy tất cả các khoản thanh toán có paidAt hoặc createdAt trong ngày này (tránh sót các khoản thu tạo trong ngày)
+        whereClause.OR = [
+          { paidAt: { gte: startUTC, lte: endUTC } },
+          { createdAt: { gte: startUTC, lte: endUTC } },
+        ];
       }
     } else if (month) {
       const parts = month.split('/');

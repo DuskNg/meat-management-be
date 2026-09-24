@@ -895,16 +895,8 @@ const createPayment = async (req, res, next) => {
       throw new NotFoundError('Bàn ăn không tồn tại.');
     }
 
-    let paymentPaidAt = paidAt ? new Date(paidAt) : new Date();
-    if (!paidAt && note) {
-      const monthMatch = note.match(/Thanh toán (?:nợ|hóa đơn) [Tt]háng (\d{2})\/(\d{4})/i);
-      if (monthMatch) {
-        const targetM = parseInt(monthMatch[1], 10);
-        const targetY = parseInt(monthMatch[2], 10);
-        const lastDay = new Date(targetY, targetM, 0).getDate();
-        paymentPaidAt = new Date(Date.UTC(targetY, targetM - 1, lastDay, 5, 0, 0, 0));
-      }
-    }
+    // Ngày thanh toán: ưu tiên ngày do client truyền, mặc định là thời điểm hiện tại
+    const paymentPaidAt = paidAt ? new Date(paidAt) : new Date();
 
     const payment = await prisma.payment.create({
       data: {
