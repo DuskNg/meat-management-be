@@ -167,4 +167,28 @@ describe('Luồng Nghiệp Vụ: Nhà Cung Cấp - Giá Nhập Chi Tiết & Lưu
     expect(payItem.mediaUrls.length).toBe(1);
     expect(payItem.mediaUrls[0].fileName).toBe('bill_vcb_ck.jpg');
   });
+
+  it('4. Xóa nhà cung cấp thành công (soft-delete isActive: false)', async () => {
+    const res = await request(app)
+      .delete(`/api/v1/suppliers/${testSupplierId}`)
+      .set('Authorization', `Bearer ${testToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+
+    // Kiểm tra trong database: isActive phải đổi thành false
+    const dbSupplier = await prisma.supplier.findUnique({
+      where: { id: testSupplierId },
+    });
+    expect(dbSupplier).not.toBeNull();
+    expect(dbSupplier.isActive).toBe(false);
+
+    // Kiểm tra API lấy danh sách: không còn trả về nhà cung cấp đã xóa
+    const listRes = await request(app)
+      .get('/api/v1/suppliers')
+      .set('Authorization', `Bearer ${testToken}`);
+    expect(listRes.status).toBe(200);
+    const found = listRes.body.data.find((s) => s.id === testSupplierId);
+    expect(found).toBeUndefined();
+  });
 });
