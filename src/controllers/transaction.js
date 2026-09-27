@@ -812,6 +812,9 @@ const scanTicket = async (req, res, next) => {
 
 Hãy đọc thêm trường "Tên khách hàng" ở phía trên bảng (thường nằm sau nhãn "Tên khách hàng:"). Trả về đúng tên viết tay đọc được vào trường customer_name. Nếu không đọc rõ hoặc trường này để trống, trả về customer_name = null. Không lấy tên cửa hàng, tên chủ cửa hàng hoặc tên người bán làm tên khách hàng.
 
+Ghi chú đặc biệt về một số tên khách hàng thường gặp để tránh nhầm lẫn:
+- Nếu đọc được tên "Hạnh" (hoặc "hạnh", "HẠNH") → customer_name = "Hạnh sân bóng Hà Trì" (đây là tên đầy đủ của khách hàng này trong hệ thống).
+
 Hãy tập trung phân tích BẢNG CHI TIẾT HÀNG HÓA trong hình ảnh. Bảng gồm các cột:
 - STT (Số thứ tự): có thể có hoặc trống.
 - Tên hàng hóa: Tên loại thịt/sản phẩm viết tay (Ví dụ: "Tai", "X", "Tiết"). Đặc biệt lưu ý chữ viết tay địa phương/viết tắt: ví dụ "xườn xg" (nét chữ thảo nhìn lướt qua dễ nhầm thành "x lơn x lơng", "xldn xldug", "xlan xg", "xuan xg", "x lơng") chính là món "Sườn xg" (Sườn xương). Nếu có số bên cạnh (ví dụ: 30) thì ghi nhận quantity = 30.
