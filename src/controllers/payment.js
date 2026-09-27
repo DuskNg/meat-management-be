@@ -227,11 +227,8 @@ const getPayments = async (req, res, next) => {
 
         const startUTC = new Date(Date.UTC(year, monthVal, dayVal, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
         const endUTC = new Date(Date.UTC(year, monthVal, dayVal, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
-        // Lấy tất cả các khoản thanh toán có paidAt hoặc createdAt trong ngày này (tránh sót các khoản thu tạo trong ngày)
-        whereClause.OR = [
-          { paidAt: { gte: startUTC, lte: endUTC } },
-          { createdAt: { gte: startUTC, lte: endUTC } },
-        ];
+        // Lọc chuẩn xác theo ngày thanh toán / trả hàng thực tế (paidAt)
+        whereClause.paidAt = { gte: startUTC, lte: endUTC };
       }
     } else if (month) {
       const parts = month.split('/');

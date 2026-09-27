@@ -615,6 +615,14 @@ const updateTransaction = async (req, res, next) => {
         },
       });
 
+      // Đồng bộ lại ngày của các ảnh hóa đơn đính kèm đơn nợ nếu ngày giao dịch thay đổi
+      if (date) {
+        await tx.transactionInvoice.updateMany({
+          where: { transactionId: id },
+          data: { date: new Date(date) },
+        });
+      }
+
       // Cập nhật hoặc lưu mới đơn giá bán thực tế của loại thịt cho khách hàng này
       const customerId = existingTransaction.customerId;
       for (const item of formattedItems) {

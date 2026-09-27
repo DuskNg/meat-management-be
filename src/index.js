@@ -298,27 +298,35 @@ const startCleanupScheduler = () => {
   setInterval(cleanup, 24 * 60 * 60 * 1000);
 };
 
-startCleanupScheduler();
-
-// Khởi chạy tiến trình tự động ghi nợ cố định hàng ngày lúc 00:30 sáng
-const { initRecurringDebtScheduler } = require('./schedulers/recurringDebtScheduler');
-initRecurringDebtScheduler();
-
-// Khởi chạy tiến trình tự động phục hồi đơn nộp nhân viên bị kẹt (Auto-Recovery)
-const { initStaffSubmissionRecoveryScheduler } = require('./schedulers/staffSubmissionRecoveryScheduler');
-initStaffSubmissionRecoveryScheduler();
-
-// Khởi chạy tiến trình tự động công bố số liệu portal lúc 20:00 hàng ngày (giờ VN)
-const { initPortalAutoPublishScheduler } = require('./schedulers/portalAutoPublishScheduler');
-initPortalAutoPublishScheduler();
-
 // Tạo HTTP server và khởi tạo Socket.IO
 const http = require('http');
 const { initSocket } = require('./utils/socket');
 const server = http.createServer(app);
 initSocket(server);
 
-// Bắt đầu lắng nghe cổng mạng (Tải lại máy chủ khi lưu cấu hình và prompt mới)
-server.listen(PORT, () => {
-  logger.info(`Máy chủ Express + Socket.IO đang chạy thành công tại cổng ${PORT}`);
-});
+// Chỉ chạy các tiến trình Scheduler ngầm và lắng nghe cổng mạng khi không ở môi trường test
+if (process.env.NODE_ENV !== 'test') {
+  startCleanupScheduler();
+
+  // Khởi chạy tiến trình tự động ghi nợ cố định hàng ngày lúc 00:30 sáng
+  const { initRecurringDebtScheduler } = require('./schedulers/recurringDebtScheduler');
+  initRecurringDebtScheduler();
+
+  // Khởi chạy tiến trình tự động phục hồi đơn nộp nhân viên bị kẹt (Auto-Recovery)
+  const { initStaffSubmissionRecoveryScheduler } = require('./schedulers/staffSubmissionRecoveryScheduler');
+  initStaffSubmissionRecoveryScheduler();
+
+  // Khởi chạy tiến trình tự động công bố số liệu portal lúc 20:00 hàng ngày (giờ VN)
+  const { initPortalAutoPublishScheduler } = require('./schedulers/portalAutoPublishScheduler');
+  initPortalAutoPublishScheduler();
+
+  // Bắt đầu lắng nghe cổng mạng (Tải lại máy chủ khi lưu cấu hình và prompt mới)
+  server.listen(PORT, () => {
+    logger.info(`Máy chủ Express + Socket.IO đang chạy thành công tại cổng ${PORT}`);
+  });
+}
+
+// Xuất app và server để phục vụ cho các bài kiểm thử tự động (Automation Testing)
+module.exports = { app, server };
+
+
