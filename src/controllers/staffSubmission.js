@@ -699,6 +699,15 @@ const approveStaffSubmission = async (req, res, next) => {
       let returnNote = '';
 
       if (isReturnOrder) {
+        // Kiểm tra đơn có phải là loại "Nhập hàng" hay không
+        const isImportOrder = Boolean(
+          req.body.isImport ||
+          req.body.orderType === 'nhap_hang' ||
+          req.body.type === 'nhap_hang' ||
+          (finalNote && /\b(nhập hàng|nhập thịt|nhập tái|nhập gầu|nhập kho|mua thịt|mua hàng|nhap hang|nhap thit)\b/i.test(finalNote)) ||
+          (submission.note && /\b(nhập hàng|nhập thịt|nhap hang)\b/i.test(submission.note))
+        );
+
         // Kiểm tra xem đơn trả hàng này là dạng chi tiết hay trả nhanh
         const isQuickOrder = req.body.orderMode === 'quick' || (
           finalItems.length === 1 &&
@@ -706,9 +715,22 @@ const approveStaffSubmission = async (req, res, next) => {
         );
 
         let cleanExtraNote = (finalNote || '')
-          .replace(/\[Trả lại hàng\]|\[Trả hàng nhanh\]|\[Trả hàng\]/gi, '')
+          .replace(/\[Trả lại hàng\]|\[Trả hàng nhanh\]|\[Trả hàng\]|\[Nhập hàng\]/gi, '')
           .replace(/^Trả hàng nhanh\s*[:-]?\s*/gi, '')
           .trim();
+
+        // Cắt bỏ phần danh sách món cũ nếu note cũ có ngoặc tròn
+        if (cleanExtraNote.includes('(') && cleanExtraNote.includes(')')) {
+          const lastParen = cleanExtraNote.lastIndexOf(')');
+          cleanExtraNote = cleanExtraNote.substring(lastParen + 1).replace(/^[-–—:\s]+/, '').trim();
+        }
+
+        // BẮT BUỘC: Nếu là đơn Nhập hàng -> đảm bảo có text "NHẬP HÀNG" ở ghi chú
+        if (isImportOrder) {
+          if (!/nhập hàng|nhap hang/i.test(cleanExtraNote)) {
+            cleanExtraNote = cleanExtraNote ? `NHẬP HÀNG - ${cleanExtraNote}` : 'NHẬP HÀNG';
+          }
+        }
 
         if (isQuickOrder) {
           returnNote = cleanExtraNote ? `[Trả lại hàng] Trả hàng nhanh - ${cleanExtraNote}` : `[Trả lại hàng] Trả hàng nhanh`;
@@ -724,12 +746,6 @@ const approveStaffSubmission = async (req, res, next) => {
             })
             .filter(Boolean)
             .join(', ');
-
-          // Cắt bỏ phần danh sách món cũ nếu note cũ có ngoặc tròn
-          if (cleanExtraNote.includes('(') && cleanExtraNote.includes(')')) {
-            const lastParen = cleanExtraNote.lastIndexOf(')');
-            cleanExtraNote = cleanExtraNote.substring(lastParen + 1).replace(/^-+\s*/, '').trim();
-          }
 
           returnNote = cleanExtraNote ? `[Trả lại hàng] ${itemsDesc} - ${cleanExtraNote}` : `[Trả lại hàng] ${itemsDesc}`;
         }

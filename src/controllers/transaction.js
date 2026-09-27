@@ -814,10 +814,11 @@ Hãy đọc thêm trường "Tên khách hàng" ở phía trên bảng (thườn
 
 Ghi chú đặc biệt về một số tên khách hàng thường gặp để tránh nhầm lẫn:
 - Nếu đọc được tên "Hạnh" (hoặc "hạnh", "HẠNH") → customer_name = "Hạnh sân bóng Hà Trì" (đây là tên đầy đủ của khách hàng này trong hệ thống).
+- Nếu đọc được tên "Phở Tưởng" (hoặc "phở tưởng", "Tưởng", "chị Luyến", "Luyến", "Phởtưởng") → customer_name = "Phở tưởng(chị Luyến)" (đây là tên đầy đủ của khách hàng này trong hệ thống).
 
 Hãy tập trung phân tích BẢNG CHI TIẾT HÀNG HÓA trong hình ảnh. Bảng gồm các cột:
 - STT (Số thứ tự): có thể có hoặc trống.
-- Tên hàng hóa: Tên loại thịt/sản phẩm viết tay (Ví dụ: "Tai", "X", "Tiết"). Đặc biệt lưu ý chữ viết tay địa phương/viết tắt: ví dụ "xườn xg" (nét chữ thảo nhìn lướt qua dễ nhầm thành "x lơn x lơng", "xldn xldug", "xlan xg", "xuan xg", "x lơng") chính là món "Sườn xg" (Sườn xương). Nếu có số bên cạnh (ví dụ: 30) thì ghi nhận quantity = 30.
+- Tên hàng hóa: Tên loại thịt/sản phẩm viết tay (Ví dụ: "Tai", "X", "Tiết"). Đặc biệt lưu ý: Nếu ghi "vai", "thịt vai", "lạc vai" chính là món "Lạc vai"; ví dụ "xườn xg" (nét chữ thảo nhìn lướt qua dễ nhầm thành "x lơn x lơng", "xldn xldug", "xlan xg", "xuan xg", "x lơng") chính là món "Sườn xg" (Sườn xương). Nếu có số bên cạnh (ví dụ: 30) thì ghi nhận quantity = 30.
 - Số lượng: Số lượng (thường tính bằng kg hoặc cái). Có thể sử dụng dấu phẩy làm dấu thập phân (Ví dụ: "2,04" -> 2.04). Nếu trống nhưng có thành tiền, hãy mặc định số lượng là 1.
 - Đơn giá: Giá tiền mỗi đơn vị. NẾU KHÔNG GHI ĐƠN GIÁ, hãy tính Đơn giá = Thành tiền / Số lượng (làm tròn thành số nguyên).
 - Thành tiền: Tổng số tiền cuối cùng của dòng đó. Chữ số viết tay thường ghi tắt hàng nghìn (Ví dụ: "490" nghĩa là 490000, "202" nghĩa là 202000, "43" nghĩa là 43000). Hãy nhân giá trị này với 1,000 để ra số tiền thực tế đầy đủ đơn vị VNĐ.

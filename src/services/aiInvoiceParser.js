@@ -236,6 +236,13 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
 1. Xác định Tên khách hàng (customer_name) từ giọng nói:
    - Nghe xem người nói gọi tên ai hoặc giao cho ai (ví dụ: "Hương", "Hương Mỹ Đình", "Chị Lan", "A Hùng phở", "Quán Tuyết", "Thầy", "Cô Thảo"...).
    - ĐẶC BIỆT: Nếu người nói gọi tên "Hương" (hoặc "Chị Hương", "cô Hương", "Hương Mỹ Đình"), hãy so khớp chuẩn hóa với khách "Hương mỹ đình(xô 230)". Nếu không nhắc tên khách hàng, trả về null.
+    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "TRƯỜNG HOÀNG (NGUYỄN KHUYẾN)":
+      + Quan sát nét chữ viết tay ở dòng Tên khách hàng / dưới tiêu đề "HÓA ĐƠN BÁN HÀNG":
+        * Dòng chữ viết tay thường ghi: "Nguyễn Khuyến Trường Hoàng", "Nguyễn Khuyến Trường hoàng", "Trường Hoàng", "Trường hoàng", "Nguyen Khuyen Truong Hoang", "Truong Hoang".
+        * Chữ "Nguyễn Khuyến" viết thảo liền nét kèm chữ "Trường Hoàng".
+      + QUY TẮC BẮT BUỘC: BẤT KỂ KHI NÀO thấy chữ viết tay ghi "Trường Hoàng", "Trường hoàng", hoặc "Nguyễn Khuyến Trường Hoàng" (hoặc chứa cả "Trường" và "Hoàng" hoặc cả "Khuyến" và "Trường Hoàng"):
+        => BẮT BUỘC nhận diện và trả về customer_name là: "Trường hoàng(nguyễn khuyến)" (để hệ thống khớp chính xác vào khách "Trường hoàng(nguyễn khuyến)" trong danh bạ).
+        => TUYỆT ĐỐI KHÔNG trả về "Nguyễn khuyến trường hoàng", không trả về "Nguyễn khuyến 1" hay tên khác!
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CÔ THẢO (THẦY)":
       + BẤT KỲ VIDEO NÀO ĐỌC LÀ THẦY HOẶC CÔ THẢO (ví dụ: "thầy", "Thầy", "cô Thảo", "cô thảo", "Thảo", "cô Thảo thầy", "thầy Thảo", "Thảo thầy", "đưa cho thầy", "giao cho thầy", "của thầy", "của cô Thảo"... hoặc bất cứ câu nào có nhắc chữ "thầy" hay "thảo"): BẮT BUỘC trả về customer_name là "Cô thảo(thầy)". Tuyệt đối không để null và không nhầm sang khách khác.
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CHỊ TUYẾT" / "TUYẾT":
@@ -268,7 +275,7 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
       + BẮT BUỘC nhận diện và trả về customer_name là: "Huyền Đô Nghĩa".
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "PHỞ TƯỞNG (CHỊ LUYẾN)":
       + Nếu người nói đọc là "phở Tưởng", "quán Tưởng", "anh Tưởng", "chị Luyến", "Phởtưởng", "Phở Tưởng", "Luyến":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Phở tưởng(chị Luyến)" (hoặc "Phở tưởng"). Tuyệt đối không nhầm sang "Phở Tiến" hay khách khác.
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Phở tưởng(chị Luyến)". Tuyệt đối không để là "Phở Tưởng" hay "Phởtưởng" trống trơn và không nhầm sang "Phở Tiến" hay khách khác.
    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CHỊ THÚY NGA" (CHINGA):
      + Nếu người nói đọc là "chinga", "Chinga", "chị Nga", "chị nga", "Nga", "cô Nga", "Thúy Nga", "chị Thúy Nga":
      + BẮT BUỘC nhận diện và trả về customer_name là: "Chị Thúy Nga" (hoặc tên khách Thúy Nga trong danh bạ). Tuyệt đối không nhầm sang khách khác.
@@ -305,6 +312,13 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "794 LÁNG HẠ" / "794 ĐƯỜNG LÁNG" (THE INDUSTREE):
       + Nếu người nói đọc là "794", "794 láng hạ", "794 đường láng", "the industree", "quán 794":
       + BẮT BUỘC trả về customer_name là: "794 láng hạ" (hoặc "the industree(794 đường láng)"). Tuyệt đối không nhầm sang "Cuốn láng hạ".
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "TRƯỜNG HOÀNG (NGUYỄN KHUYẾN)":
+      + Nếu người nói đọc là "Trường Hoàng", "Nguyễn Khuyến Trường Hoàng", "Trường Hoàng Nguyễn Khuyến", "quán Trường Hoàng":
+      + BẮT BUỘC trả về customer_name là: "Trường hoàng(nguyễn khuyến)".
+
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "TRƯỜNG HOÀNG (NGUYỄN KHUYẾN)":
+      + Nếu người nói đọc là "Trường Hoàng", "Nguyễn Khuyến Trường Hoàng", "Trường Hoàng Nguyễn Khuyến", "quán Trường Hoàng":
+      + BẮT BUỘC trả về customer_name là: "Trường hoàng(nguyễn khuyến)".
 
 2. Bóc tách chi tiết các mặt hàng thịt (items) từ GIỌNG NÓI và HÌNH ẢNH MÀN HÌNH CÂN ĐIỆN TỬ:
    - Tên món thịt (name) - QUY TẮC SỐNG CÒN (BẮT BUỘC LUÔN PHẢI CÓ TÊN MÓN THỊT):
@@ -328,6 +342,8 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
           - Nếu là khách Phở Tưởng (chị Luyến): Điền món "Gầu Bò" (hoặc "Thịt lạm").
           - Nếu là khách Thăn Bình Đà (Anh Nghĩa): Điền món "Thăn".
           - Khách khác: Chọn loại thịt phù hợp nhất trong danh sách các món thường bán: [${productNamesList}].
+   - QUY TẮC ĐẶC BIỆT CHO MÓN "VAI" -> "LẠC VAI":
+     + Nếu người nói đọc là "vai", "thịt vai", "lạc vai", "vai bò": Tên món thịt (name) BẮT BUỘC trả về là: "Lạc vai".
    - QUY TẮC ĐẶC BIỆT CHO MÓN "THỊT CHÍN" / "CHÍN" (CỰC KỲ QUAN TRỌNG):
      + Nếu người nói đọc từ "chín", "thịt chín", "bò chín" (ví dụ: "chín chị tuyết lấy thêm 1.56", "chín một phẩy năm sáu", "thịt chín 2 cân", "chín lấy thêm..."):
      + BẮT BUỘC hiểu từ "chín" ở đây là MÓN THỊT CHÍN (không phải số 9 hay từ chỉ trạng thái). Tên món thịt (name) BẮT BUỘC trả về là: "Thịt chín".
@@ -482,6 +498,10 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      + "Tai" hoặc "Tái" (chữ T hoa uốn lượn viết liền chữ ái): BẮT BUỘC trả về tên là "Tái (Bò)".
      + "bắp" hoặc "Bắp": BẮT BUỘC trả về tên là "Bắp Bò".
      + "Lá" / "lá" / "la" / "lá vai" / "la vai" / "thịt la" / "thịt lá" / "thịt la vai": Chữ "L" hoa thảo nét cong cao nối liền chữ "á" hoặc "a" (có thể kèm "vai") -> BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "thịt la vai".
+      + QUY TẮC ĐẶC BIỆT CHO MÓN "VAI" -> "LẠC VAI":
+        * Khi ở cột Tên hàng hóa trên tích kê / hóa đơn ghi chữ "vai", "Vai", "thịt vai", "thit vai", "lạc vai", "lac vai", "thịt lạc vai":
+        * BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Lạc vai" (để hệ thống khớp chính xác vào sản phẩm "Lạc vai" của cửa hàng).
+        * TUYỆT ĐỐI KHÔNG nhận nhầm sang "Lá vai", "Vai xay" hay "Sườn vai" (trừ khi có ghi rõ chữ "xay" hoặc chữ "sườn")!
       + "Sườn" / "suon" / "sườn bò": Chữ "S" hoa to lượn sóng mềm mại, "ườn" viết liền nét có dấu huyền -> BẮT BUỘC trả về tên là: "Sườn".
        + PHÂN TÍCH ĐẶC TẢ NÉT CHỮ MÓN "SƯỜN XG" (CẢ DẠNG "SƯỜN XG" LẪN "XƯỜN XG"):
          * Đặc trưng thị giác chữ viết tay:
@@ -549,7 +569,9 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
        2) CỤM CHỮ DÀI HƠN HẲN (CỤM 5 KÝ TỰ T-ư-ơ-n-g): Sau chữ T hoa là chuỗi nhịp sóng uốn lượn liên tiếp của cụm "ươn" (nét nhô lên hạ xuống của "ư-ơ", nét cầu của "n", rồi mới đến vòng tròn của "g"). Chuỗi chữ này dài hơn hẳn chữ "Tiến" (chỉ có 3 chữ cái ngắn i-ê-n).
        3) DẤU PHỤ PHÍA TRÊN LÀ DẤU HỎI UỐN LƯỢN VÀ MÓC RÂU, KHÔNG PHẢI MŨ "ê" VÀ DẤU SẮC: Phía trên thân chữ là nét móc mềm mại của dấu hỏi "?" và móc râu của "ư/ơ". Hoàn toàn KHÔNG CÓ dấu mũ nhọn "^" của chữ "ê" và KHÔNG CÓ nét gạch chéo dứt khoát "/" của dấu sắc.
        4) NÉT CHỮ T HOA UỐN LƯỢN NỐI NÉT: Chữ "T" viết hoa thảo lượn sóng ngang ở trên rồi sổ xuống nối liền sang cụm "ươn", nét uốn ngang trên đầu này KHÔNG PHẢI dấu sắc.
-     => BẤT CỨ KHI NÀO thấy chữ viết tay có nét đuôi chữ "g" thòng sâu xuống dưới dòng kẻ như trên: BẮT BUỘC trả về customer_name là "Phở Tưởng" (để khớp với khách "Phởtưởng" hoặc "Phở tưởng(chị Luyến)" trong danh bạ), TUYỆT ĐỐI CẤM đọc thành "Phở Tiến".
+     => BẤT CỨ KHI NÀO thấy chữ viết tay ghi "phở Tưởng", "Phở Tưởng", "Tưởng", "chị Luyến", "Luyến", "Phởtưởng", hoặc có nét đuôi chữ "g" thòng sâu như trên:
+      => BẮT BUỘC nhận diện và trả về customer_name là: "Phở tưởng(chị Luyến)" (vì khách hàng chính thức trong hệ thống quán là "Phở tưởng(chị Luyến)").
+      => TUYỆT ĐỐI KHÔNG trả về "Phở Tưởng" hay "Phởtưởng" trống trơn, và TUYỆT ĐỐI CẤM đọc thành "Phở Tiến".
    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CÔ THẢO (THẦY)":
      + Nếu tên khách hàng ghi là "Thầy", "thầy", "Cô Thảo", "cô thảo", "Thảo", "cô Thảo thầy": BẮT BUỘC trả về customer_name là "Cô thảo(thầy)".
     - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ NHẬN DIỆN KHÁCH "Bún huế văn khê":
@@ -1247,18 +1269,40 @@ Chỉ trả về JSON theo đúng cấu trúc:
           cleanDetectedNoSpace.includes('tuong') ||
           cleanDetectedNoSpace.includes('luyen')
         ) {
+          // Luôn ưu tiên khách "Phở tưởng(chị Luyến)" trước mọi khách khác
           const phoTuongCust = customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase());
             return (cClean.includes('tuong') || cClean.includes('pho tuong')) && cClean.includes('luyen');
           }) || customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase());
-            return cClean.includes('tuong') && !cClean.includes('tien');
+            return cClean.includes('luyen');
           }) || customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase());
-            return cClean.includes('luyen');
+            return cClean.includes('tuong') && !cClean.includes('tien');
           });
           if (phoTuongCust) {
             matchedCustomerId = phoTuongCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "Trường hoàng(nguyễn khuyến)" nếu AI nhận diện là trường hoàng hoặc nguyễn khuyến trường hoàng
+        if (
+          (cleanDetected.includes('truong') && cleanDetected.includes('hoang')) ||
+          cleanDetected.includes('truong hoang') ||
+          cleanDetectedNoSpace.includes('truonghoang') ||
+          (cleanDetected.includes('khuyen') && cleanDetected.includes('truong'))
+        ) {
+          const truongHoangCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('truong') && cClean.includes('hoang');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('truong') && cClean.includes('khuyen');
+          });
+          if (truongHoangCust) {
+            matchedCustomerId = truongHoangCust.id;
           }
         }
       }
@@ -1769,6 +1813,16 @@ Chỉ trả về JSON theo đúng cấu trúc:
       'sườn vai': 'Sườn bò',
       'suon vay': 'Sườn bò',
       'sườn vay': 'Sườn bò',
+      // Lạc vai (Khi ghi hoặc nói là "vai", "thịt vai", "lạc vai")
+      'vai': 'Lạc vai',
+      'thit vai': 'Lạc vai',
+      'thịt vai': 'Lạc vai',
+      'lac vai': 'Lạc vai',
+      'lạc vai': 'Lạc vai',
+      'thit lac vai': 'Lạc vai',
+      'thịt lạc vai': 'Lạc vai',
+      'vai bo': 'Lạc vai',
+      'vai bò': 'Lạc vai',
       // Vai xay (Bò xay)
       'bo xay': 'Vai xay',
       'bò xay': 'Vai xay',
@@ -1800,10 +1854,22 @@ Chỉ trả về JSON theo đúng cấu trúc:
       const cleanItemName = removeDiacritics(normalizedName.toLowerCase());
 
       // So khớp với danh mục sản phẩm của chủ buôn
-      let matchedProd = products.find((p) => {
-        const pName = removeDiacritics(p.name.toLowerCase().trim());
-        return pName === cleanItemName || cleanItemName.includes(pName) || pName.includes(cleanItemName);
-      });
+      let matchedProd = null;
+      if (cleanItemName === 'lac vai' || cleanItemName === 'vai' || cleanItemName === 'thit vai' || cleanItemName === 'thit lac vai') {
+        matchedProd = products.find((p) => {
+          const pClean = removeDiacritics(p.name.toLowerCase().trim());
+          return pClean === 'lac vai' || pClean.includes('lac vai');
+        }) || products.find((p) => {
+          const pClean = removeDiacritics(p.name.toLowerCase().trim());
+          return pClean.includes('vai') && !pClean.includes('xay') && !pClean.includes('suon') && !pClean.includes('la');
+        });
+      }
+      if (!matchedProd) {
+        matchedProd = products.find((p) => {
+          const pName = removeDiacritics(p.name.toLowerCase().trim());
+          return pName === cleanItemName || cleanItemName.includes(pName) || pName.includes(cleanItemName);
+        });
+      }
 
       // Xử lý khối lượng và tiền cho từng dòng:
       // normalizeWeightQuantity chỉ áp dụng cho VIDEO khi người nói đọc các chữ số cân điện tử liền nhau
