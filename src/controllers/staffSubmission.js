@@ -439,9 +439,34 @@ const getStaffSubmissions = async (req, res, next) => {
       orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
     });
 
+    // Đính kèm thông tin Nhà cung cấp nếu đơn đã được duyệt thành đơn nhập NCC
+    const approvedTxIds = submissions
+      .filter((s) => s.status === 'APPROVED' && s.transactionId)
+      .map((s) => s.transactionId);
+
+    let supplierMap = {};
+    if (approvedTxIds.length > 0) {
+      const supTxs = await prisma.supplierTransaction.findMany({
+        where: { id: { in: approvedTxIds } },
+        include: { supplier: { select: { id: true, name: true, phone: true } } },
+      });
+      supTxs.forEach((st) => {
+        if (st.supplier) supplierMap[st.id] = st.supplier;
+      });
+    }
+
+    const dataWithSupplier = submissions.map((sub) => {
+      const matchedSupplier = (sub.transactionId && supplierMap[sub.transactionId]) || null;
+      return {
+        ...sub,
+        matchedSupplier,
+        targetType: matchedSupplier ? 'supplier' : 'customer',
+      };
+    });
+
     res.json({
       success: true,
-      data: submissions,
+      data: dataWithSupplier,
     });
   } catch (error) {
     next(error);
@@ -583,8 +608,25 @@ const approveStaffSubmission = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy bản ghi hóa đơn.');
     }
 
-    const finalCustomerId = customerId || submission.matchedCustomerId;
-    if (!finalCustomerId) {
+    const isSupplierTarget = req.body.targetType === 'supplier' || Boolean(req.body.supplierId);
+    let supplier = null;
+    let finalSupplierId = null;
+
+    if (isSupplierTarget) {
+      finalSupplierId = req.body.supplierId;
+      if (!finalSupplierId) {
+        throw new BadRequestError('Vui lòng chọn nhà cung cấp.');
+      }
+      supplier = await prisma.supplier.findFirst({
+        where: { id: finalSupplierId, userId, isActive: true },
+      });
+      if (!supplier) {
+        throw new NotFoundError('Không tìm thấy nhà cung cấp đã chọn.');
+      }
+    }
+
+    const finalCustomerId = !isSupplierTarget ? (customerId || submission.matchedCustomerId) : null;
+    if (!isSupplierTarget && !finalCustomerId) {
       throw new BadRequestError('Vui lòng chọn khách hàng để lên đơn nợ.');
     }
 
@@ -691,12 +733,125 @@ const approveStaffSubmission = async (req, res, next) => {
       (finalNote && (finalNote.includes('[Trả lại hàng]') || finalNote.includes('[Trả hàng]') || /(trả hàng|gửi về|trả về|trả lại)/i.test(finalNote)))
     );
 
-    // Thực hiện transaction: Nếu đơn trả hàng -> Tạo/Cập nhật Payment trừ nợ; Nếu đơn bán -> Tạo/Cập nhật Transaction tăng nợ
+    // Thực hiện transaction: Nếu đơn NCC -> Tạo/Cập nhật SupplierTransaction; Nếu đơn trả hàng -> Tạo/Cập nhật Payment; Nếu đơn bán -> Tạo/Cập nhật Transaction
     const result = await prisma.$transaction(async (tx) => {
       let payment = null;
       let trans = null;
       let newTxId = null;
       let returnNote = '';
+
+      if (isSupplierTarget) {
+        // ─── XỬ LÝ DUYỆT ĐƠN NHẬP HÀNG NHÀ CUNG CẤP ───
+        let supTx = null;
+        const itemsPayload = finalItems.map((it) => ({
+          rawName: it.rawName || it.name || 'Thịt',
+          quantity: it.quantity != null && it.quantity !== '' ? parseFloat(it.quantity) : null,
+          price: it.price != null && it.price !== '' ? parseFloat(it.price) : null,
+          amount: it.amount != null && it.amount !== '' ? parseFloat(it.amount) : Math.round((parseFloat(it.quantity) || 0) * (parseFloat(it.price) || 0)),
+        }));
+        const itemsStr = JSON.stringify(itemsPayload);
+        const mediaUrls = approvedFileUrl ? [approvedFileUrl] : (submission.fileUrl ? [submission.fileUrl] : []);
+        const mediaUrlsStr = JSON.stringify(mediaUrls);
+
+        if (submission.transactionId) {
+          const existingSupTx = await tx.supplierTransaction.findUnique({
+            where: { id: submission.transactionId },
+          });
+          if (existingSupTx) {
+            supTx = await tx.supplierTransaction.update({
+              where: { id: submission.transactionId },
+              data: {
+                supplierId: finalSupplierId,
+                totalAmount,
+                note: finalNote || 'Nhập hàng từ nhân viên gửi',
+                date: finalDate,
+                items: itemsStr,
+                mediaUrls: mediaUrlsStr,
+              },
+            });
+            newTxId = supTx.id;
+          } else {
+            // Trước đó là đơn khách hàng, dọn dẹp Transaction/Payment cũ
+            const oldCustTx = await tx.transaction.findUnique({ where: { id: submission.transactionId } });
+            if (oldCustTx) {
+              await tx.transactionItem.deleteMany({ where: { transactionId: submission.transactionId } });
+              await tx.transactionInvoice.updateMany({ where: { transactionId: submission.transactionId }, data: { transactionId: null } });
+              await tx.transaction.delete({ where: { id: submission.transactionId } });
+            } else {
+              const oldPayment = await tx.payment.findUnique({ where: { id: submission.transactionId } });
+              if (oldPayment) {
+                await tx.payment.delete({ where: { id: submission.transactionId } });
+              }
+            }
+          }
+        }
+
+        if (!supTx) {
+          supTx = await tx.supplierTransaction.create({
+            data: {
+              supplierId: finalSupplierId,
+              createdBy: currentUserId,
+              totalAmount,
+              note: finalNote || 'Nhập hàng từ nhân viên gửi',
+              date: finalDate,
+              items: itemsStr,
+              mediaUrls: mediaUrlsStr,
+            },
+          });
+          newTxId = supTx.id;
+        }
+
+        // Cập nhật StaffSubmission
+        await tx.staffSubmission.update({
+          where: { id },
+          data: {
+            status: 'APPROVED',
+            date: finalDate,
+            note: finalNote,
+            transactionId: newTxId,
+            approvedAt: new Date(),
+          },
+        });
+
+        // Lưu danh sách món thịt vào StaffSubmissionItem
+        await tx.staffSubmissionItem.deleteMany({
+          where: { submissionId: id },
+        });
+        const baseItemTime = Date.now();
+        const itemsToCreate = finalItems.map((it, idx) => {
+          const qty = it.quantity != null && it.quantity !== '' ? parseFloat(it.quantity) : null;
+          const price = it.price != null && it.price !== '' ? parseFloat(it.price) : null;
+          const amount = it.amount != null && it.amount !== '' ? parseFloat(it.amount) : (qty && price ? Math.round(qty * price) : null);
+          return {
+            submissionId: id,
+            rawName: it.rawName || it.name || 'Thịt nhập',
+            matchedProductId: it.matchedProductId || null,
+            quantity: qty,
+            price,
+            amount,
+            createdAt: new Date(baseItemTime + idx * 50),
+            updatedAt: new Date(baseItemTime + idx * 50),
+          };
+        });
+        if (itemsToCreate.length > 0) {
+          await tx.staffSubmissionItem.createMany({ data: itemsToCreate });
+        }
+
+        const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
+        await logActivity(
+          userId,
+          'CREATE_SUPPLIER_TRANSACTION',
+          `[Nhân viên gửi] Nhập hàng từ nhà cung cấp ${supplier.name}: +${formatCurrency(totalAmount)} (${itemsPayload.length} món thịt) (Nợ phát sinh)`
+        );
+
+        return {
+          submissionId: id,
+          supplierTransactionId: newTxId,
+          totalAmount,
+          supplierName: supplier.name,
+          targetType: 'supplier',
+        };
+      }
 
       if (isReturnOrder) {
         // Kiểm tra đơn có phải là loại "Nhập hàng" hay không
