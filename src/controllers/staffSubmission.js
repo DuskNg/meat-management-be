@@ -593,7 +593,7 @@ const approveStaffSubmission = async (req, res, next) => {
     const userId = req.workspaceOwnerId || req.user.id;
     const currentUserId = req.user.id;
     const { id } = req.params;
-    const { customerId, date, note, items } = req.body;
+    const { customerId, date, note, items, priceChangeReason } = req.body;
 
     const submission = await prisma.staffSubmission.findFirst({
       where: { id, userId },
@@ -1186,11 +1186,13 @@ const approveStaffSubmission = async (req, res, next) => {
                 },
                 update: {
                   price: itemPrice,
+                  ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
                 },
                 create: {
                   customerId: finalCustomerId,
                   productId: pId,
                   price: itemPrice,
+                  changeReason: priceChangeReason?.trim() || null,
                 },
               });
             }

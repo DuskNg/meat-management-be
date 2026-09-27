@@ -225,4 +225,72 @@ describe('Luồng Nghiệp Vụ: Bảo Toàn Đơn Giá Riêng Của Khách Hàn
     expect(Number(dbPrice.price)).toBe(110000);
     expect(dbPrice.changeReason).toBe('Khách lấy giờ cao điểm');
   });
+
+  it('8. Khi duyệt hóa đơn nhân viên (approve StaffSubmission) có kèm priceChangeReason: Tự động cập nhật lý do mới nhất', async () => {
+    // Tạo 1 submission nhân viên mẫu
+    const sub = await prisma.staffSubmission.create({
+      data: {
+        userId: testUser.id,
+        senderName: 'Nhân viên test',
+        fileUrl: 'https://example.com/test.jpg',
+        status: 'PENDING',
+        matchedCustomerId: testCustomer.id,
+        date: new Date(),
+        items: {
+          create: [
+            {
+              rawName: testProduct.name,
+              matchedProductId: testProduct.id,
+              quantity: 5,
+              price: 125000,
+              amount: 625000,
+            },
+          ],
+        },
+      },
+    });
+
+    // Act: Duyệt hóa đơn với giá mới 125.000đ và lý do "Duyệt từ hóa đơn Zalo"
+    const approveRes = await request(app)
+      .post(`/api/v1/staff-submissions/${sub.id}/approve`)
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        customerId: testCustomer.id,
+        date: new Date().toISOString(),
+        orderMode: 'detail',
+        items: [
+          {
+            matchedProductId: testProduct.id,
+            rawName: testProduct.name,
+            quantity: 5,
+            price: 125000,
+            amount: 625000,
+          },
+        ],
+        priceChangeReason: 'Duyệt từ hóa đơn Zalo nhân viên',
+      });
+
+    expect(approveRes.status).toBe(200);
+    expect(approveRes.body.success).toBe(true);
+
+    // Assert trong CustomerProductPrice: Đã cập nhật giá 125.000đ và lý do mới nhất
+    const dbPrice = await prisma.customerProductPrice.findUnique({
+      where: {
+        customerId_productId: {
+          customerId: testCustomer.id,
+          productId: testProduct.id,
+        },
+      },
+    });
+    expect(Number(dbPrice.price)).toBe(125000);
+    expect(dbPrice.changeReason).toBe('Duyệt từ hóa đơn Zalo nhân viên');
+
+    // Dọn dẹp bản ghi submission test
+    await prisma.staffSubmissionItem.deleteMany({ where: { submissionId: sub.id } });
+    if (approveRes.body.data?.transactionId) {
+      await prisma.transactionItem.deleteMany({ where: { transactionId: approveRes.body.data.transactionId } });
+      await prisma.transaction.deleteMany({ where: { id: approveRes.body.data.transactionId } });
+    }
+    await prisma.staffSubmission.deleteMany({ where: { id: sub.id } });
+  });
 });
