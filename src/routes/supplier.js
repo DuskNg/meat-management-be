@@ -24,6 +24,9 @@ router.delete('/:id', supplierController.deleteSupplier);
 // Lấy lịch sử dòng chảy nợ và thanh toán của một nhà cung cấp
 router.get('/:id/history', supplierController.getSupplierHistory);
 
+// Lấy bảng giá riêng theo nhà cung cấp
+router.get('/:id/prices', supplierController.getSupplierPrices);
+
 // Tạo giao dịch nhập hàng (ghi nhận thêm nợ của chủ sạp đối với nhà cung cấp)
 router.post('/transactions', supplierController.createSupplierTransaction);
 

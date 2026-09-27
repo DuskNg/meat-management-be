@@ -684,6 +684,13 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
       => BẮT BUỘC nhận diện và trả về customer_name là: "794 láng hạ" (hoặc so khớp với "the industree(794 đường láng)").
       => TUYỆT ĐỐI CẤM NHẬN DIỆN THÀNH "Cuốn láng hạ"!
       => CHỈ KHI NÀO chữ đầu tiên viết tay rõ ràng bằng chữ cái "Cuốn", "Cuon", "Cươn" (hoàn toàn không có chữ số 794) thì mới là khách "Cuốn láng hạ".
+    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHIẾU NHẬP HÀNG TỪ "LÒ MỔ MINH THUẤN" / "LÒ MỔ MINH THUẦN" (NHÀ CUNG CẤP):
+      + Khi trên phiếu in tiêu đề đỏ/chữ in: "LÒ MỔ MINH THUẤN", "LÒ MỔ MINH THUẦN", "Lò mổ Minh Thuần", "Lò mổ Minh Thuấn", "Minh Thuần", "Minh thuần", hoặc có địa chỉ "Sáo Hạ, Quang Lãng, PX, HN" / SĐT "0989 900 409":
+      + Ý NGHĨA: Đây là phiếu nhập thịt từ nhà cung cấp (lò mổ) "Minh thuần".
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Minh thuần" (để hệ thống tự động nhận diện đây là nhà cung cấp và áp dụng bảng giá riêng của Minh thuần).
+      + Quy tắc viết tắt tên thịt trên phiếu lò mổ Minh Thuần:
+        * Chữ "B" hoặc "b": Bắp bò
+        * Chữ "sx", "sn", "sườn", "suon": Sườn
     - Ngày hóa đơn: Đọc ở dòng góc dưới "Ngày [ngày] tháng [tháng] năm 20[năm]" (ví dụ: "16/09/2026").
     - Bỏ qua các nét gạch chéo, nét cong sổ dài khóa hóa đơn, không nhận nhầm thành chữ số.
 4. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):

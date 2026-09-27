@@ -18,7 +18,7 @@ const notifyCustomerUpdate = (userId, action, payload = {}) => {
 const getProducts = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId } = req.query;
+    const { customerId, supplierId } = req.query;
 
     const products = await prisma.product.findMany({
       where: {
@@ -29,6 +29,84 @@ const getProducts = async (req, res, next) => {
         name: 'asc', // Sắp xếp theo tên sản phẩm A-Z
       },
     });
+
+    // Nếu có supplierId, lấy giá nhập riêng của nhà cung cấp này từ các lần nhập gần nhất
+    if (supplierId) {
+      // Tìm nhà cung cấp để lấy tên và tìm các bản ghi NCC cùng tên nếu có
+      const currentSup = await prisma.supplier.findUnique({
+        where: { id: supplierId },
+        select: { name: true, userId: true },
+      });
+
+      let targetSupplierIds = [supplierId];
+      if (currentSup?.name) {
+        const sameNameSups = await prisma.supplier.findMany({
+          where: {
+            userId: currentSup.userId,
+            name: { equals: currentSup.name, mode: 'insensitive' },
+          },
+          select: { id: true },
+        });
+        if (sameNameSups.length > 0) {
+          targetSupplierIds = sameNameSups.map((s) => s.id);
+        }
+      }
+
+      const supTxs = await prisma.supplierTransaction.findMany({
+        where: { supplierId: { in: targetSupplierIds } },
+        orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+        select: { items: true },
+      });
+
+      const supplierPriceMap = new Map();
+      for (const stx of supTxs) {
+        if (!stx.items) continue;
+        try {
+          const parsedItems = JSON.parse(stx.items);
+          if (Array.isArray(parsedItems)) {
+            for (const it of parsedItems) {
+              const itPrice = it.price != null && !isNaN(Number(it.price)) && Number(it.price) > 0 ? Number(it.price) : null;
+              if (itPrice !== null) {
+                if (it.productId && !supplierPriceMap.has(it.productId)) {
+                  supplierPriceMap.set(it.productId, itPrice);
+                }
+                const nameKey = (it.productName || it.rawName || '').toLowerCase().trim();
+                if (nameKey && !supplierPriceMap.has(nameKey)) {
+                  supplierPriceMap.set(nameKey, itPrice);
+                }
+              }
+            }
+          }
+        } catch { }
+      }
+
+      const customSupplierProducts = products.map((p) => {
+        const pNameKey = p.name.toLowerCase().trim();
+        let supPrice = null;
+        if (supplierPriceMap.has(p.id)) {
+          supPrice = supplierPriceMap.get(p.id);
+        } else if (supplierPriceMap.has(pNameKey)) {
+          supPrice = supplierPriceMap.get(pNameKey);
+        }
+
+        const hasCustomPrice = supPrice !== null && supPrice > 0;
+        const effectivePrice = hasCustomPrice ? supPrice : (p.costPrice > 0 ? Number(p.costPrice) : Number(p.defaultPrice));
+
+        return {
+          ...p,
+          baseDefaultPrice: p.defaultPrice,
+          hasCustomPrice,
+          customPrice: supPrice,
+          defaultPrice: effectivePrice,
+          costPrice: effectivePrice,
+        };
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: customSupplierProducts,
+      });
+    }
 
     // Nếu có customerId, lấy giá bán riêng của khách hàng này để ghi đè lên giá chung mặc định
     if (customerId) {

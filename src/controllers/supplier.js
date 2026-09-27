@@ -779,6 +779,83 @@ const uploadSupplierMedia = async (req, res, next) => {
   }
 };
 
+// 12. Lấy bảng giá riêng của nhà cung cấp (lấy từ các giao dịch nhập hàng gần nhất)
+const getSupplierPrices = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.effectiveUserId;
+
+    const supplierExists = await prisma.supplier.findFirst({
+      where: { id, userId, isActive: true },
+    });
+    if (!supplierExists) {
+      throw new NotFoundError('Không tìm thấy nhà cung cấp.');
+    }
+
+    const products = await prisma.product.findMany({
+      where: { userId, isActive: true },
+      orderBy: { name: 'asc' },
+    });
+
+    const supTxs = await prisma.supplierTransaction.findMany({
+      where: { supplierId: id },
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+      select: { items: true },
+    });
+
+    const supplierPriceMap = new Map();
+    for (const stx of supTxs) {
+      if (!stx.items) continue;
+      try {
+        const parsedItems = JSON.parse(stx.items);
+        if (Array.isArray(parsedItems)) {
+          for (const it of parsedItems) {
+            const itPrice = it.price != null && !isNaN(Number(it.price)) && Number(it.price) > 0 ? Number(it.price) : null;
+            if (itPrice !== null) {
+              if (it.productId && !supplierPriceMap.has(it.productId)) {
+                supplierPriceMap.set(it.productId, itPrice);
+              }
+              const nameKey = (it.productName || it.rawName || '').toLowerCase().trim();
+              if (nameKey && !supplierPriceMap.has(nameKey)) {
+                supplierPriceMap.set(nameKey, itPrice);
+              }
+            }
+          }
+        }
+      } catch { }
+    }
+
+    const supplierProducts = products.map((p) => {
+      const pNameKey = p.name.toLowerCase().trim();
+      let supPrice = null;
+      if (supplierPriceMap.has(p.id)) {
+        supPrice = supplierPriceMap.get(p.id);
+      } else if (supplierPriceMap.has(pNameKey)) {
+        supPrice = supplierPriceMap.get(pNameKey);
+      }
+
+      const hasCustomPrice = supPrice !== null && supPrice > 0;
+      const effectivePrice = hasCustomPrice ? supPrice : (p.costPrice > 0 ? Number(p.costPrice) : Number(p.defaultPrice));
+
+      return {
+        ...p,
+        baseDefaultPrice: p.defaultPrice,
+        hasCustomPrice,
+        customPrice: supPrice,
+        defaultPrice: effectivePrice,
+        costPrice: effectivePrice,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: supplierProducts,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getSuppliers,
   createSupplier,
@@ -792,4 +869,5 @@ module.exports = {
   deleteSupplierPayment,
   getSupplierHistory,
   uploadSupplierMedia,
+  getSupplierPrices,
 };
