@@ -248,6 +248,8 @@ model SupplierTransaction {
   date        DateTime @default(now()) // Ngày nhập hàng / ghi nợ
   totalAmount Decimal  @db.Decimal(12, 2) // Số tiền hàng nhập (nợ phát sinh)
   note        String?  // Ghi chú chi tiết (ví dụ: nhập 200kg thịt ba chỉ)
+  items       String?  // Chuỗi JSON danh sách chi tiết các món thịt: [{ productId, productName, quantity, price, unit, amount }]
+  mediaUrls   String?  // Chuỗi JSON danh sách ảnh/video hóa đơn, phiếu cân nhập hàng: [{ url, fileType, fileName }]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -263,6 +265,7 @@ model SupplierPayment {
   amount      Decimal  @db.Decimal(12, 2) // Số tiền trả nợ (VND)
   paidAt      DateTime @default(now()) // Ngày thanh toán tiền
   note        String?  // Ghi chú thanh toán (ví dụ: chuyển khoản Vietcombank)
+  mediaUrls   String?  // Chuỗi JSON danh sách ảnh/video biên lai, bill chuyển khoản: [{ url, fileType, fileName }]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

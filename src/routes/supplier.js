@@ -42,4 +42,7 @@ router.put('/payments/:id', supplierController.updateSupplierPayment);
 // Xóa giao dịch trả nợ
 router.delete('/payments/:id', supplierController.deleteSupplierPayment);
 
+// Tải lên hình ảnh hoặc video chứng từ nhà cung cấp
+router.post('/media/upload', supplierController.uploadSupplierMedia);
+
 module.exports = router;

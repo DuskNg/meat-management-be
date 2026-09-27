@@ -1,6 +1,10 @@
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
+const { isCloudinaryConfigured, uploadToCloudinary } = require('../utils/cloudinary');
 
 // 1. Lấy toàn bộ danh sách nhà cung cấp kèm theo dư nợ (Tiền nợ)
 // Dư nợ = Tổng số tiền transactions (nhập hàng) - Tổng số tiền payments (đã trả)
@@ -237,7 +241,7 @@ const deleteSupplier = async (req, res, next) => {
 // 5. Ghi nhận giao dịch nhập hàng (Nợ phát sinh)
 const createSupplierTransaction = async (req, res, next) => {
   try {
-    const { supplierId, totalAmount, note, date } = req.body;
+    const { supplierId, totalAmount, note, date, items, mediaUrls } = req.body;
     const userId = req.effectiveUserId;
 
     if (!supplierId) {
@@ -260,6 +264,9 @@ const createSupplierTransaction = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy nhà cung cấp.');
     }
 
+    const itemsStr = items ? (typeof items === 'string' ? items : JSON.stringify(items)) : null;
+    const mediaUrlsStr = mediaUrls ? (typeof mediaUrls === 'string' ? mediaUrls : JSON.stringify(mediaUrls)) : null;
+
     const transaction = await prisma.supplierTransaction.create({
       data: {
         supplierId,
@@ -267,19 +274,26 @@ const createSupplierTransaction = async (req, res, next) => {
         totalAmount: parseFloat(totalAmount),
         note: note ? note.trim() : null,
         date: date ? new Date(date) : new Date(),
+        items: itemsStr,
+        mediaUrls: mediaUrlsStr,
       },
     });
 
     const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
+    const detailCount = Array.isArray(items) && items.length > 0 ? ` (${items.length} món thịt)` : '';
     await logActivity(
       userId,
       'CREATE_SUPPLIER_TRANSACTION',
-      `Nhập hàng từ nhà cung cấp ${supplier.name}: +${formatCurrency(totalAmount)} (Nợ phát sinh)`
+      `Nhập hàng từ nhà cung cấp ${supplier.name}: +${formatCurrency(totalAmount)}${detailCount} (Nợ phát sinh)`
     );
 
     res.status(201).json({
       success: true,
-      data: transaction,
+      data: {
+        ...transaction,
+        items: items || null,
+        mediaUrls: mediaUrls || [],
+      },
     });
   } catch (error) {
     next(error);
@@ -289,7 +303,7 @@ const createSupplierTransaction = async (req, res, next) => {
 // 6. Ghi nhận thanh toán trả nợ cho nhà cung cấp
 const createSupplierPayment = async (req, res, next) => {
   try {
-    const { supplierId, amount, note, paidAt } = req.body;
+    const { supplierId, amount, note, paidAt, mediaUrls } = req.body;
     const userId = req.effectiveUserId;
 
     if (!supplierId) {
@@ -312,6 +326,8 @@ const createSupplierPayment = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy nhà cung cấp.');
     }
 
+    const mediaUrlsStr = mediaUrls ? (typeof mediaUrls === 'string' ? mediaUrls : JSON.stringify(mediaUrls)) : null;
+
     const payment = await prisma.supplierPayment.create({
       data: {
         supplierId,
@@ -319,6 +335,7 @@ const createSupplierPayment = async (req, res, next) => {
         amount: parseFloat(amount),
         note: note ? note.trim() : null,
         paidAt: paidAt ? new Date(paidAt) : new Date(),
+        mediaUrls: mediaUrlsStr,
       },
     });
 
@@ -331,7 +348,10 @@ const createSupplierPayment = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      data: payment,
+      data: {
+        ...payment,
+        mediaUrls: mediaUrls || [],
+      },
     });
   } catch (error) {
     next(error);
@@ -371,22 +391,41 @@ const getSupplierHistory = async (req, res, next) => {
 
     // Gom hai loại thành dòng lịch sử thống nhất
     const historyList = [
-      ...transactions.map((t) => ({
-        id: t.id,
-        type: 'DEBT', // Nợ phát sinh (mình nợ họ)
-        amount: parseFloat(t.totalAmount),
-        date: t.date,
-        note: t.note,
-        createdAt: t.createdAt,
-      })),
-      ...payments.map((p) => ({
-        id: p.id,
-        type: 'PAYMENT', // Trả nợ (mình trả họ)
-        amount: parseFloat(p.amount),
-        date: p.paidAt,
-        note: p.note,
-        createdAt: p.createdAt,
-      })),
+      ...transactions.map((t) => {
+        let parsedItems = null;
+        if (t.items) {
+          try { parsedItems = JSON.parse(t.items); } catch (e) { parsedItems = null; }
+        }
+        let parsedMedia = [];
+        if (t.mediaUrls) {
+          try { parsedMedia = JSON.parse(t.mediaUrls); } catch (e) { parsedMedia = []; }
+        }
+        return {
+          id: t.id,
+          type: 'DEBT', // Nợ phát sinh (mình nợ họ)
+          amount: parseFloat(t.totalAmount),
+          date: t.date,
+          note: t.note,
+          items: parsedItems,
+          mediaUrls: parsedMedia,
+          createdAt: t.createdAt,
+        };
+      }),
+      ...payments.map((p) => {
+        let parsedMedia = [];
+        if (p.mediaUrls) {
+          try { parsedMedia = JSON.parse(p.mediaUrls); } catch (e) { parsedMedia = []; }
+        }
+        return {
+          id: p.id,
+          type: 'PAYMENT', // Trả nợ (mình trả họ)
+          amount: parseFloat(p.amount),
+          date: p.paidAt,
+          note: p.note,
+          mediaUrls: parsedMedia,
+          createdAt: p.createdAt,
+        };
+      }),
     ];
 
     // Sắp xếp theo ngày giao dịch (date), nếu trùng thì xếp theo createdAt mới hơn lên trước
@@ -409,7 +448,7 @@ const getSupplierHistory = async (req, res, next) => {
 const updateSupplierTransaction = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { totalAmount, note, date } = req.body;
+    const { totalAmount, note, date, items, mediaUrls } = req.body;
     const userId = req.effectiveUserId;
 
     const transaction = await prisma.supplierTransaction.findFirst({
@@ -435,12 +474,17 @@ const updateSupplierTransaction = async (req, res, next) => {
       throw new BadRequestError('Số tiền hàng nhập phải lớn hơn 0.');
     }
 
+    const itemsStr = items !== undefined ? (items ? (typeof items === 'string' ? items : JSON.stringify(items)) : null) : undefined;
+    const mediaUrlsStr = mediaUrls !== undefined ? (mediaUrls ? (typeof mediaUrls === 'string' ? mediaUrls : JSON.stringify(mediaUrls)) : null) : undefined;
+
     const updated = await prisma.supplierTransaction.update({
       where: { id },
       data: {
         totalAmount: totalAmount !== undefined ? parseFloat(totalAmount) : undefined,
         note: note !== undefined ? (note ? note.trim() : null) : undefined,
         date: date !== undefined ? new Date(date) : undefined,
+        items: itemsStr,
+        mediaUrls: mediaUrlsStr,
       },
     });
 
@@ -535,7 +579,7 @@ const deleteSupplierTransaction = async (req, res, next) => {
 const updateSupplierPayment = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { amount, note, paidAt } = req.body;
+    const { amount, note, paidAt, mediaUrls } = req.body;
     const userId = req.effectiveUserId;
 
     const payment = await prisma.supplierPayment.findFirst({
@@ -560,12 +604,15 @@ const updateSupplierPayment = async (req, res, next) => {
       throw new BadRequestError('Số tiền thanh toán phải lớn hơn 0.');
     }
 
+    const mediaUrlsStr = mediaUrls !== undefined ? (mediaUrls ? (typeof mediaUrls === 'string' ? mediaUrls : JSON.stringify(mediaUrls)) : null) : undefined;
+
     const updated = await prisma.supplierPayment.update({
       where: { id },
       data: {
         amount: amount !== undefined ? parseFloat(amount) : undefined,
         note: note !== undefined ? (note ? note.trim() : null) : undefined,
         paidAt: paidAt !== undefined ? new Date(paidAt) : undefined,
+        mediaUrls: mediaUrlsStr,
       },
     });
 
@@ -650,6 +697,83 @@ const deleteSupplierPayment = async (req, res, next) => {
   }
 };
 
+// 12. Tải lên hình ảnh hoặc video chứng từ, phiếu cân, hóa đơn nhà cung cấp
+const uploadSupplierMedia = async (req, res, next) => {
+  try {
+    const { fileData, fileName: origFileName, fileType: origFileType } = req.body;
+    if (!fileData) {
+      throw new BadRequestError('Dữ liệu hình ảnh hoặc video không được để trống.');
+    }
+
+    const uploadsDir = path.join(__dirname, '../../uploads/suppliers');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    let isVideo = origFileType === 'VIDEO' ||
+      (origFileName && /\.(mp4|mov|qt|avi|webm|m4v|3gp|mkv)$/i.test(origFileName));
+    let fileExt = 'jpg';
+    let mimeType = 'image/jpeg';
+    let cleanBase64 = fileData;
+
+    if (typeof fileData === 'string' && fileData.startsWith('data:')) {
+      const commaIdx = fileData.indexOf(',');
+      if (commaIdx !== -1) {
+        const header = fileData.substring(0, commaIdx).toLowerCase();
+        cleanBase64 = fileData.substring(commaIdx + 1);
+        if (header.includes('video') || header.includes('quicktime') || header.includes('mp4') || header.includes('mov')) {
+          isVideo = true;
+          fileExt = header.includes('quicktime') ? 'mov' : 'mp4';
+          mimeType = isVideo ? (header.includes('quicktime') ? 'video/quicktime' : 'video/mp4') : 'video/mp4';
+        } else if (header.includes('png')) {
+          fileExt = 'png';
+          mimeType = 'image/png';
+        } else if (header.includes('webp')) {
+          fileExt = 'webp';
+          mimeType = 'image/webp';
+        } else {
+          fileExt = 'jpg';
+          mimeType = 'image/jpeg';
+        }
+      }
+    }
+
+    const prefix = isVideo ? 'sup_vid' : 'sup_img';
+    const savedFileName = `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${fileExt}`;
+    const filePath = path.join(uploadsDir, savedFileName);
+    const buffer = Buffer.from(cleanBase64, 'base64');
+    fs.writeFileSync(filePath, buffer);
+
+    let finalUrl = `/uploads/suppliers/${savedFileName}`;
+
+    if (isCloudinaryConfigured()) {
+      try {
+        const dataUri = `data:${mimeType};base64,${cleanBase64}`;
+        const uploadRes = await uploadToCloudinary(dataUri, {
+          folder: isVideo ? 'meat_suppliers/videos' : 'meat_suppliers/images',
+          resource_type: isVideo ? 'video' : 'image',
+        });
+        if (uploadRes && uploadRes.secure_url) {
+          finalUrl = uploadRes.secure_url;
+        }
+      } catch (cloudErr) {
+        console.warn('[SUPPLIER_MEDIA] Lỗi upload Cloudinary, dùng file máy chủ cục bộ:', cloudErr.message);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        url: finalUrl,
+        fileType: isVideo ? 'VIDEO' : 'IMAGE',
+        fileName: origFileName || savedFileName,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getSuppliers,
   createSupplier,
@@ -662,4 +786,5 @@ module.exports = {
   updateSupplierPayment,
   deleteSupplierPayment,
   getSupplierHistory,
+  uploadSupplierMedia,
 };
