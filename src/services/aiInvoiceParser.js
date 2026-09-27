@@ -633,6 +633,10 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HÀ TRÌ" (PHÂN BIỆT VỚI "CHỊ HẠNH SÂN BÓNG HÀ TRÌ" VÀ "CỒ HẢI"):
       + Khi trên tích kê / hóa đơn ghi chữ "Hà Trì", "Hà trì", "cô Hà Trì", "cô hà trì", "Hà tri", "ha tri", "cô Trì":
       + BẮT BUỘC nhận diện và trả về customer_name là: "Hà Trì". TUYỆT ĐỐI KHÔNG nhầm sang "Chị hạnh sân bóng hà trì" (trừ khi có ghi rõ chữ "Hạnh" hoặc "chị Hạnh") và TUYỆT ĐỐI KHÔNG nhầm sang "Cồ Hải".
+    - QUY TẮC ĐẶC BIỆT CỐT LÕI CHO KHÁCH "CHỊ HẠNH SÂN BÓNG HÀ TRÌ":
+      + Khi ở dòng "Tên khách hàng:" trên tích kê / hóa đơn viết chữ "Hạnh", "hạnh", "HẠNH", "chị Hạnh", "chị hạnh", "Hạnh sân bóng", "chị Hạnh sân bóng", "Hạnh sân bóng Hà Trì":
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Chị hạnh sân bóng hà trì" (vì trong danh mục khách hàng của quán KHÔNG CÓ khách nào tên chỉ là "Hạnh", mà chỉ có khách duy nhất là "Chị hạnh sân bóng hà trì").
+      + TUYỆT ĐỐI KHÔNG để customer_name là "Hạnh" trống trơn, và TUYỆT ĐỐI KHÔNG nhầm sang "Hà Trì" hay khách khác!
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CỒ HẢI" / "CỔ HẢI":
       + Khi trên tích kê / hóa đơn ghi chữ "Cồ Hải", "cồ hải", "Cổ Hải", "cổ hải", "Cồ hải", "quán Cồ Hải":
       + BẮT BUỘC nhận diện và trả về customer_name là: "Cồ hải" (hoặc "Cồ Hải"). TUYỆT ĐỐI KHÔNG nhầm sang "Hà Trì"!
@@ -1303,6 +1307,31 @@ Chỉ trả về JSON theo đúng cấu trúc:
           });
           if (coHaiCust) {
             matchedCustomerId = coHaiCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "Chị hạnh sân bóng hà trì" nếu AI nhận diện là hạnh, chị hạnh, hanh, chi hanh, hạnh sân bóng...
+        const isHanhMatch = cleanDetected === 'hanh' ||
+          cleanDetected === 'chi hanh' ||
+          cleanDetected.includes('hanh san bong') ||
+          cleanDetected.includes('chi hanh') ||
+          cleanDetectedNoSpace === 'hanh' ||
+          cleanDetectedNoSpace === 'chihanh' ||
+          cleanDetectedNoSpace.includes('hanhsanbong') ||
+          cleanDetected.includes('hanh');
+
+        if (isHanhMatch) {
+          const hanhCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('hanh') && (cClean.includes('san bong') || cClean.includes('ha tri'));
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('hanh');
+          });
+          if (hanhCust) {
+            matchedCustomerId = hanhCust.id;
           }
         }
       }
