@@ -566,7 +566,8 @@ const getPublicPortalData = async (req, res, next) => {
         id: cp.id,
         productName: cp.product.name,
         unit: cp.product.unit,
-        price: Number(cp.price)
+        price: Number(cp.price),
+        changeReason: cp.changeReason || null,
       }));
 
       const singlePaymentInvoices = await fetchInvoicesForPayments(payments.map(p => p.id), portalLink.userId);

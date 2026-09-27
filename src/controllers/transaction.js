@@ -64,7 +64,7 @@ const calculateNameSimilarity = (name1, name2) => {
 const createTransaction = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId, date, note, items, source, isBatch, profitPercent } = req.body;
+    const { customerId, date, note, items, source, isBatch, profitPercent, priceChangeReason } = req.body;
 
     if (!customerId) {
       throw new BadRequestError('Mã khách hàng là bắt buộc.');
@@ -229,7 +229,7 @@ const createTransaction = async (req, res, next) => {
         },
       });
 
-      // Cập nhật hoặc lưu mới đơn giá thịt của loại thịt này cho khách hàng này
+      // Cập nhật hoặc lưu mới đơn giá thịt của loại thịt này cho khách hàng này (kèm lý do đổi giá nếu có)
       for (const item of formattedItems) {
         await tx.customerProductPrice.upsert({
           where: {
@@ -240,11 +240,13 @@ const createTransaction = async (req, res, next) => {
           },
           update: {
             price: item.price,
+            ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
           },
           create: {
             customerId,
             productId: item.productId,
             price: item.price,
+            changeReason: priceChangeReason?.trim() || null,
           },
         });
       }
@@ -438,7 +440,7 @@ const updateTransaction = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
     const { id } = req.params;
-    const { date, note, items, profitPercent } = req.body;
+    const { date, note, items, profitPercent, priceChangeReason } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       throw new BadRequestError('Đơn hàng phải có ít nhất một dòng mặt hàng.');
@@ -623,7 +625,7 @@ const updateTransaction = async (req, res, next) => {
         });
       }
 
-      // Cập nhật hoặc lưu mới đơn giá bán thực tế của loại thịt cho khách hàng này
+      // Cập nhật hoặc lưu mới đơn giá bán thực tế của loại thịt cho khách hàng này (kèm lý do đổi giá nếu có)
       const customerId = existingTransaction.customerId;
       for (const item of formattedItems) {
         await tx.customerProductPrice.upsert({
@@ -635,11 +637,13 @@ const updateTransaction = async (req, res, next) => {
           },
           update: {
             price: item.price,
+            ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
           },
           create: {
             customerId,
             productId: item.productId,
             price: item.price,
+            changeReason: priceChangeReason?.trim() || null,
           },
         });
       }

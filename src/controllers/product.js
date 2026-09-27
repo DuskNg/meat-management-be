@@ -117,7 +117,7 @@ const getProducts = async (req, res, next) => {
       });
 
       const priceMap = new Map(
-        customPrices.map((cp) => [cp.productId, { price: cp.price, costPrice: cp.costPrice }])
+        customPrices.map((cp) => [cp.productId, { price: cp.price, costPrice: cp.costPrice, changeReason: cp.changeReason }])
       );
 
       const customProducts = products.map((p) => {
@@ -128,6 +128,7 @@ const getProducts = async (req, res, next) => {
             baseDefaultPrice: p.defaultPrice,
             hasCustomPrice: true,
             customPrice: cp.price,
+            changeReason: cp.changeReason || null,
             defaultPrice: cp.price !== undefined && cp.price !== null ? cp.price : p.defaultPrice,
             costPrice: cp.costPrice !== undefined && cp.costPrice !== null ? cp.costPrice : p.costPrice,
           };
@@ -137,6 +138,7 @@ const getProducts = async (req, res, next) => {
           baseDefaultPrice: p.defaultPrice,
           hasCustomPrice: false,
           customPrice: null,
+          changeReason: null,
         };
       });
 
@@ -415,6 +417,26 @@ const getDailyPriceUpdates = async (req, res, next) => {
     const priceChanges = [];
 
     if (customerIds.size > 0 && productIds.size > 0) {
+      // Lấy bản đồ lý do đổi giá mới nhất từ CustomerProductPrice
+      const customerPrices = await prisma.customerProductPrice.findMany({
+        where: {
+          userId,
+          customerId: { in: Array.from(customerIds) },
+          productId: { in: Array.from(productIds) },
+        },
+        select: {
+          customerId: true,
+          productId: true,
+          changeReason: true,
+        },
+      });
+      const reasonMap = new Map();
+      customerPrices.forEach((cp) => {
+        if (cp.changeReason) {
+          reasonMap.set(`${cp.customerId}_${cp.productId}`, cp.changeReason);
+        }
+      });
+
       // Truy vấn toàn bộ các dòng thịt trong lịch sử giao dịch từ trước đến hết kỳ lọc
       // Sắp xếp theo trình tự thời gian tăng dần để duyệt tuần tự
       const allHistoricalItems = await prisma.transactionItem.findMany({
@@ -499,6 +521,7 @@ const getDailyPriceUpdates = async (req, res, next) => {
               date: item.transaction.date,
               createdAt: item.transaction.createdAt,
               prevDate: prevRecord.date,
+              changeReason: reasonMap.get(key) || null,
             });
           }
         }
@@ -571,7 +594,7 @@ const getDailyPriceUpdates = async (req, res, next) => {
 const updateCustomerProductPrice = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId, productId, price, transactionId, date, recalculateOrder } = req.body;
+    const { customerId, productId, price, transactionId, date, recalculateOrder, changeReason } = req.body;
 
     if (!customerId || !productId || price === undefined) {
       throw new BadRequestError('customerId, productId và price là bắt buộc.');
@@ -615,7 +638,7 @@ const updateCustomerProductPrice = async (req, res, next) => {
 
     // Thực hiện cập nhật giá riêng và nhân lại đơn hàng trong Prisma Transaction
     const result = await prisma.$transaction(async (tx) => {
-      // 1. Cập nhật hoặc lưu mới đơn giá bán riêng cho khách hàng
+      // 1. Cập nhật hoặc lưu mới đơn giá bán riêng cho khách hàng (lưu đè lý do thay đổi giá mới nhất)
       const updatedPrice = await tx.customerProductPrice.upsert({
         where: {
           customerId_productId: {
@@ -625,11 +648,13 @@ const updateCustomerProductPrice = async (req, res, next) => {
         },
         update: {
           price: numericPrice,
+          ...(changeReason !== undefined ? { changeReason: changeReason?.trim() || null } : {}),
         },
         create: {
           customerId,
           productId,
           price: numericPrice,
+          changeReason: changeReason?.trim() || null,
         },
       });
 
@@ -854,7 +879,7 @@ const batchUpdateProductPrices = async (req, res, next) => {
 const batchUpdateCustomerProductPrices = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerIds, items } = req.body; // customerIds: string[], items: [{ productId, price, costPrice, resetToDefault }]
+    const { customerIds, items, changeReason } = req.body; // customerIds: string[], items: [{ productId, price, costPrice, resetToDefault, changeReason }]
 
     if (!Array.isArray(customerIds) || customerIds.length === 0) {
       throw new BadRequestError('Danh sách khách hàng (customerIds) không được để trống.');
@@ -944,6 +969,10 @@ const batchUpdateCustomerProductPrices = async (req, res, next) => {
             ? parseFloat(item.costPrice)
             : undefined;
 
+          const effectiveChangeReason = item.changeReason !== undefined
+            ? (item.changeReason?.trim() || null)
+            : (changeReason !== undefined ? (changeReason?.trim() || null) : undefined);
+
           await tx.customerProductPrice.upsert({
             where: {
               customerId_productId: {
@@ -954,12 +983,14 @@ const batchUpdateCustomerProductPrices = async (req, res, next) => {
             update: {
               price: numPrice,
               ...(numCostPrice !== undefined && !isNaN(numCostPrice) ? { costPrice: numCostPrice } : {}),
+              ...(effectiveChangeReason !== undefined ? { changeReason: effectiveChangeReason } : {}),
             },
             create: {
               customerId: cId,
               productId: item.productId,
               price: numPrice,
               ...(numCostPrice !== undefined && !isNaN(numCostPrice) ? { costPrice: numCostPrice } : {}),
+              changeReason: effectiveChangeReason || null,
             },
           });
           totalUpdated++;

@@ -175,7 +175,7 @@ const getCustomerPrices = async (req, res, next) => {
 const applyQuickPriceUpdate = async (req, res, next) => {
   try {
     const { token } = req.params;
-    const { customerId, effectiveDate, items, pin } = req.body;
+    const { customerId, effectiveDate, items, pin, changeReason } = req.body;
 
     if (!token) throw new BadRequestError('Thiếu mã token truy cập.');
     if (!customerId) throw new BadRequestError('Vui lòng chọn khách hàng.');
@@ -274,6 +274,10 @@ const applyQuickPriceUpdate = async (req, res, next) => {
           const numPrice = parseFloat(item.price);
           if (isNaN(numPrice) || numPrice < 0) continue;
 
+          const effectiveReason = item.changeReason !== undefined
+            ? (item.changeReason?.trim() || null)
+            : (changeReason !== undefined ? (changeReason?.trim() || null) : undefined);
+
           await tx.customerProductPrice.upsert({
             where: {
               customerId_productId: {
@@ -281,11 +285,15 @@ const applyQuickPriceUpdate = async (req, res, next) => {
                 productId: item.productId,
               },
             },
-            update: { price: numPrice },
+            update: {
+              price: numPrice,
+              ...(effectiveReason !== undefined ? { changeReason: effectiveReason } : {}),
+            },
             create: {
               customerId,
               productId: item.productId,
               price: numPrice,
+              changeReason: effectiveReason || null,
             },
           });
 

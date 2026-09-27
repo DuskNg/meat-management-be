@@ -120,4 +120,109 @@ describe('Luồng Nghiệp Vụ: Bảo Toàn Đơn Giá Riêng Của Khách Hàn
     expect(Number(productInList.defaultPrice)).toBe(90000);
     expect(Number(productInList.baseDefaultPrice)).toBe(130000); // Giá chung đã đổi lên 130k
   });
+
+  it('5. Lưu lý do thay đổi giá riêng: Hệ thống phải lưu đúng lý do vào Database và trả về qua API', async () => {
+    // Act: Cập nhật giá riêng từ 90k lên 95k kèm lý do "Thịt loại 1 chất lượng cao"
+    const res = await request(app)
+      .post('/api/v1/products/customer-price')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        customerId: testCustomer.id,
+        productId: testProduct.id,
+        price: 95000,
+        changeReason: 'Thịt loại 1 chất lượng cao',
+      });
+
+    expect(res.status).toBe(200);
+
+    // Assert trong DB
+    const dbPrice = await prisma.customerProductPrice.findUnique({
+      where: {
+        customerId_productId: {
+          customerId: testCustomer.id,
+          productId: testProduct.id,
+        },
+      },
+    });
+    expect(Number(dbPrice.price)).toBe(95000);
+    expect(dbPrice.changeReason).toBe('Thịt loại 1 chất lượng cao');
+
+    // Assert qua API lấy danh sách
+    const fetchRes = await request(app)
+      .get(`/api/v1/products?customerId=${testCustomer.id}`)
+      .set('Authorization', `Bearer ${testToken}`);
+
+    const productInList = fetchRes.body.data.find((p) => p.id === testProduct.id);
+    expect(productInList.changeReason).toBe('Thịt loại 1 chất lượng cao');
+  });
+
+  it('6. GHI ĐÈ LÝ DO MỚI NHẤT: Khi đổi giá từ b->c thì bỏ lý do cũ, chỉ lưu lý do mới nhất', async () => {
+    // Act: Đổi giá tiếp từ 95k lên 105k kèm lý do mới "Giá heo tăng đợt mới"
+    const res = await request(app)
+      .post('/api/v1/products/customer-price')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        customerId: testCustomer.id,
+        productId: testProduct.id,
+        price: 105000,
+        changeReason: 'Giá heo tăng đợt mới',
+      });
+
+    expect(res.status).toBe(200);
+
+    // Assert trong DB: Chỉ lưu lý do mới nhất, lý do cũ bị ghi đè hoàn toàn
+    const dbPrice = await prisma.customerProductPrice.findUnique({
+      where: {
+        customerId_productId: {
+          customerId: testCustomer.id,
+          productId: testProduct.id,
+        },
+      },
+    });
+    expect(Number(dbPrice.price)).toBe(105000);
+    expect(dbPrice.changeReason).toBe('Giá heo tăng đợt mới');
+    expect(dbPrice.changeReason).not.toContain('Thịt loại 1 chất lượng cao');
+
+    // Assert qua API
+    const fetchRes = await request(app)
+      .get(`/api/v1/products?customerId=${testCustomer.id}`)
+      .set('Authorization', `Bearer ${testToken}`);
+
+    const productInList = fetchRes.body.data.find((p) => p.id === testProduct.id);
+    expect(productInList.changeReason).toBe('Giá heo tăng đợt mới');
+  });
+
+  it('7. Khi tạo đơn nợ có thay đổi đơn giá kèm priceChangeReason: Tự động lưu lý do mới nhất', async () => {
+    // Act: Tạo đơn nợ với đơn giá 110.000đ và gửi kèm priceChangeReason "Khách lấy giờ cao điểm"
+    const txRes = await request(app)
+      .post('/api/v1/transactions')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        customerId: testCustomer.id,
+        date: new Date().toISOString(),
+        items: [
+          {
+            productId: testProduct.id,
+            quantity: 2,
+            price: 110000,
+          },
+        ],
+        priceChangeReason: 'Khách lấy giờ cao điểm',
+      });
+
+    expect(txRes.status).toBe(201);
+    expect(txRes.body.success).toBe(true);
+
+    // Assert trong DB CustomerProductPrice: Đã cập nhật giá 110k và lý do mới nhất
+    const dbPrice = await prisma.customerProductPrice.findUnique({
+      where: {
+        customerId_productId: {
+          customerId: testCustomer.id,
+          productId: testProduct.id,
+        },
+      },
+    });
+    expect(Number(dbPrice.price)).toBe(110000);
+    expect(dbPrice.changeReason).toBe('Khách lấy giờ cao điểm');
+  });
 });
