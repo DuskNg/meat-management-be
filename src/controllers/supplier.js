@@ -438,6 +438,11 @@ const getSupplierHistory = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: historyList,
+      supplier: {
+        id: supplier.id,
+        name: supplier.name,
+        createdAt: supplier.createdAt,
+      },
     });
   } catch (error) {
     next(error);
