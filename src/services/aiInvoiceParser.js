@@ -1268,12 +1268,15 @@ Chỉ trả về JSON theo đúng cấu trúc:
 
       if (!matchedCustomerId) {
         // Khớp ưu tiên khách "Phở tưởng (chị Luyến)" nếu AI nhận diện là phở tưởng hoặc luyến
+        // LƯU Ý: TUYỆT ĐỐI không để "anh tường mỗ" bị nhầm vào rule này!
         if (
           cleanDetected.includes('pho tuong') ||
-          cleanDetected.includes('tuong') ||
+          // Chỉ match 'tuong' khi KHÔNG có 'tuong mo' hoặc 'anh tuong' (để phân biệt "Anh tường mỗ")
+          (cleanDetected.includes('tuong') && !cleanDetected.includes('tuong mo') && !cleanDetected.includes('anh tuong')) ||
           cleanDetected.includes('luyen') ||
           cleanDetectedNoSpace.includes('photuong') ||
-          cleanDetectedNoSpace.includes('tuong') ||
+          // Tương tự với no-space: loại trừ 'anhtuong' và 'tuongmo'
+          (cleanDetectedNoSpace.includes('tuong') && !cleanDetectedNoSpace.includes('tuongmo') && !cleanDetectedNoSpace.includes('anhtuong')) ||
           cleanDetectedNoSpace.includes('luyen')
         ) {
           // Luôn ưu tiên khách "Phở tưởng(chị Luyến)" trước mọi khách khác
@@ -1364,22 +1367,26 @@ Chỉ trả về JSON theo đúng cấu trúc:
 
       if (!matchedCustomerId) {
         // Khớp ưu tiên khách "Chị hạnh sân bóng hà trì" nếu AI nhận diện là hạnh, chị hạnh, hanh, chi hanh, hạnh sân bóng...
-        const isHanhMatch = cleanDetected === 'hanh' ||
+        // TUYỆT ĐỐI không để khớp nhầm sang khách "Hạnh" (isBadDebt=true)
+        const isHanhMatch = (cleanDetected === 'hanh' ||
           cleanDetected === 'chi hanh' ||
           cleanDetected.includes('hanh san bong') ||
           cleanDetected.includes('chi hanh') ||
           cleanDetectedNoSpace === 'hanh' ||
           cleanDetectedNoSpace === 'chihanh' ||
           cleanDetectedNoSpace.includes('hanhsanbong') ||
-          cleanDetected.includes('hanh');
+          (cleanDetected.includes('hanh') && !cleanDetected.includes('khanh')));
 
         if (isHanhMatch) {
           const hanhCust = customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('hanh') && (cClean.includes('san bong') || cClean.includes('ha tri')) && c.isActive && !c.isBadDebt;
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
             return cClean.includes('hanh') && (cClean.includes('san bong') || cClean.includes('ha tri'));
           }) || customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase());
-            return cClean.includes('hanh');
+            return cClean.includes('hanh') && c.isActive && !c.isBadDebt;
           });
           if (hanhCust) {
             matchedCustomerId = hanhCust.id;
