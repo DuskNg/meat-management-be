@@ -117,7 +117,7 @@ const recoverStuckSubmissions = async () => {
             console.log(`[AUTO_RECOVERY] ✅ Đã đồng bộ hóa đơn ${invoice.id} lên Cloudinary: ${cloudUrl}`);
           }
         } else {
-          console.warn(`[AUTO_RECOVERY] ⚠️ File hóa đơn ${invoice.id} không còn trên đĩa (đã hết hạn): ${diskPath}`);
+          // File tạm đã hết hạn hoặc được dọn dẹp khỏi ổ cứng, bỏ qua không ghi log spam
         }
       } catch (uploadErr) {
         console.warn(`[AUTO_RECOVERY] Không thể đồng bộ hóa đơn ${invoice.id} lên Cloudinary:`, uploadErr.message);

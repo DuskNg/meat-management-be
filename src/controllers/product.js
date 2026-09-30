@@ -33,27 +33,8 @@ const getProducts = async (req, res, next) => {
     // Nếu có supplierId, lấy giá nhập riêng của nhà cung cấp này từ các lần nhập gần nhất
     if (supplierId) {
       // Tìm nhà cung cấp để lấy tên và tìm các bản ghi NCC cùng tên nếu có
-      const currentSup = await prisma.supplier.findUnique({
-        where: { id: supplierId },
-        select: { name: true, userId: true },
-      });
-
-      let targetSupplierIds = [supplierId];
-      if (currentSup?.name) {
-        const sameNameSups = await prisma.supplier.findMany({
-          where: {
-            userId: currentSup.userId,
-            name: { equals: currentSup.name, mode: 'insensitive' },
-          },
-          select: { id: true },
-        });
-        if (sameNameSups.length > 0) {
-          targetSupplierIds = sameNameSups.map((s) => s.id);
-        }
-      }
-
       const supTxs = await prisma.supplierTransaction.findMany({
-        where: { supplierId: { in: targetSupplierIds } },
+        where: { supplierId },
         orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
         select: { items: true },
       });
@@ -420,7 +401,6 @@ const getDailyPriceUpdates = async (req, res, next) => {
       // Lấy bản đồ lý do đổi giá mới nhất từ CustomerProductPrice
       const customerPrices = await prisma.customerProductPrice.findMany({
         where: {
-          userId,
           customerId: { in: Array.from(customerIds) },
           productId: { in: Array.from(productIds) },
         },

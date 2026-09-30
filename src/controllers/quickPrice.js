@@ -64,8 +64,8 @@ const getPublicLinkInfo = async (req, res, next) => {
 
     const userId = link.userId;
 
-    // Lấy song song danh sách khách hàng hoạt động bình thường (loại trừ nợ xấu) và sản phẩm của chủ buôn
-    const [customers, products] = await Promise.all([
+    // Lấy song song danh sách khách hàng hoạt động bình thường, sản phẩm và các nhóm khách hàng (PortalLink) của chủ buôn
+    const [customers, products, portalLinks] = await Promise.all([
       prisma.customer.findMany({
         where: { userId, isActive: true, isBadDebt: false },
         select: { id: true, name: true, phone: true, address: true },
@@ -76,7 +76,25 @@ const getPublicLinkInfo = async (req, res, next) => {
         select: { id: true, name: true, defaultPrice: true, costPrice: true, unit: true },
         orderBy: { name: 'asc' },
       }),
+      prisma.portalLink.findMany({
+        where: { userId, isActive: true, type: 'customer' },
+        include: {
+          customers: {
+            select: { customerId: true },
+          },
+        },
+        orderBy: { name: 'asc' },
+      }),
     ]);
+
+    const groups = portalLinks
+      .filter((l) => l.customers && l.customers.length >= 2)
+      .map((l) => ({
+        id: l.id,
+        name: l.name,
+        customerIds: l.customers.map((c) => c.customerId),
+        count: l.customers.length,
+      }));
 
     res.json({
       success: true,
@@ -87,6 +105,7 @@ const getPublicLinkInfo = async (req, res, next) => {
         ownerPhone: link.user?.phone,
         hasPin: Boolean(link.pin),
         customers,
+        groups,
         products: products.map((p) => ({
           id: p.id,
           name: p.name,
@@ -227,6 +246,9 @@ const applyQuickPriceUpdate = async (req, res, next) => {
     const oldPriceMap = new Map(existingCustomPrices.map((cp) => [cp.productId, cp.price]));
     const priceDiffs = [];
 
+    // Một lần cập nhật có thể phải tính lại nhiều đơn nợ của khách hàng.
+    // Timeout mặc định 5 giây quá ngắn, đặc biệt khi áp dụng bảng giá cho nhóm
+    // nhiều nhà hàng, khiến transaction bị hết hạn giữa chừng và trả về HTTP 500.
     const result = await prisma.$transaction(async (tx) => {
       // 1. Cập nhật tên thịt và giá riêng vào bảng CustomerProductPrice
       for (const item of items) {
@@ -390,6 +412,9 @@ const applyQuickPriceUpdate = async (req, res, next) => {
         updatedPricesCount: changedProductIds.length,
         recalculatedCount,
       };
+    }, {
+      maxWait: 10000,
+      timeout: 30000,
     });
 
     // 3. Ghi log hoạt động hệ thống

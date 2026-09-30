@@ -10,6 +10,7 @@ const removeDiacritics = (str) => {
   if (!str) return '';
   return str
     .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd')
     .replace(/Đ/g, 'D');
 };
@@ -607,6 +608,11 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
             "amount": 3814000
           }
           (price và amount chính là con số cuối cùng đó nhân 1000, quantity để 1).
+    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "CHỊ THÚY NGA" (CHINGA / CHỊ NGA):
+      + Quan sát nét chữ viết tay ở dòng Tên khách hàng (hoặc chữ ký, ghi chú tên khách):
+        Người viết thường viết liền nét: "chinga", "Chinga", "chi nga", "Chị Nga", "nga", "Nga", "thuy nga", "Thúy Nga", "chị Thúy Nga".
+      + BẮT BUỘC: Khi ở dòng Tên khách hàng ghi "chinga", "Chinga", "chi nga", "Chị Nga", "Nga", "nga", "thuy nga", "Thúy Nga", "chị Thúy Nga":
+      => BẮT BUỘC nhận diện và trả về customer_name là: "Chị Thúy Nga" (để hệ thống khớp chính xác vào khách "Chị Thúy Nga" trong danh bạ). TUYỆT ĐỐI KHÔNG để sót hoặc nhầm sang khách khác!
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "THĂN BÌNH ĐÀ" / "ANH NGHĨA":
       + Nếu trên hóa đơn ghi "anh nghĩa", "anh ngĩa", "nghĩa", "ngĩa", "bình đà", "thăn bình đà":
       + BẮT BUỘC nhận diện customer_name là: "Thăn bình đà(anh Nghĩa)" (hoặc "Thăn bình đà").
@@ -1318,7 +1324,7 @@ Chỉ trả về JSON theo đúng cấu trúc:
       }
 
       if (!matchedCustomerId) {
-        // Khớp ưu tiên khách "Chị Thúy Nga" nếu AI nhận diện là chinga, chị nga, nga
+        // Khớp ưu tiên khách "Chị Thúy Nga" nếu AI nhận diện là chinga, chị nga, nga, thuy nga
         if (
           cleanDetected.includes('chinga') ||
           cleanDetected.includes('chi nga') ||
@@ -1330,10 +1336,13 @@ Chỉ trả về JSON theo đúng cấu trúc:
         ) {
           const thuyNgaCust = customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase());
-            return cClean.includes('thuy') && cClean.includes('nga');
+            return (cClean.includes('thuy') && cClean.includes('nga')) || cClean === 'chinga';
           }) || customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase());
-            return cClean.includes('nga');
+            return (cClean.includes('chi nga') || cClean === 'nga' || cClean.startsWith('nga ')) && !cClean.includes('tuyet') && !cClean.includes('toan nga');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('nga') && !cClean.includes('tuyet') && !cClean.includes('toan nga');
           });
           if (thuyNgaCust) {
             matchedCustomerId = thuyNgaCust.id;

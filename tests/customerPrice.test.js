@@ -293,4 +293,20 @@ describe('Luồng Nghiệp Vụ: Bảo Toàn Đơn Giá Riêng Của Khách Hàn
     }
     await prisma.staffSubmission.deleteMany({ where: { id: sub.id } });
   });
+
+  it('6. Lấy danh sách biến động giá thịt (GET /products/daily-price-updates) thành công', async () => {
+    // Act: Gọi API daily-price-updates với định dạng ngày
+    const res = await request(app)
+      .get('/api/v1/products/daily-price-updates?fromDate=30/09/2026&toDate=30/09/2026')
+      .set('Authorization', `Bearer ${testToken}`);
+
+    // Assert: Thành công 200, trả về dữ liệu đúng định dạng
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toBeDefined();
+    expect(res.body.data.fromDate).toBe('2026-09-30');
+    expect(res.body.data.toDate).toBe('2026-09-30');
+    expect(Array.isArray(res.body.data.customers)).toBe(true);
+  });
 });
+

@@ -101,7 +101,12 @@ const cleanupTestUser = async (userId) => {
       where: { userId },
     });
 
-    // 7. Xóa nhật ký hoạt động
+    // 7. Xóa giao dịch ngân hàng test
+    await prisma.bankTransaction.deleteMany({
+      where: { userId },
+    });
+
+    // 8. Xóa nhật ký hoạt động
     await prisma.activityLog.deleteMany({
       where: { userId },
     });

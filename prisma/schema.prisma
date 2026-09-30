@@ -53,6 +53,7 @@ model User {
   staffSubmissionLinks StaffSubmissionLink[] // Danh sách link Zalo nhân viên gửi hóa đơn
   staffSubmissions     StaffSubmission[]     // Danh sách các lượt nộp hóa đơn/video của nhân viên
   quickPriceLinks      QuickPriceLink[]      // Danh sách link Zalo cho chủ cập nhật giá nhanh
+  bankTransactions     BankTransaction[]     // Danh sách các giao dịch ngân hàng từ SePay
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
   workspaceMemberships WorkspaceMember[]      @relation("WorkspaceMembers")        // Các workspace mà user này là thành viên
@@ -103,6 +104,7 @@ model Customer {
   portalFeedbacks     PortalFeedback[]     // Các phản hồi khiếu nại liên quan đến khách hàng này
   invoices            TransactionInvoice[] // Các ảnh hóa đơn đính kèm của khách hàng này
   staffSubmissions    StaffSubmission[]    // Các hóa đơn/video AI nhận diện của khách hàng này
+  bankTransactions    BankTransaction[]    // Các giao dịch ngân hàng khớp với khách hàng này
 
   @@index([userId]) // Tối ưu hóa truy vấn tìm kiếm danh sách khách hàng của từng chủ buôn
   @@map("customers") // Đặt tên bảng trong PostgreSQL là "customers"
@@ -194,6 +196,8 @@ model Payment {
   type          String      @default("customer") // Phân loại: "customer" (Trả tiền thịt) hoặc "store" (Thanh toán bàn cửa hàng)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
+
+  bankTransactions BankTransaction[] // Giao dịch ngân hàng đối soát tương ứng
 
   // --- VẤN ĐỀ 3: Ghi chú cách tính công nợ ---
   // Công nợ của 1 khách = tổng totalAmount của tất cả Transaction của khách trừ tổng amount của tất cả Payment của khách, KHÔNG phân bổ theo từng đơn cụ thể.
@@ -763,5 +767,51 @@ model QuickPriceLink {
   @@index([userId])
   @@index([token])
   @@map("quick_price_links")
+}
+
+// ─── GIAO DỊCH NGÂN HÀNG ĐỒNG BỘ TỰ ĐỘNG TỪ SEPAY WEBHOOK ───
+model BankTransaction {
+  id                 String    @id @default(uuid())
+  userId             String?   // ID của chủ buôn sở hữu tài khoản ngân hàng (nếu khớp được)
+  user               User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Dữ liệu giao dịch từ SePay
+  sepayId            String?   @unique // ID giao dịch duy nhất từ SePay (vd: "123456")
+  gateway            String?   // Ngân hàng/Cổng (vd: "Vietcombank", "MBBank", "ACB", "Techcombank")
+  transactionDate    DateTime? // Thời gian diễn ra giao dịch ngân hàng
+  accountNumber      String?   // Số tài khoản ngân hàng nhận tiền
+  subAccount         String?   // Tài khoản phụ (nếu có)
+  transferType       String?   @default("in") // "in" (tiền vào) hoặc "out" (tiền ra)
+  transferAmount     Decimal   @db.Decimal(12, 2) // Số tiền giao dịch (VND)
+  accumulated        Decimal?  @db.Decimal(14, 2) // Số dư lũy kế sau giao dịch
+  code               String?   // Mã thanh toán / Mã code bóc tách được từ nội dung
+  content            String?   // Toàn bộ nội dung chuyển khoản (description / memo)
+  referenceCode      String?   // Mã tham chiếu giao dịch của ngân hàng (FT...)
+  description        String?   // Diễn giải / ghi chú thêm
+
+  // Trạng thái xử lý trong hệ thống
+  // "UNPROCESSED": Mới nhận về, chưa gán vào khách hàng / công nợ
+  // "PROCESSED": Đã gán vào khách hàng hoặc trừ nợ thành công
+  // "IGNORED": Bỏ qua / Không cần xử lý (ví dụ tiền riêng, nạp tiền cá nhân)
+  status             String    @default("UNPROCESSED")
+
+  // Liên kết xử lý với khách hàng
+  matchedCustomerId  String?   // ID khách hàng được gán
+  customer           Customer? @relation(fields: [matchedCustomerId], references: [id], onDelete: SetNull)
+  paymentId          String?   // ID của Payment tương ứng (nếu đã tạo phiếu thu nợ)
+  payment            Payment?  @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  // Lưu trữ toàn bộ payload thô gửi từ webhook để đối soát và test
+  rawPayload         String?   @db.Text
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([transactionDate])
+  @@index([accountNumber])
+  @@index([status])
+  @@index([matchedCustomerId])
+  @@map("bank_transactions")
 }
 
