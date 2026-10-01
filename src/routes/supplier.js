@@ -12,8 +12,12 @@ router.use(requirePermission('canManageDebt'));
 // Lấy danh sách toàn bộ nhà cung cấp kèm công nợ
 router.get('/', supplierController.getSuppliers);
 
+// Báo cáo quản lý lợi nhuận toàn diện (Đối soát tiền bán, tiền nhập, kết luận lãi lỗ)
+router.get('/profit-report', supplierController.getProfitReport);
+
 // Tạo mới nhà cung cấp
 router.post('/', supplierController.createSupplier);
+
 
 // Cập nhật thông tin nhà cung cấp
 router.put('/:id', supplierController.updateSupplier);

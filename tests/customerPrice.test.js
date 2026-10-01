@@ -308,5 +308,78 @@ describe('Luồng Nghiệp Vụ: Bảo Toàn Đơn Giá Riêng Của Khách Hàn
     expect(res.body.data.toDate).toBe('2026-09-30');
     expect(Array.isArray(res.body.data.customers)).toBe(true);
   });
+
+  it('7. Khi cập nhật giá mới qua QuickPrice: Các đơn trả hàng & nhập hàng từ ngày áp dụng trở về sau phải tự động cập nhật giá mới', async () => {
+    // 1. Arrange: Tạo link QuickPrice
+    const link = await prisma.quickPriceLink.create({
+      data: {
+        userId: testUser.id,
+        token: `test_token_${Date.now()}`,
+        isActive: true,
+      },
+    });
+
+    // Tạo đơn trả hàng / nhập hàng sau ngày áp dụng (02/09/2026) với giá cũ 90.000đ -> 2kg = 180.000đ
+    const returnPaymentAfter = await prisma.payment.create({
+      data: {
+        customerId: testCustomer.id,
+        amount: 180000,
+        paidAt: new Date('2026-09-02T10:00:00+07:00'),
+        note: `[Trả lại hàng] 2kg ${testProduct.name} (180.000) - NHẬP HÀNG`,
+      },
+    });
+
+    // Tạo đơn trả hàng trước ngày áp dụng (25/08/2026) để bảo đảm đơn cũ không bị đổi
+    const returnPaymentBefore = await prisma.payment.create({
+      data: {
+        customerId: testCustomer.id,
+        amount: 180000,
+        paidAt: new Date('2026-08-25T10:00:00+07:00'),
+        note: `[Trả lại hàng] 2kg ${testProduct.name} (180.000)`,
+      },
+    });
+
+    // 2. Act: Áp dụng giá mới 95.000đ từ ngày 01/09/2026
+    const applyRes = await request(app)
+      .post(`/api/v1/quick-price/public/apply/${link.token}`)
+      .send({
+        customerId: testCustomer.id,
+        effectiveDate: '01/09/2026',
+        items: [
+          {
+            productId: testProduct.id,
+            price: 95000,
+          },
+        ],
+      });
+
+    // 3. Assert: API thành công
+    expect(applyRes.status).toBe(200);
+    expect(applyRes.body.success).toBe(true);
+    expect(applyRes.body.data.recalculatedPaymentsCount).toBeGreaterThanOrEqual(1);
+
+    // Kiểm tra đơn sau ngày áp dụng: Đã được tính lại 2kg * 95.000 = 190.000đ
+    const dbPaymentAfter = await prisma.payment.findUnique({
+      where: { id: returnPaymentAfter.id },
+    });
+    expect(Number(dbPaymentAfter.amount)).toBe(190000);
+    expect(dbPaymentAfter.note).toContain('190.000');
+    expect(dbPaymentAfter.note).toContain('NHẬP HÀNG');
+
+    // Kiểm tra đơn trước ngày áp dụng: Giữ nguyên 100% không đổi
+    const dbPaymentBefore = await prisma.payment.findUnique({
+      where: { id: returnPaymentBefore.id },
+    });
+    expect(Number(dbPaymentBefore.amount)).toBe(180000);
+    expect(dbPaymentBefore.note).toBe(`[Trả lại hàng] 2kg ${testProduct.name} (180.000)`);
+
+    // Dọn dẹp
+    await prisma.payment.deleteMany({
+      where: { id: { in: [returnPaymentAfter.id, returnPaymentBefore.id] } },
+    });
+    await prisma.quickPriceLink.delete({
+      where: { id: link.id },
+    });
+  });
 });
 

@@ -187,8 +187,130 @@ const getCustomerPrices = async (req, res, next) => {
   }
 };
 
+// Helper chuẩn hóa tên mặt hàng thịt để so khớp không phân biệt dấu và hoa thường
+const normalizeMeatName = (str) => {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+// Định dạng số tiền VND hiển thị trong ghi chú
+const formatNumberVND = (num) => {
+  return new Intl.NumberFormat('vi-VN').format(Math.round(num));
+};
+
+// Helper phân tích và tính lại số tiền cho ghi chú đơn trả hàng / nhập hàng
+const recalculateReturnPaymentNote = (note, nameToPriceMap) => {
+  if (!note || typeof note !== 'string') return null;
+
+  // Bóc tách tiền tố [Trả lại hàng], [Trả hàng nhanh], [Trả hàng], [Nhập hàng]
+  const prefixMatch = note.match(/^\[(Trả lại hàng|Trả hàng nhanh|Trả hàng|Nhập hàng)\]\s*/i);
+  const prefix = prefixMatch ? prefixMatch[0] : '[Trả lại hàng] ';
+  let content = note.slice(prefixMatch ? prefixMatch[0].length : 0).trim();
+
+  if (!content) return null;
+
+  // Tách phần ghi chú phụ ở cuối sau dấu đóng ngoặc tròn cuối cùng (ví dụ: " - NHẬP HÀNG", " - Ghi chú thêm")
+  let extraSuffix = '';
+  const lastParenIdx = content.lastIndexOf(')');
+  let itemsPart = content;
+
+  if (lastParenIdx !== -1) {
+    const afterParen = content.substring(lastParenIdx + 1).trim();
+    if (afterParen.startsWith('-')) {
+      extraSuffix = ' ' + afterParen;
+      itemsPart = content.substring(0, lastParenIdx + 1).trim();
+    }
+  }
+
+  // Tách các món phân cách bởi dấu phẩy
+  const itemStrings = itemsPart.split(/,\s*(?=[a-zA-Z\d\u00C0-\u1EF9])/);
+  let updatedAny = false;
+  let newTotalAmount = 0;
+  const newItemsDesc = [];
+
+  for (const part of itemStrings) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+
+    // Pattern 1: <qty>kg <tên thịt> (<thành tiền>)
+    // Ví dụ: '4.3kg Cổ bò (645.000)' hoặc '2.98kg Cổ bò (447.000 đ)'
+    const m = trimmed.match(/^(\d+(?:[.,]\d+)?)\s*(?:kg|kilo)?\s+(.+?)(?:\s*\(\s*([\d.,]+)[\s\u00a0]*[đ₫kKVND]?\s*\))?$/i);
+    if (m) {
+      const qty = parseFloat(m[1].replace(',', '.'));
+      let rawProdName = m[2].trim();
+      const oldAmt = m[3] ? parseFloat(m[3].replace(/\./g, '').replace(/,/g, '')) : 0;
+
+      const normName = normalizeMeatName(rawProdName);
+      let matchedPrice = null;
+
+      if (nameToPriceMap.has(normName)) {
+        matchedPrice = nameToPriceMap.get(normName);
+      } else {
+        for (const [key, p] of nameToPriceMap.entries()) {
+          if (normName === key || normName.includes(key) || key.includes(normName)) {
+            matchedPrice = p;
+            break;
+          }
+        }
+      }
+
+      if (matchedPrice !== null && !isNaN(qty) && qty > 0) {
+        const itemNewAmt = Math.round(qty * matchedPrice);
+        newItemsDesc.push(`${qty}kg ${rawProdName} (${formatNumberVND(itemNewAmt)})`);
+        newTotalAmount += itemNewAmt;
+        updatedAny = true;
+      } else {
+        newItemsDesc.push(trimmed);
+        newTotalAmount += oldAmt;
+      }
+    } else {
+      // Pattern 2: Dạng nhập nhanh: <tên thịt> <đơn giá> <số lượng>[kg]
+      const quickMatch = trimmed.match(/^([a-zA-ZÀ-ỹ\s()+-]+?)\s+(\d+(?:[.,]\d+)?\s*[kK]?)\s+([\d]+(?:[.,]\d+)?)\s*(?:kg|kilo)?$/i);
+      if (quickMatch) {
+        let rawProdName = quickMatch[1].trim();
+        const normName = normalizeMeatName(rawProdName);
+        let matchedPrice = null;
+        if (nameToPriceMap.has(normName)) {
+          matchedPrice = nameToPriceMap.get(normName);
+        } else {
+          for (const [key, p] of nameToPriceMap.entries()) {
+            if (normName === key || normName.includes(key) || key.includes(normName)) {
+              matchedPrice = p;
+              break;
+            }
+          }
+        }
+
+        const qty = parseFloat(quickMatch[3].trim().replace(',', '.'));
+        if (matchedPrice !== null && !isNaN(qty) && qty > 0) {
+          const itemNewAmt = Math.round(qty * matchedPrice);
+          newItemsDesc.push(`${qty}kg ${rawProdName} (${formatNumberVND(itemNewAmt)})`);
+          newTotalAmount += itemNewAmt;
+          updatedAny = true;
+        } else {
+          newItemsDesc.push(trimmed);
+        }
+      } else {
+        newItemsDesc.push(trimmed);
+      }
+    }
+  }
+
+  if (!updatedAny) return null;
+
+  const newNote = `${prefix}${newItemsDesc.join(', ')}${extraSuffix}`;
+  return { newNote, newTotalAmount };
+};
+
 /**
- * Áp dụng giá bán riêng mới cho khách hàng và tự động tính lại toàn bộ đơn nợ từ ngày áp dụng về sau
+ * Áp dụng giá bán riêng mới cho khách hàng và tự động tính lại toàn bộ đơn nợ, trả hàng, nhập hàng từ ngày áp dụng về sau
  * [POST] /api/v1/quick-price/public/:token/apply
  */
 const applyQuickPriceUpdate = async (req, res, next) => {
@@ -246,7 +368,7 @@ const applyQuickPriceUpdate = async (req, res, next) => {
     const oldPriceMap = new Map(existingCustomPrices.map((cp) => [cp.productId, cp.price]));
     const priceDiffs = [];
 
-    // Một lần cập nhật có thể phải tính lại nhiều đơn nợ của khách hàng.
+    // Một lần cập nhật có thể phải tính lại nhiều đơn nợ và đơn trả hàng của khách hàng.
     // Timeout mặc định 5 giây quá ngắn, đặc biệt khi áp dụng bảng giá cho nhóm
     // nhiều nhà hàng, khiến transaction bị hết hạn giữa chừng và trả về HTTP 500.
     const result = await prisma.$transaction(async (tx) => {
@@ -408,22 +530,172 @@ const applyQuickPriceUpdate = async (req, res, next) => {
         }
       }
 
+      // 3. Tự động tính lại toàn bộ đơn TRẢ HÀNG & NHẬP HÀNG (Payment) TỪ NGÀY ÁP DỤNG TRỞ VỀ SAU (paidAt >= startOfEffectiveDate)
+      let recalculatedPaymentsCount = 0;
+
+      if (changedProductIds.length > 0) {
+        // Chuẩn bị Map tên chuẩn hóa -> đơn giá mới
+        const nameToPriceMap = new Map();
+        for (const [prodId, newP] of changedPriceMap.entries()) {
+          const pObj = prodMap.get(prodId);
+          if (pObj?.name) {
+            nameToPriceMap.set(normalizeMeatName(pObj.name), newP);
+          }
+        }
+        for (const it of items) {
+          if (it.productName && changedPriceMap.has(it.productId)) {
+            nameToPriceMap.set(normalizeMeatName(it.productName), changedPriceMap.get(it.productId));
+          }
+        }
+
+        // Tìm tất cả các Payment của khách hàng phát sinh từ ngày áp dụng về sau
+        const candidatePayments = await tx.payment.findMany({
+          where: {
+            customerId,
+            paidAt: { gte: startOfEffectiveDate },
+          },
+        });
+
+        for (const pm of candidatePayments) {
+          const noteText = pm.note || '';
+          const isReturnOrImport =
+            noteText.includes('[Trả lại hàng]') ||
+            noteText.includes('[Trả hàng nhanh]') ||
+            noteText.includes('[Trả hàng]') ||
+            noteText.includes('[Nhập hàng]') ||
+            /\b(trả hàng|gửi về|trả về|trả lại|nhập hàng|nhập thịt|nhap hang|nhap thit)\b/i.test(noteText);
+
+          if (!isReturnOrImport) continue;
+
+          // Kiểm tra xem đơn này có StaffSubmission liên kết hay không
+          const linkedSubmission = await tx.staffSubmission.findFirst({
+            where: { transactionId: pm.id },
+            include: { items: true },
+          });
+
+          let hasUpdated = false;
+
+          if (linkedSubmission && linkedSubmission.items && linkedSubmission.items.length > 0) {
+            let hasItemChanged = false;
+            for (const subItem of linkedSubmission.items) {
+              let newP = null;
+              const pId = subItem.productId || subItem.matchedProductId;
+              if (pId && changedPriceMap.has(pId)) {
+                newP = changedPriceMap.get(pId);
+              } else if (subItem.rawName) {
+                const norm = normalizeMeatName(subItem.rawName);
+                if (nameToPriceMap.has(norm)) {
+                  newP = nameToPriceMap.get(norm);
+                } else {
+                  for (const [k, pVal] of nameToPriceMap.entries()) {
+                    if (norm === k || norm.includes(k) || k.includes(norm)) {
+                      newP = pVal;
+                      break;
+                    }
+                  }
+                }
+              }
+
+              if (newP !== null) {
+                const q = parseFloat(subItem.quantity || 0);
+                const newAmt = Math.round(q * newP);
+                await tx.staffSubmissionItem.update({
+                  where: { id: subItem.id },
+                  data: {
+                    price: newP,
+                    amount: newAmt,
+                  },
+                });
+                hasItemChanged = true;
+              }
+            }
+
+            if (hasItemChanged) {
+              const allSubItems = await tx.staffSubmissionItem.findMany({
+                where: { submissionId: linkedSubmission.id },
+              });
+              const subTotal = allSubItems.reduce((sum, si) => sum + (parseFloat(si.amount) || 0), 0);
+
+              // Cập nhật lại chuỗi ghi chú của submission và payment
+              const itemsDesc = allSubItems
+                .map((it) => {
+                  const q = it.quantity != null && parseFloat(it.quantity) > 0 ? `${it.quantity}kg ` : '';
+                  const n = it.rawName || 'Thịt';
+                  const a = it.amount != null ? `(${formatNumberVND(it.amount)})` : '';
+                  return `${q}${n} ${a}`.trim();
+                })
+                .filter(Boolean)
+                .join(', ');
+
+              let cleanExtra = (linkedSubmission.note || '')
+                .replace(/\[Trả lại hàng\]|\[Trả hàng nhanh\]|\[Trả hàng\]|\[Nhập hàng\]/gi, '')
+                .trim();
+              if (cleanExtra.includes('(') && cleanExtra.includes(')')) {
+                const lp = cleanExtra.lastIndexOf(')');
+                cleanExtra = cleanExtra.substring(lp + 1).replace(/^[-–—:\s]+/, '').trim();
+              }
+
+              const newNote = cleanExtra
+                ? `[Trả lại hàng] ${itemsDesc} - ${cleanExtra}`
+                : `[Trả lại hàng] ${itemsDesc}`;
+
+              await tx.staffSubmission.update({
+                where: { id: linkedSubmission.id },
+                data: {
+                  note: newNote,
+                },
+              });
+
+              await tx.payment.update({
+                where: { id: pm.id },
+                data: {
+                  amount: subTotal,
+                  note: newNote,
+                },
+              });
+
+              hasUpdated = true;
+            }
+          }
+
+          // Nếu chưa cập nhật qua StaffSubmission, phân tích trực tiếp ghi chú Payment.note
+          if (!hasUpdated && noteText) {
+            const recalcResult = recalculateReturnPaymentNote(noteText, nameToPriceMap);
+            if (recalcResult && recalcResult.newTotalAmount > 0) {
+              await tx.payment.update({
+                where: { id: pm.id },
+                data: {
+                  amount: recalcResult.newTotalAmount,
+                  note: recalcResult.newNote,
+                },
+              });
+              hasUpdated = true;
+            }
+          }
+
+          if (hasUpdated) {
+            recalculatedPaymentsCount++;
+          }
+        }
+      }
+
       return {
         updatedPricesCount: changedProductIds.length,
         recalculatedCount,
+        recalculatedPaymentsCount,
       };
     }, {
       maxWait: 10000,
       timeout: 30000,
     });
 
-    // 3. Ghi log hoạt động hệ thống
+    // 4. Ghi log hoạt động hệ thống
     const formattedDate = new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(
       startOfEffectiveDate
     );
     const changesSummary = priceDiffs.slice(0, 5).join('; ');
     const moreDiffs = priceDiffs.length > 5 ? `... (+${priceDiffs.length - 5} loại)` : '';
-    const logDetail = `Cập nhật giá qua Zalo cho "${customer.name}" từ ngày ${formattedDate} (tính lại ${result.recalculatedCount} đơn nợ):\n• ${changesSummary}${moreDiffs}`;
+    const logDetail = `Cập nhật giá qua Zalo cho "${customer.name}" từ ngày ${formattedDate} (tính lại ${result.recalculatedCount} đơn nợ, ${result.recalculatedPaymentsCount} đơn trả hàng/nhập hàng):\n• ${changesSummary}${moreDiffs}`;
 
     await logActivity(
       userId,
@@ -431,17 +703,27 @@ const applyQuickPriceUpdate = async (req, res, next) => {
       logDetail
     );
 
-    // 4. Phát socket realtime để dashboard của app tự động reload số liệu
+    // 5. Phát socket realtime để dashboard của app tự động reload số liệu
     notifyCustomerUpdate(userId, 'UPDATE_CUSTOMER', { customerId });
     emitWorkspaceEvent(userId, 'TRANSACTION_UPDATED', { customerId });
+    emitWorkspaceEvent(userId, 'PAYMENT_UPDATED', { customerId });
+
+    const totalRecalc = result.recalculatedCount + result.recalculatedPaymentsCount;
+    let detailMsg = `Đã cập nhật bảng giá và tính lại ${result.recalculatedCount} đơn bán hàng`;
+    if (result.recalculatedPaymentsCount > 0) {
+      detailMsg += `, ${result.recalculatedPaymentsCount} đơn trả hàng/nhập hàng`;
+    }
+    detailMsg += ` từ ngày ${formattedDate}!`;
 
     res.json({
       success: true,
-      message: `Đã cập nhật bảng giá và tính lại ${result.recalculatedCount} đơn nợ từ ngày ${formattedDate}!`,
+      message: detailMsg,
       data: {
         customerName: customer.name,
         updatedPricesCount: result.updatedPricesCount,
-        recalculatedCount: result.recalculatedCount,
+        recalculatedCount: totalRecalc,
+        recalculatedTransactionsCount: result.recalculatedCount,
+        recalculatedPaymentsCount: result.recalculatedPaymentsCount,
         effectiveDateFormatted: formattedDate,
       },
     });

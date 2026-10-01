@@ -856,6 +856,323 @@ const getSupplierPrices = async (req, res, next) => {
   }
 };
 
+// 14. Báo cáo quản lý lợi nhuận toàn diện (Đối soát tiền bán, tiền nhập lò, kết luận lãi lỗ)
+const getProfitReport = async (req, res, next) => {
+
+  try {
+    const userId = req.effectiveUserId;
+    const { month } = req.query; // 'YYYY-MM' hoặc 'ALL' hoặc rỗng
+
+    let dateFilter = {};
+    let paidAtFilter = {};
+    let totalDaysInMonth = 0;
+    let targetYear = null;
+    let targetMonthNum = null;
+    const isAllTime = !month || month === 'ALL';
+
+    if (!isAllTime && /^\d{4}-\d{2}$/.test(month)) {
+      const [y, m] = month.split('-').map(Number);
+      targetYear = y;
+      targetMonthNum = m;
+      // Chuẩn hóa theo múi giờ Việt Nam (UTC+7)
+      const start = new Date(Date.UTC(y, m - 1, 1, -7, 0, 0, 0));
+      totalDaysInMonth = new Date(y, m, 0).getDate();
+      const end = new Date(Date.UTC(y, m - 1, totalDaysInMonth, 16, 59, 59, 999));
+      dateFilter = { date: { gte: start, lte: end } };
+      paidAtFilter = { paidAt: { gte: start, lte: end } };
+    }
+
+    // Tải đồng thời tất cả dữ liệu bán hàng, thu tiền, nhập hàng, trả nợ và nhà cung cấp
+    const [salesTxs, custPayments, supTxs, supPayments, suppliers, allTimeSales, allTimeSupTxs] = await Promise.all([
+      prisma.transaction.findMany({
+        where: { userId, ...dateFilter },
+        select: {
+          id: true,
+          date: true,
+          totalAmount: true,
+          totalCost: true,
+          totalProfit: true,
+          customerId: true,
+        },
+      }),
+      prisma.payment.findMany({
+        where: { customer: { userId }, ...paidAtFilter },
+        select: {
+          id: true,
+          paidAt: true,
+          amount: true,
+          customerId: true,
+        },
+      }),
+      prisma.supplierTransaction.findMany({
+        where: { supplier: { userId, isActive: true }, ...dateFilter },
+        include: {
+          supplier: {
+            select: { id: true, name: true, phone: true },
+          },
+        },
+      }),
+      prisma.supplierPayment.findMany({
+        where: { supplier: { userId, isActive: true }, ...paidAtFilter },
+        include: {
+          supplier: {
+            select: { id: true, name: true, phone: true },
+          },
+        },
+      }),
+      prisma.supplier.findMany({
+        where: { userId, isActive: true },
+        select: { id: true, name: true, phone: true },
+        orderBy: { name: 'asc' },
+      }),
+      // Lấy danh sách tháng có giao dịch bán hàng để tạo bộ lọc tháng
+      prisma.transaction.findMany({
+        where: { userId },
+        select: { date: true },
+        orderBy: { date: 'desc' },
+      }),
+      // Lấy danh sách tháng có giao dịch nhập hàng
+      prisma.supplierTransaction.findMany({
+        where: { supplier: { userId, isActive: true } },
+        select: { date: true },
+        orderBy: { date: 'desc' },
+      }),
+    ]);
+
+    // 1. Tổng hợp danh sách các tháng có dữ liệu
+    const monthSet = new Set();
+    allTimeSales.forEach((t) => {
+      if (t.date) {
+        const d = new Date(t.date);
+        if (!isNaN(d.getTime())) {
+          const vnDate = new Date(d.getTime() + 7 * 3600 * 1000);
+          const mKey = `${vnDate.getUTCFullYear()}-${String(vnDate.getUTCMonth() + 1).padStart(2, '0')}`;
+          monthSet.add(mKey);
+        }
+      }
+    });
+    allTimeSupTxs.forEach((t) => {
+      if (t.date) {
+        const d = new Date(t.date);
+        if (!isNaN(d.getTime())) {
+          const vnDate = new Date(d.getTime() + 7 * 3600 * 1000);
+          const mKey = `${vnDate.getUTCFullYear()}-${String(vnDate.getUTCMonth() + 1).padStart(2, '0')}`;
+          monthSet.add(mKey);
+        }
+      }
+    });
+    const availableMonths = Array.from(monthSet).sort().reverse();
+
+    // 2. Tính toán phía khách hàng
+    const totalSales = salesTxs.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0);
+    const salesCount = salesTxs.length;
+    const totalCollected = custPayments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
+    const collectedCount = custPayments.length;
+    const customerDebtRemaining = Math.max(0, totalSales - totalCollected);
+
+    // 3. Tính toán phía nhà cung cấp (Gồm cả nhà 666 và Không gồm nhà 666)
+    let totalImportAll = 0;
+    let totalPaidAll = 0;
+    let totalImportNo666 = 0;
+    let totalPaidNo666 = 0;
+
+    const supplierMap = new Map();
+    suppliers.forEach((s) => {
+      supplierMap.set(s.id, {
+        id: s.id,
+        name: s.name,
+        phone: s.phone,
+        importAmount: 0,
+        importCount: 0,
+        paidAmount: 0,
+        paymentCount: 0,
+        remainingDebt: 0,
+      });
+    });
+
+    supTxs.forEach((t) => {
+      const amt = parseFloat(t.totalAmount || 0);
+      totalImportAll += amt;
+      const is666 = (t.supplier?.name || '').trim() === '666';
+      if (!is666) {
+        totalImportNo666 += amt;
+      }
+      const sup = supplierMap.get(t.supplierId);
+      if (sup) {
+        sup.importAmount += amt;
+        sup.importCount += 1;
+      }
+    });
+
+    supPayments.forEach((p) => {
+      const amt = parseFloat(p.amount || 0);
+      totalPaidAll += amt;
+      const is666 = (p.supplier?.name || '').trim() === '666';
+      if (!is666) {
+        totalPaidNo666 += amt;
+      }
+      const sup = supplierMap.get(p.supplierId);
+      if (sup) {
+        sup.paidAmount += amt;
+        sup.paymentCount += 1;
+      }
+    });
+
+    const suppliersBreakdown = Array.from(supplierMap.values())
+      .map((s) => {
+        s.remainingDebt = s.importAmount - s.paidAmount;
+        s.percentOfImport = totalImportAll > 0 ? Math.round((s.importAmount / totalImportAll) * 1000) / 10 : 0;
+        return s;
+      })
+      .sort((a, b) => b.importAmount - a.importAmount);
+
+    // 4. Kết luận Lãi / Lỗ
+    const profitOrLossAll = totalSales - totalImportAll;
+    const profitPercentAll = totalSales > 0 ? Math.round((profitOrLossAll / totalSales) * 1000) / 10 : 0;
+    const statusAll = profitOrLossAll > 0 ? 'PROFIT' : (profitOrLossAll < 0 ? 'LOSS' : 'BREAK_EVEN');
+
+    const profitOrLossNo666 = totalSales - totalImportNo666;
+    const profitPercentNo666 = totalSales > 0 ? Math.round((profitOrLossNo666 / totalSales) * 1000) / 10 : 0;
+    const statusNo666 = profitOrLossNo666 > 0 ? 'PROFIT' : (profitOrLossNo666 < 0 ? 'LOSS' : 'BREAK_EVEN');
+
+    // 5. Chi tiết theo từng ngày (nếu lọc theo tháng cụ thể)
+    let dailyBreakdown = [];
+    if (!isAllTime && totalDaysInMonth > 0) {
+      const daySalesMap = new Map();
+      const dayImportAllMap = new Map();
+      const dayImportNo666Map = new Map();
+      const dayCollectedMap = new Map();
+      const dayPaidMap = new Map();
+      const daySuppliersMap = new Map();
+
+      salesTxs.forEach((t) => {
+        if (!t.date) return;
+        const vnDate = new Date(new Date(t.date).getTime() + 7 * 3600 * 1000);
+        const day = vnDate.getUTCDate();
+        daySalesMap.set(day, (daySalesMap.get(day) || 0) + parseFloat(t.totalAmount || 0));
+      });
+
+      supTxs.forEach((t) => {
+        if (!t.date) return;
+        const vnDate = new Date(new Date(t.date).getTime() + 7 * 3600 * 1000);
+        const day = vnDate.getUTCDate();
+        const amt = parseFloat(t.totalAmount || 0);
+        dayImportAllMap.set(day, (dayImportAllMap.get(day) || 0) + amt);
+        if ((t.supplier?.name || '').trim() !== '666') {
+          dayImportNo666Map.set(day, (dayImportNo666Map.get(day) || 0) + amt);
+        }
+
+        // Gom nhóm theo từng nhà cung cấp trong ngày
+        if (!daySuppliersMap.has(day)) {
+          daySuppliersMap.set(day, new Map());
+        }
+        const daySupMap = daySuppliersMap.get(day);
+        const sId = t.supplierId || 'unknown';
+        const sName = (t.supplier?.name || 'Khác').trim();
+        if (!daySupMap.has(sId)) {
+          daySupMap.set(sId, {
+            supplierId: sId,
+            supplierName: sName,
+            amount: 0,
+          });
+        }
+        daySupMap.get(sId).amount += amt;
+      });
+
+      custPayments.forEach((p) => {
+        if (!p.paidAt) return;
+        const vnDate = new Date(new Date(p.paidAt).getTime() + 7 * 3600 * 1000);
+        const day = vnDate.getUTCDate();
+        dayCollectedMap.set(day, (dayCollectedMap.get(day) || 0) + parseFloat(p.amount || 0));
+      });
+
+      supPayments.forEach((p) => {
+        if (!p.paidAt) return;
+        const vnDate = new Date(new Date(p.paidAt).getTime() + 7 * 3600 * 1000);
+        const day = vnDate.getUTCDate();
+        dayPaidMap.set(day, (dayPaidMap.get(day) || 0) + parseFloat(p.amount || 0));
+      });
+
+      for (let day = 1; day <= totalDaysInMonth; day++) {
+        const sales = daySalesMap.get(day) || 0;
+        const importAll = dayImportAllMap.get(day) || 0;
+        const importNo666 = dayImportNo666Map.get(day) || 0;
+        const collected = dayCollectedMap.get(day) || 0;
+        const paid = dayPaidMap.get(day) || 0;
+
+        const daySupMap = daySuppliersMap.get(day);
+        const suppliers = daySupMap
+          ? Array.from(daySupMap.values())
+              .filter((s) => s.amount > 0)
+              .sort((a, b) => b.amount - a.amount)
+          : [];
+
+        const hasData = sales > 0 || importAll > 0 || collected > 0 || paid > 0;
+        if (hasData) {
+          dailyBreakdown.push({
+            day,
+            dateDisplay: `${String(day).padStart(2, '0')}/${String(targetMonthNum).padStart(2, '0')}`,
+            sales,
+            importAll,
+            importNo666,
+            diffAll: sales - importAll,
+            diffNo666: sales - importNo666,
+            isProfitAll: sales >= importAll,
+            isProfitNo666: sales >= importNo666,
+            collected,
+            paid,
+            suppliers,
+          });
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        filter: {
+          month: isAllTime ? 'ALL' : month,
+          isAllTime,
+          availableMonths,
+        },
+        sales: {
+          totalAmount: totalSales,
+          count: salesCount,
+          totalCollected,
+          collectedCount,
+          customerDebtRemaining,
+        },
+        withAllSuppliers: {
+          totalImport: totalImportAll,
+          importCount: supTxs.length,
+          totalPaid: totalPaidAll,
+          paidCount: supPayments.length,
+          supplierDebtRemaining: Math.max(0, totalImportAll - totalPaidAll),
+          profitOrLoss: profitOrLossAll,
+          profitPercent: profitPercentAll,
+          status: statusAll,
+          cashFlowDiff: totalCollected - totalPaidAll,
+        },
+        excluding666: {
+          totalImport: totalImportNo666,
+          importCount: supTxs.filter((t) => (t.supplier?.name || '').trim() !== '666').length,
+          totalPaid: totalPaidNo666,
+          paidCount: supPayments.filter((p) => (p.supplier?.name || '').trim() !== '666').length,
+          supplierDebtRemaining: Math.max(0, totalImportNo666 - totalPaidNo666),
+          profitOrLoss: profitOrLossNo666,
+          profitPercent: profitPercentNo666,
+          status: statusNo666,
+          cashFlowDiff: totalCollected - totalPaidNo666,
+        },
+        suppliersBreakdown,
+        dailyBreakdown,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getSuppliers,
   createSupplier,
@@ -870,4 +1187,6 @@ module.exports = {
   getSupplierHistory,
   uploadSupplierMedia,
   getSupplierPrices,
+  getProfitReport,
 };
+

@@ -825,35 +825,20 @@ Chỉ trả về JSON theo đúng cấu trúc:
         .trim();
     }
 
-    // Chuẩn bị note của submission
-    let submissionNote = submission.note || '';
+    // Chuẩn bị note của submission: Đơn nợ mới để trống, đơn trả ghi chú "Trả hàng", nhập hàng ghi chú "Nhập hàng"
+    let submissionNote = '';
     if (!isValidInvoice) {
       submissionNote = '[Không phải hóa đơn] Giấy nháp / Mặt sau';
     } else if (isImportOrder) {
-      // Đơn nhập hàng: ghi chú riêng là NHẬP HÀNG (không dùng [Trả lại hàng])
-      if (!submissionNote.includes('NHẬP HÀNG')) {
-        submissionNote = submissionNote
-          ? `NHẬP HÀNG - ${submissionNote}`
-          : 'NHẬP HÀNG';
-      }
+      submissionNote = 'Nhập hàng';
     } else if (isReturnOrder) {
-      if (!submissionNote.includes('[Trả lại hàng]') && !submissionNote.includes('[Trả hàng]')) {
-        const extraNote = parsedJson.note && !parsedJson.note.includes('[Trả lại hàng]') ? parsedJson.note : '';
-        submissionNote = submissionNote
-          ? `[Trả lại hàng] ${submissionNote}${extraNote ? ` - ${extraNote}` : ''}`
-          : (extraNote ? `[Trả lại hàng] ${extraNote}` : '[Trả lại hàng]');
-      }
+      submissionNote = 'Trả hàng';
+    } else {
+      submissionNote = ''; // Đơn nợ mới: không cần nhập gì
     }
 
     // 6. Giữ nguyên ngày nộp hiện tại của submission (không chia ra từng ngày theo hóa đơn giấy)
     const submissionDate = submission.date || new Date();
-    if (parsedJson.invoice_date) {
-      // Ghi chú ngày trên hóa đơn để tham khảo, không đổi ngày submission để hiển thị chung ở giao diện ngày hiện tại
-      const invoiceDateStr = String(parsedJson.invoice_date).trim();
-      if (invoiceDateStr && !submissionNote.includes(invoiceDateStr)) {
-        submissionNote = submissionNote ? `${submissionNote} (HĐ: ${invoiceDateStr})` : `(HĐ: ${invoiceDateStr})`;
-      }
-    }
 
     // 7. So khớp khách hàng với danh bạ (dùng cleanDetectedCustomerName để loại bỏ từ khóa trả hàng)
     let matchedCustomerId = null;
@@ -861,6 +846,18 @@ Chỉ trả về JSON theo đúng cấu trúc:
     if (customerNameToMatch) {
       const cleanDetected = removeDiacritics(customerNameToMatch.toLowerCase().trim());
       const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+      // 0. BẮT BUỘC ƯU TIÊN KHỚP CHÍNH XÁC 100% (Exact Match) TRƯỚC TIÊN
+      // Nếu tên khách AI bóc tách trùng khớp hoàn toàn với một khách trong DB (ví dụ: "Hồng hạnh hqv")
+      // thì chọn ngay khách này, TUYỆT ĐỐI không để các rule heuristic phía dưới ghi đè!
+      const exactCust = customers.find((c) => {
+        const cClean = removeDiacritics(c.name.toLowerCase().trim());
+        const cCleanNoSpace = cClean.replace(/\s+/g, '');
+        return cClean === cleanDetected || cCleanNoSpace === cleanDetectedNoSpace;
+      });
+      if (exactCust) {
+        matchedCustomerId = exactCust.id;
+      }
 
       // Ưu tiên khớp khách Cô thảo(thầy) nếu AI nhận diện là thầy hoặc cô thảo
       if (
@@ -1377,14 +1374,20 @@ Chỉ trả về JSON theo đúng cấu trúc:
       if (!matchedCustomerId) {
         // Khớp ưu tiên khách "Chị hạnh sân bóng hà trì" nếu AI nhận diện là hạnh, chị hạnh, hanh, chi hanh, hạnh sân bóng...
         // TUYỆT ĐỐI không để khớp nhầm sang khách "Hạnh" (isBadDebt=true)
-        const isHanhMatch = (cleanDetected === 'hanh' ||
+        const isHanhMatch = (
+          cleanDetected === 'hanh' ||
           cleanDetected === 'chi hanh' ||
+          cleanDetected === 'co hanh' ||
+          cleanDetected === 'ba hanh' ||
+          cleanDetected === 'em hanh' ||
           cleanDetected.includes('hanh san bong') ||
-          cleanDetected.includes('chi hanh') ||
+          cleanDetected.includes('san bong ha tri') ||
+          cleanDetected.includes('hanh ha tri') ||
           cleanDetectedNoSpace === 'hanh' ||
           cleanDetectedNoSpace === 'chihanh' ||
           cleanDetectedNoSpace.includes('hanhsanbong') ||
-          (cleanDetected.includes('hanh') && !cleanDetected.includes('khanh')));
+          cleanDetectedNoSpace.includes('sanbonghatri')
+        );
 
         if (isHanhMatch) {
           const hanhCust = customers.find((c) => {

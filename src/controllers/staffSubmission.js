@@ -637,7 +637,7 @@ const approveStaffSubmission = async (req, res, next) => {
     }
 
     const finalDate = date ? new Date(date) : submission.date;
-    const finalNote = note !== undefined ? note : (submission.note || 'Lên đơn từ hóa đơn Zalo nhân viên');
+    const finalNote = note !== undefined ? String(note).trim() : (submission.note || '');
 
     // ─── SYNC CLOUDINARY TRƯỚC KHI APPROVE ───────────────────────────────────
     // Nếu fileUrl vẫn còn là link /uploads/ cục bộ (Cloudinary chưa kịp upload xong
@@ -763,7 +763,7 @@ const approveStaffSubmission = async (req, res, next) => {
               data: {
                 supplierId: finalSupplierId,
                 totalAmount,
-                note: finalNote || 'Nhập hàng từ nhân viên gửi',
+                note: finalNote || 'Nhập hàng',
                 date: finalDate,
                 items: itemsStr,
                 mediaUrls: mediaUrlsStr,
@@ -792,7 +792,7 @@ const approveStaffSubmission = async (req, res, next) => {
               supplierId: finalSupplierId,
               createdBy: currentUserId,
               totalAmount,
-              note: finalNote || 'Nhập hàng từ nhân viên gửi',
+                note: finalNote || 'Nhập hàng',
               date: finalDate,
               items: itemsStr,
               mediaUrls: mediaUrlsStr,
@@ -1128,7 +1128,7 @@ const approveStaffSubmission = async (req, res, next) => {
           status: 'APPROVED',
           matchedCustomerId: finalCustomerId,
           date: finalDate,
-          note: isReturnOrder ? returnNote : finalNote,
+          note: isReturnOrder ? (finalNote || 'Trả hàng') : finalNote,
           transactionId: newTxId,
           approvedAt: new Date(),
         },
