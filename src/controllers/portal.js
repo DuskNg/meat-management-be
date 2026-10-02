@@ -98,6 +98,10 @@ const getPublicPortalInfo = async (req, res, next) => {
 
     const isSessionValid = verifyPortalSession(req, portalLink);
 
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+
     res.status(200).json({
       success: true,
       data: {
@@ -269,6 +273,10 @@ const fetchInvoicesForPayments = async (paymentIds, userId) => {
 // Lấy dữ liệu công nợ, đơn hàng, bảng giá thịt an toàn (Zero-leakage)
 const getPublicPortalData = async (req, res, next) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+
     const { token } = req.params;
     const { customerId, from, to } = req.query;
 
