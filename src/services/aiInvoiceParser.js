@@ -847,16 +847,64 @@ Chỉ trả về JSON theo đúng cấu trúc:
       const cleanDetected = removeDiacritics(customerNameToMatch.toLowerCase().trim());
       const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
 
-      // 0. BẮT BUỘC ƯU TIÊN KHỚP CHÍNH XÁC 100% (Exact Match) TRƯỚC TIÊN
-      // Nếu tên khách AI bóc tách trùng khớp hoàn toàn với một khách trong DB (ví dụ: "Hồng hạnh hqv")
-      // thì chọn ngay khách này, TUYỆT ĐỐI không để các rule heuristic phía dưới ghi đè!
-      const exactCust = customers.find((c) => {
-        const cClean = removeDiacritics(c.name.toLowerCase().trim());
-        const cCleanNoSpace = cClean.replace(/\s+/g, '');
-        return cClean === cleanDetected || cCleanNoSpace === cleanDetectedNoSpace;
-      });
-      if (exactCust) {
-        matchedCustomerId = exactCust.id;
+      // 0a. ĐẶC BIỆT: Khớp ưu tiên khách "Bếp trung kính" nếu AI nhận diện là "Trung kính", "trung kh", "tuy kh", "trungkinh"...
+      // BẮT BUỘC ưu tiên tìm khách có chứa "bep trung kinh" / "bep" + "trung" + "kinh" trước,
+      // TUYỆT ĐỐI không để Rule 0 (Exact Match) khớp nhầm vào khách "Trungkinh"!
+      const isDetectedTrungKinh =
+        cleanDetected.includes('trung kinh') ||
+        cleanDetected.includes('bep trung kinh') ||
+        cleanDetected.includes('tuy kinh') ||
+        cleanDetected.includes('tung kinh') ||
+        cleanDetected.includes('truy kinh') ||
+        cleanDetected.includes('tug kinh') ||
+        cleanDetected.includes('trung kh') ||
+        cleanDetected.includes('tuy kh') ||
+        cleanDetected.includes('tuy ks') ||
+        cleanDetected.includes('tug kh') ||
+        cleanDetected.includes('tung kh') ||
+        cleanDetected.includes('truy kh') ||
+        cleanDetectedNoSpace === 'trungkinh' ||
+        cleanDetectedNoSpace === 'tuykinh' ||
+        cleanDetectedNoSpace === 'tungkinh' ||
+        cleanDetectedNoSpace === 'truykinh' ||
+        cleanDetectedNoSpace === 'tugkinh' ||
+        cleanDetectedNoSpace === 'tuykh' ||
+        cleanDetectedNoSpace === 'tuykhs' ||
+        cleanDetectedNoSpace === 'tuyks' ||
+        cleanDetectedNoSpace === 'tugkh' ||
+        cleanDetectedNoSpace === 'tungkh' ||
+        cleanDetectedNoSpace === 'truykh' ||
+        cleanDetectedNoSpace.includes('trungkinh') ||
+        cleanDetectedNoSpace.includes('tuykinh') ||
+        cleanDetectedNoSpace.includes('beptrungkinh') ||
+        (cleanDetected.includes('trung') && cleanDetected.includes('kinh'));
+
+      if (isDetectedTrungKinh) {
+        const bepTrungKinhCust = customers.find((c) => {
+          const cClean = removeDiacritics(c.name.toLowerCase().trim());
+          return cClean.includes('bep trung kinh') || (cClean.includes('bep') && cClean.includes('trung') && cClean.includes('kinh'));
+        }) || customers.find((c) => {
+          const cClean = removeDiacritics(c.name.toLowerCase().trim());
+          return cClean.includes('trung kinh') || cClean === 'trungkinh';
+        }) || null;
+
+        if (bepTrungKinhCust) {
+          matchedCustomerId = bepTrungKinhCust.id;
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // 0. BẮT BUỘC ƯU TIÊN KHỚP CHÍNH XÁC 100% (Exact Match) TRƯỚC TIÊN
+        // Nếu tên khách AI bóc tách trùng khớp hoàn toàn với một khách trong DB (ví dụ: "Hồng hạnh hqv")
+        // thì chọn ngay khách này, TUYỆT ĐỐI không để các rule heuristic phía dưới ghi đè!
+        const exactCust = customers.find((c) => {
+          const cClean = removeDiacritics(c.name.toLowerCase().trim());
+          const cCleanNoSpace = cClean.replace(/\s+/g, '');
+          return cClean === cleanDetected || cCleanNoSpace === cleanDetectedNoSpace;
+        });
+        if (exactCust) {
+          matchedCustomerId = exactCust.id;
+        }
       }
 
       // Ưu tiên khớp khách Cô thảo(thầy) nếu AI nhận diện là thầy hoặc cô thảo
@@ -974,7 +1022,7 @@ Chỉ trả về JSON theo đúng cấu trúc:
           // Ưu tiên khách có chứa "bep trung kinh" hoặc "trung kinh" (ví dụ: Bếp trung kính (zalo loantt) hoặc Trungkinh)
           const trungKinhCust = customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase());
-            return cClean.includes('bep trung kinh') || (cClean.includes('trung') && cClean.includes('kinh'));
+            return cClean.includes('bep trung kinh') || (cClean.includes('bep') && cClean.includes('trung') && cClean.includes('kinh'));
           }) || customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase());
             return cClean.includes('trung kinh') || cClean === 'trungkinh';
