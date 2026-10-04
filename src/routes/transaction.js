@@ -21,14 +21,6 @@ router.put('/:id', transactionController.updateTransaction);
 // Xóa đơn ghi nợ theo ID
 router.delete('/:id', transactionController.deleteTransaction);
 
-// Nhận diện tích kê bán thịt từ hình ảnh qua Gemini API
-router.post('/scan-ticket', transactionController.scanTicket);
-
-// Nhận diện ghi nợ thịt từ ghi âm giọng nói qua Gemini API
-router.post('/voice-to-text', transactionController.voiceToText);
-
-// Phân tích câu thoại/transcript sang dữ liệu cấu trúc
-router.post('/parse-transcript', transactionController.parseTranscript);
 
 // Lấy danh sách ảnh hóa đơn (lọc theo ngày, khách hàng, tìm kiếm)
 router.get('/invoices', transactionController.getInvoiceImages);
