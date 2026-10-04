@@ -821,6 +821,7 @@ const getBranchesDebtByMonth = async (req, res, next) => {
 
     let grandTotalDebt = 0;
     let grandMonthPurchase = 0;
+    let grandMonthReturn = 0;
     let grandMonthPaid = 0;
     let grandMonthDebt = 0;
 
@@ -868,33 +869,56 @@ const getBranchesDebtByMonth = async (req, res, next) => {
 
       const monthPurchase = Math.round(Number(monthPurchases._sum.totalAmount || 0));
 
-      // 2. Tính tiền thanh toán thuộc về tháng mục tiêu
+      // 2. Phân loại tiền thanh toán và tiền trả hàng thuộc về tháng mục tiêu
       let monthPaid = 0;
+      let monthReturn = 0;
+
       for (const pm of customerPayments) {
         const amt = Number(pm.amount) || 0;
         const note = (pm.note || '').trim();
-        const monthMatch = note.match(/Thanh toán (?:nợ|hóa đơn)?\s*[Tt]háng (\d{2})\/(\d{4})/i);
+        const noteLower = note.toLowerCase();
 
-        if (monthMatch) {
-          const pM = parseInt(monthMatch[1], 10);
-          const pY = parseInt(monthMatch[2], 10);
-          if (pM === targetMonth && pY === targetYear) {
-            monthPaid += amt;
+        // Nhận diện đơn trả lại hàng (không phải tiền khách thanh toán nợ)
+        const isReturn =
+          note.includes('[Trả lại hàng]') ||
+          note.includes('[Trả hàng nhanh]') ||
+          note.includes('[Trả hàng]') ||
+          /\b(trả hàng|trả lại|gửi về|trả về|hàng trả|thu hồi|quay đầu|hoàn hàng)\b/i.test(noteLower);
+
+        if (isReturn) {
+          if (pm.paidAt) {
+            const pDate = new Date(pm.paidAt);
+            if (pDate >= startOfMonth && pDate <= endOfMonth) {
+              monthReturn += amt;
+            }
           }
-        } else if (pm.paidAt) {
-          const pDate = new Date(pm.paidAt);
-          if (pDate >= startOfMonth && pDate <= endOfMonth) {
-            monthPaid += amt;
+        } else {
+          // Khoản khách thực tế thanh toán tiền nợ (tiền mặt / chuyển khoản)
+          const monthMatch = note.match(/Thanh toán (?:nợ|hóa đơn)?\s*[Tt]háng (\d{2})\/(\d{4})/i);
+
+          if (monthMatch) {
+            const pM = parseInt(monthMatch[1], 10);
+            const pY = parseInt(monthMatch[2], 10);
+            if (pM === targetMonth && pY === targetYear) {
+              monthPaid += amt;
+            }
+          } else if (pm.paidAt) {
+            const pDate = new Date(pm.paidAt);
+            if (pDate >= startOfMonth && pDate <= endOfMonth) {
+              monthPaid += amt;
+            }
           }
         }
       }
       monthPaid = Math.round(monthPaid);
+      monthReturn = Math.round(monthReturn);
 
-      let monthDebt = Math.round(monthPurchase - monthPaid);
+      let monthDebt = Math.round(monthPurchase - monthReturn - monthPaid);
       if (monthDebt < 0) monthDebt = 0;
 
       grandTotalDebt += totalDebt;
       grandMonthPurchase += monthPurchase;
+      grandMonthReturn += monthReturn;
       grandMonthPaid += monthPaid;
       grandMonthDebt += monthDebt;
 
@@ -904,6 +928,7 @@ const getBranchesDebtByMonth = async (req, res, next) => {
         phone: c.phone,
         address: c.address,
         monthPurchase,
+        monthReturn,
         monthPaid,
         monthDebt,
         totalDebt
@@ -919,6 +944,7 @@ const getBranchesDebtByMonth = async (req, res, next) => {
         summary: {
           monthDebt: grandMonthDebt,
           monthPurchase: grandMonthPurchase,
+          monthReturn: grandMonthReturn,
           monthPaid: grandMonthPaid,
           totalDebt: grandTotalDebt,
           branchCount: branchesData.length
