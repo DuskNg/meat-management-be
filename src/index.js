@@ -96,6 +96,7 @@ const portalRoutes = require('./routes/portal');
 const staffSubmissionRoutes = require('./routes/staffSubmission');
 const quickPriceRoutes = require('./routes/quickPrice');
 const bankTransactionRoutes = require('./routes/bankTransaction');
+const periodicReminderRoutes = require('./routes/periodicReminder');
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
@@ -114,6 +115,7 @@ app.use('/api/v1/portal', portalRoutes);
 app.use('/api/v1/staff-submissions', staffSubmissionRoutes);
 app.use('/api/v1/quick-price', quickPriceRoutes);
 app.use('/api/v1/bank-transactions', bankTransactionRoutes);
+app.use('/api/v1/periodic-reminders', periodicReminderRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {

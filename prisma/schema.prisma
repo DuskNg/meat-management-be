@@ -105,6 +105,7 @@ model Customer {
   invoices            TransactionInvoice[] // Các ảnh hóa đơn đính kèm của khách hàng này
   staffSubmissions    StaffSubmission[]    // Các hóa đơn/video AI nhận diện của khách hàng này
   bankTransactions    BankTransaction[]    // Các giao dịch ngân hàng khớp với khách hàng này
+  periodicReminders   PeriodicReminderConfig[] // Cấu hình lịch gửi công nợ định kỳ của khách hàng này
 
   @@index([userId]) // Tối ưu hóa truy vấn tìm kiếm danh sách khách hàng của từng chủ buôn
   @@map("customers") // Đặt tên bảng trong PostgreSQL là "customers"
@@ -813,5 +814,22 @@ model BankTransaction {
   @@index([status])
   @@index([matchedCustomerId])
   @@map("bank_transactions")
+}
+
+model PeriodicReminderConfig {
+  id           String    @id @default(uuid())
+  userId       String    // ID của chủ buôn quản lý cấu hình này
+  customerId   String    // ID của khách hàng được nhắc nợ
+  customer     Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  groupName    String?   // Tên nhóm (ví dụ: Chuỗi Trường Hoàng (11 quán), Bếp Hàng Xóm, Khách riêng lẻ...)
+  reminderDays String    @default("1,15") // Các ngày áp dụng trong tháng, phân tách bằng dấu phẩy: "1", "15", "1,15"
+  notes        String?   // Ghi chú thêm
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([userId, customerId]) // Một khách hàng trong một tài khoản chỉ có 1 cấu hình nhắc nợ
+  @@index([userId])
+  @@index([customerId])
+  @@map("periodic_reminder_configs")
 }
 
