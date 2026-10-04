@@ -382,5 +382,22 @@ describe('Luồng Nghiệp Vụ: Kiểm toán dữ liệu xuất công nợ khá
       expect(message).toContain('9.7kg và 9.7kg');
       expect(message).toContain('Bạn có muốn mở kiểm tra chi tiết các đơn hàng này không?');
     });
+
+    it('Xử lý an toàn khi buildGlobalAuditWarningMessage và computeDuplicatesSignature nhận event object hoặc non-array (chống crash t.forEach)', () => {
+      // Giả lập PressEvent / SyntheticEvent khi người dùng nhấp vào banner
+      const mockPressEvent = { nativeEvent: {}, type: 'click', target: {} };
+      expect(buildGlobalAuditWarningMessage(mockPressEvent)).toBe('');
+      expect(buildGlobalAuditWarningMessage(null)).toBe('');
+      expect(buildGlobalAuditWarningMessage(undefined)).toBe('');
+      expect(buildGlobalAuditWarningMessage({})).toBe('');
+      expect(buildGlobalAuditWarningMessage('invalid')).toBe('');
+
+      expect(computeDuplicatesSignature(mockPressEvent)).toBe('');
+      expect(computeDuplicatesSignature(null)).toBe('');
+      expect(computeDuplicatesSignature(undefined)).toBe('');
+      expect(computeDuplicatesSignature({})).toBe('');
+      expect(computeDuplicatesSignature('invalid')).toBe('');
+    });
   });
 });
+

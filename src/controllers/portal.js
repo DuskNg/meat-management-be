@@ -308,17 +308,26 @@ const getPublicPortalData = async (req, res, next) => {
     const isOwner = isLocalhost || checkIsOwner(req, portalLink);
     const cutoffDate = isOwner ? null : (portalLink.lastPublishedAt || null);
 
-    // Đếm số đơn nợ mới phát sinh chưa công bố (dành riêng cho chủ buôn)
+    // Đếm số đơn nợ và khoản thu tiền mới phát sinh chưa công bố (dành riêng cho chủ buôn)
     let unpublishedCount = 0;
     if (isOwner && portalLink.lastPublishedAt) {
       const allowedIds = portalLink.customers.map(c => c.customerId);
       if (allowedIds.length > 0) {
-        unpublishedCount = await prisma.transaction.count({
-          where: {
-            customerId: { in: allowedIds },
-            createdAt: { gt: portalLink.lastPublishedAt }
-          }
-        });
+        const [txCount, payCount] = await Promise.all([
+          prisma.transaction.count({
+            where: {
+              customerId: { in: allowedIds },
+              createdAt: { gt: portalLink.lastPublishedAt }
+            }
+          }),
+          prisma.payment.count({
+            where: {
+              customerId: { in: allowedIds },
+              createdAt: { gt: portalLink.lastPublishedAt }
+            }
+          })
+        ]);
+        unpublishedCount = txCount + payCount;
       }
     }
 
@@ -962,12 +971,21 @@ const getPortalLinks = async (req, res, next) => {
       let unpublishedCount = 0;
       if (l.type === 'customer' && l.customers.length > 0) {
         const cIds = l.customers.map(c => c.customer.id);
-        unpublishedCount = await prisma.transaction.count({
-          where: {
-            customerId: { in: cIds },
-            ...(l.lastPublishedAt ? { createdAt: { gt: l.lastPublishedAt } } : {})
-          }
-        });
+        const [txCount, payCount] = await Promise.all([
+          prisma.transaction.count({
+            where: {
+              customerId: { in: cIds },
+              ...(l.lastPublishedAt ? { createdAt: { gt: l.lastPublishedAt } } : {})
+            }
+          }),
+          prisma.payment.count({
+            where: {
+              customerId: { in: cIds },
+              ...(l.lastPublishedAt ? { createdAt: { gt: l.lastPublishedAt } } : {})
+            }
+          })
+        ]);
+        unpublishedCount = txCount + payCount;
       }
       return {
         id: l.id,
