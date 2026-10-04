@@ -188,8 +188,8 @@ const parseStaffSubmission = async (submissionId) => {
 
     emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_ANALYZING', { id: submissionId });
 
-    // 2. Lấy danh sách khách hàng và sản phẩm hiện tại của chủ buôn để làm từ điển đối chiếu cho AI
-    const [customers, products] = await Promise.all([
+    // 2. Lấy danh sách khách hàng, sản phẩm và nhà cung cấp hiện tại của chủ buôn để làm từ điển đối chiếu cho AI
+    const [customers, products, suppliers] = await Promise.all([
       prisma.customer.findMany({
         where: { userId, isActive: true },
         select: { id: true, name: true, phone: true },
@@ -198,10 +198,15 @@ const parseStaffSubmission = async (submissionId) => {
         where: { userId, isActive: true },
         select: { id: true, name: true, defaultPrice: true, unit: true },
       }),
+      prisma.supplier.findMany({
+        where: { userId, isActive: true },
+        select: { id: true, name: true, phone: true },
+      }),
     ]);
 
     const customerNamesList = customers.map((c) => c.name).join(', ');
     const productNamesList = products.map((p) => p.name).join(', ');
+    const supplierNamesList = suppliers.map((s) => s.name).join(', ');
 
     // 3. Tải tệp thành Base64
     const filePayload = await fetchFileAsBase64(submission.fileUrl);
@@ -227,6 +232,9 @@ const parseStaffSubmission = async (submissionId) => {
 
 DANH SÁCH KHÁCH HÀNG QUEN THUỘC CỦA CHỦ BUÔN:
 [${customerNamesList || 'Chưa có'}]
+
+DANH SÁCH NHÀ CUNG CẤP QUEN THUỘC (NHẬP HÀNG / LÒ MỔ):
+[${supplierNamesList || 'Chưa có'}]
 
 DANH SÁCH CÁC MÓN THỊT THƯỜNG BÁN:
 [${productNamesList || 'Chưa có'}]
@@ -422,13 +430,14 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
      + Vẫn bóc tách chính xác customer_name và items (tên món thịt, số cân, giá, tiền).
      + Các từ ngữ "gửi lại", "gửi về", "trả hàng", "trả về", "trả lại", "hàng trả" CHỈ DÙNG ĐỂ XÁC ĐỊNH LOẠI ĐƠN, TUYỆT ĐỐI CẤM đưa vào tên khách hàng (customer_name) hay tên món thịt (name)!
 
-3.1. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN NHẬP HÀNG / MUA THỊT (CỰC KỲ QUAN TRỌNG):
-   - Khi người nói dùng các từ ngữ như: "nhập thịt", "nhập hàng", "mua thịt", "mua hàng", "nhập về", "mua về", "lấy thịt về", "lấy hàng về", "nhập lô", "nhập kho" (ý nghĩa: chủ buôn NHẬP THỊT TỪ NHÀ CUNG CẤP về kho, không phải bán cho khách):
-   - BẮT BUỘC nhận diện đây là ĐƠN NHẬP HÀNG (chủ buôn mua/nhận thịt về, cần trừ vào nợ nhà cung cấp):
-     + BẮT BUỘC đặt "is_return": true.
-     + BẮT BUỘC đặt "note": "NHẬP HÀNG" (chỉ ghi đúng chữ NHẬP HÀNG, không thêm gì khác trừ khi người nói đọc thêm ghi chú cụ thể).
-     + Vẫn bóc tách chính xác customer_name (tên nhà cung cấp nếu có) và items (tên món thịt, số cân, giá, tiền).
-     + Các từ ngữ "nhập thịt", "mua thịt", "nhập hàng", "mua hàng" CHỈ DÙNG ĐỂ XÁC ĐỊNH LOẠI ĐƠN, TUYỆT ĐỐI CẤM đưa vào tên khách hàng hay tên món thịt!
+3.1. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN NHẬP HÀNG / MUA THỊT / NHẬP VÀO (CỰC KỲ QUAN TRỌNG):
+   - Khi người nói dùng các từ ngữ như: "nhập", "nhập vào", "nhập về", "nhập hàng", "nhập thịt", "mua", "mua vào", "mua về", "mua hàng", "mua thịt", "lấy vào", "lấy thịt về", "lấy hàng về", "nhập kho", "nhập lò", "mua lò" (ý nghĩa: chủ buôn NHẬP THỊT / MUA THỊT TỪ NHÀ CUNG CẤP VÀO KHO, KHÔNG PHẢI BÁN CHO KHÁCH VÀ KHÔNG PHẢI KHÁCH TRẢ HÀNG):
+   - BẮT BUỘC nhận diện đây là ĐƠN NHẬP HÀNG:
+     + BẮT BUỘC đặt "is_import": true.
+     + BẮT BUỘC đặt "is_return": false (TUYỆT ĐỐI CẤM đặt is_return = true vì đây là NHẬP HÀNG, KHÔNG PHẢI TRẢ HÀNG).
+     + BẮT BUỘC đặt "note": "Nhập hàng" (chữ "Nhập hàng", không thêm gì khác trừ khi người nói đọc thêm ghi chú cụ thể).
+     + Bóc tách tên nhà cung cấp nếu có vào "customer_name" và items (tên món thịt, số cân, giá, tiền).
+     + Các từ ngữ "nhập", "mua", "nhập vào", "mua vào", "nhập hàng", "mua hàng", "nhập thịt", "mua thịt" CHỈ DÙNG ĐỂ XÁC ĐỊNH LOẠI ĐƠN, TUYỆT ĐỐI CẤM đưa vào tên món thịt hay tên đối tác!
 
 4. Lưu ý:
    - Người nói có thể dùng khẩu ngữ tiếng Việt (cân = kg, lạng = 0.1kg, rưỡi = .5, chẵn...).
@@ -436,9 +445,10 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
 
 Chỉ trả về JSON theo đúng cấu trúc:
 {
-  "customer_name": "Tên khách hàng hoặc null",
+  "customer_name": "Tên khách hàng hoặc tên nhà cung cấp (nếu nhập hàng) hoặc null",
   "is_return": false,
-  "note": "Ghi chú nếu có (hoặc '[Trả lại hàng]' nếu là đơn trả)",
+  "is_import": false,
+  "note": "Ghi chú nếu có (nếu là nhập hàng thì ghi 'Nhập hàng', nếu là đơn trả thì là '[Trả lại hàng]')",
   "items": [
     {
       "name": "Tên món thịt",
@@ -453,6 +463,9 @@ Chỉ trả về JSON theo đúng cấu trúc:
 
 DANH SÁCH KHÁCH HÀNG QUEN THUỘC CỦA CHỦ BUÔN:
 [${customerNamesList || 'Chưa có'}]
+
+DANH SÁCH NHÀ CUNG CẤP QUEN THUỘC (NHẬP HÀNG / LÒ MỔ):
+[${supplierNamesList || 'Chưa có'}]
 
 DANH SÁCH CÁC MÓN THỊT THƯỜNG BÁN:
 [${productNamesList || 'Chưa có'}]
@@ -703,17 +716,27 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
    - Khi trên tờ hóa đơn / tích kê có chữ viết tay: "trả", "trả lại", "trả hàng", "gửi về", "trả về", "gửi lại", "hàng trả", "thu hồi", "quay đầu" (hoặc có dấu trừ "-" trước số tiền hoặc số cân):
    - BẮT BUỘC nhận diện đây là ĐƠN TRẢ HÀNG (khách gửi trả hàng để giảm trừ nợ, KHÔNG phải đơn mua mới):
      + BẮT BUỘC đặt "is_return": true (đơn bán bình thường là false).
+     + BẮT BUỘC đặt "is_import": false.
      + BẮT BUỘC đặt "note": "[Trả lại hàng]".
      + Vẫn bóc tách chính xác customer_name và danh sách các món thịt (name, quantity, price, amount).
      + TUYỆT ĐỐI CẤM đưa các chữ "trả", "trả hàng", "gửi về", "trả về", "trả lại", "hàng trả" vào tên khách hàng hay tên món thịt!
 
+4.1. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN NHẬP HÀNG / PHIẾU NHẬP LÒ MỔ (CỰC KỲ QUAN TRỌNG):
+   - Khi trên phiếu có ghi hoặc in: "nhập", "nhập vào", "mua vào", "nhập hàng", "nhập thịt", "mua hàng", "mua thịt", "nhập kho", "nhập lò", "mua lò", "lò mổ", "phiếu nhập"...:
+   - BẮT BUỘC nhận diện đây là ĐƠN NHẬP HÀNG:
+     + BẮT BUỘC đặt "is_import": true.
+     + BẮT BUỘC đặt "is_return": false.
+     + BẮT BUỘC đặt "note": "Nhập hàng".
+     + Bóc tách tên nhà cung cấp vào customer_name.
+
 Chỉ trả về JSON theo đúng cấu trúc:
 {
   "is_valid_invoice": true,
-  "customer_name": "Tên khách hàng hoặc null",
+  "customer_name": "Tên khách hàng hoặc tên nhà cung cấp hoặc null",
   "invoice_date": "DD/MM/YYYY hoặc null",
   "is_return": false,
-  "note": "Ghi chú nếu có (hoặc '[Trả lại hàng]' nếu là đơn trả)",
+  "is_import": false,
+  "note": "Ghi chú nếu có (nếu là nhập hàng thì là 'Nhập hàng', nếu là đơn trả thì là '[Trả lại hàng]')",
   "items": [
     {
       "name": "Xg Bò / Tái (Bò) / Bắp Bò / Gầu Bò / Sườn...",
@@ -752,6 +775,7 @@ Chỉ trả về JSON theo đúng cấu trúc:
             customer_name: { type: 'STRING', nullable: true },
             invoice_date: { type: 'STRING', nullable: true },
             is_return: { type: 'BOOLEAN', nullable: true },
+            is_import: { type: 'BOOLEAN', nullable: true },
             note: { type: 'STRING', nullable: true },
             items: {
               type: 'ARRAY',
@@ -793,8 +817,9 @@ Chỉ trả về JSON theo đúng cấu trúc:
       : null;
 
     // Nhận diện đơn NHẬP HÀNG (chủ buôn nhập thịt / mua thịt từ nhà cung cấp)
-    const importRegex = /(nhập thịt|nhập hàng|mua thịt|mua hàng|nhập về|mua về|lấy thịt về|lấy hàng về|nhập lô|nhập kho|nhap thit|nhap hang|mua thit|mua hang|nhap ve|mua ve)/i;
-    const isImportOrder = isVideo && isValidInvoice && Boolean(
+    const importRegex = /(?:nhập hàng|nhap hang|nhập thịt|nhap thit|mua hàng|mua hang|mua thịt|mua thit|nhập vào|nhap vao|mua vào|mua vao|nhập về|nhap ve|mua về|mua ve|lấy vào|lay vao|nhập kho|nhap kho|nhập lò|nhap lo|mua lò|mua lo|lấy thịt về|lay thit ve|lấy hàng về|lay hang ve|nhập lô|nhap lo|\bnhập\b|\bnhap\b|\bmua thịt\b|\bmua hàng\b|\bmua vào\b|\bmua về\b|\bmua\b)/i;
+    const isImportOrder = isValidInvoice && Boolean(
+      parsedJson.is_import === true ||
       (parsedJson.note && importRegex.test(parsedJson.note)) ||
       (submission.note && importRegex.test(submission.note)) ||
       importRegex.test(geminiResult.text || '')
@@ -811,15 +836,23 @@ Chỉ trả về JSON theo đúng cấu trúc:
       returnRegex.test(geminiResult.text || '')
     );
 
-    if (isImportOrder || isReturnOrder) {
+    if (isImportOrder) {
+      parsedJson.is_import = true;
+      parsedJson.is_return = false;
+      parsedJson.target_type = 'supplier';
+    } else if (isReturnOrder) {
       parsedJson.is_return = true;
+      parsedJson.is_import = false;
+    } else {
+      parsedJson.is_return = false;
+      parsedJson.is_import = false;
     }
 
     // Làm sạch tên khách hàng nếu dính các từ khóa trả hàng / nhập hàng
     let cleanDetectedCustomerName = detectedCustomerName;
     if (cleanDetectedCustomerName && (isReturnOrder || isImportOrder)) {
       cleanDetectedCustomerName = cleanDetectedCustomerName
-        .replace(/\b(nhập thịt|nhập hàng|mua thịt|mua hàng|nhập về|mua về|lấy thịt về|lấy hàng về|nhập lô|nhập kho|trả hàng|gửi về|trả về|trả lại|gửi lại|hàng trả|thu hồi|bắn về|quay đầu|đổi trả|hoàn hàng|tra hang|gui ve|tra ve|tra lai|gui lai|hang tra|quay dau|doi tra|hoan hang|trả|tra)\b/gi, '')
+        .replace(/\b(nhập thịt|nhập hàng|mua thịt|mua hàng|nhập vào|mua vào|nhập về|mua về|lấy vào|lấy thịt về|lấy hàng về|nhập lô|nhập kho|nhập lò|mua lò|nhap thit|nhap hang|mua thit|mua hang|nhap vao|mua vao|nhap ve|mua ve|lay vao|nhap kho|nhap lo|mua lo|nhập|nhap|mua|trả hàng|gửi về|trả về|trả lại|gửi lại|hàng trả|thu hồi|bắn về|quay đầu|đổi trả|hoàn hàng|tra hang|gui ve|tra ve|tra lai|gui lai|hang tra|quay dau|doi tra|hoan hang|trả|tra)\b/gi, '')
         .replace(/[-–—:()]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
@@ -831,8 +864,10 @@ Chỉ trả về JSON theo đúng cấu trúc:
       submissionNote = '[Không phải hóa đơn] Giấy nháp / Mặt sau';
     } else if (isImportOrder) {
       submissionNote = 'Nhập hàng';
+      parsedJson.note = 'Nhập hàng';
     } else if (isReturnOrder) {
       submissionNote = 'Trả hàng';
+      parsedJson.note = 'Trả hàng';
     } else {
       submissionNote = ''; // Đơn nợ mới: không cần nhập gì
     }
@@ -840,10 +875,28 @@ Chỉ trả về JSON theo đúng cấu trúc:
     // 6. Giữ nguyên ngày nộp hiện tại của submission (không chia ra từng ngày theo hóa đơn giấy)
     const submissionDate = submission.date || new Date();
 
-    // 7. So khớp khách hàng với danh bạ (dùng cleanDetectedCustomerName để loại bỏ từ khóa trả hàng)
+    // 7. So khớp đối tác:
+    // Nếu là đơn NHẬP HÀNG: So khớp với danh sách Nhà cung cấp (suppliers), KHÔNG gán vào khách hàng
+    // Nếu là đơn BÁN HÀNG / TRẢ HÀNG: So khớp với danh bạ Khách hàng (customers)
     let matchedCustomerId = null;
+    let matchedSupplier = null;
     const customerNameToMatch = cleanDetectedCustomerName || detectedCustomerName;
-    if (customerNameToMatch) {
+
+    if (isImportOrder && customerNameToMatch && suppliers && suppliers.length > 0) {
+      const cleanDetected = removeDiacritics(customerNameToMatch.toLowerCase().trim());
+      const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+      matchedSupplier = suppliers.find((s) => {
+        const sClean = removeDiacritics(s.name.toLowerCase().trim());
+        const sNoSpace = sClean.replace(/\s+/g, '');
+        return sClean === cleanDetected || sNoSpace === cleanDetectedNoSpace || sClean.includes(cleanDetected) || cleanDetected.includes(sClean);
+      });
+      if (matchedSupplier) {
+        parsedJson.matched_supplier_id = matchedSupplier.id;
+        parsedJson.supplier_name = matchedSupplier.name;
+      } else {
+        parsedJson.supplier_name = customerNameToMatch;
+      }
+    } else if (!isImportOrder && customerNameToMatch) {
       const cleanDetected = removeDiacritics(customerNameToMatch.toLowerCase().trim());
       const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
 

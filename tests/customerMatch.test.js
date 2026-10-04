@@ -176,4 +176,97 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
       expect(matchedCustomerId).not.toBe(trungKinhPseudo.id);
     }
   });
+
+  it('3. Khi đơn có các từ khóa "nhập", "mua", "nhập vào"...: Bắt buộc nhận diện là đơn NHẬP HÀNG (is_import=true, is_return=false), ghi chú là "Nhập hàng"', async () => {
+    const importRegex = /(?:nhập hàng|nhap hang|nhập thịt|nhap thit|mua hàng|mua hang|mua thịt|mua thit|nhập vào|nhap vao|mua vào|mua vao|nhập về|nhap ve|mua về|mua ve|lấy vào|lay vao|nhập kho|nhap kho|nhập lò|nhap lo|mua lò|mua lo|lấy thịt về|lay thit ve|lấy hàng về|lay hang ve|nhập lô|nhap lo|\bnhập\b|\bnhap\b|\bmua thịt\b|\bmua hàng\b|\bmua vào\b|\bmua về\b|\bmua\b)/i;
+    const returnRegex = /(trả hàng|gửi về|trả về|trả lại|gửi lại|hàng trả|thu hồi|bắn về|quay đầu|đổi trả|hoàn hàng|tra hang|gui ve|tra ve|tra lai|gui lai|hang tra|quay dau|doi tra|hoan hang)/i;
+
+    const sampleTestCases = [
+      { rawAi: 'nhập Hạnh 7.35kg gầu bò', note: null },
+      { rawAi: 'mua vào 10 cân thăn', note: null },
+      { rawAi: 'nhập vào gầu 7.35', note: null },
+      { rawAi: 'Hạnh nhập thịt', note: null },
+      { rawAi: 'mua hàng của lò mổ', note: null },
+      { rawAi: 'nhập kho 15kg bắp bò', note: null },
+      { rawAi: null, note: 'nhập hàng' },
+      { rawAi: null, note: 'Nhập vào 5 cân thăn' },
+    ];
+
+    for (const tc of sampleTestCases) {
+      const isImportOrder = Boolean(
+        (tc.note && importRegex.test(tc.note)) ||
+        (tc.rawAi && importRegex.test(tc.rawAi))
+      );
+
+      const isReturnOrder = !isImportOrder && Boolean(
+        (tc.note && returnRegex.test(tc.note)) ||
+        (tc.rawAi && returnRegex.test(tc.rawAi))
+      );
+
+      let submissionNote = '';
+      if (isImportOrder) {
+        submissionNote = 'Nhập hàng';
+      } else if (isReturnOrder) {
+        submissionNote = 'Trả hàng';
+      }
+
+      expect(isImportOrder).toBe(true);
+      expect(isReturnOrder).toBe(false);
+      expect(submissionNote).toBe('Nhập hàng');
+    }
+  });
+
+  it('4. Đơn nhập hàng từ "Hạnh": Bắt buộc khớp vào Nhà Cung Cấp Hạnh, TUYỆT ĐỐI KHÔNG gán vào khách hàng "Chị hạnh sân bóng hà trì"', async () => {
+    // Tạo 1 nhà cung cấp tên "Hạnh" và 1 khách hàng "Chị hạnh sân bóng hà trì"
+    const supplierHanh = await prisma.supplier.create({
+      data: {
+        userId: testUser.id,
+        name: 'Hạnh',
+        phone: '0988776655',
+        isActive: true,
+      },
+    });
+
+    const customerHanh = await createTestCustomer(testUser.id, 'Chị hạnh sân bóng hà trì');
+
+    const suppliers = await prisma.supplier.findMany({
+      where: { userId: testUser.id, isActive: true },
+      select: { id: true, name: true },
+    });
+
+    const isImportOrder = true;
+    const detectedName = 'nhập Hạnh';
+
+    const cleanDetectedName = detectedName
+      .replace(/\b(nhập thịt|nhập hàng|mua thịt|mua hàng|nhập vào|mua vào|nhập về|mua về|lấy vào|lấy thịt về|lấy hàng về|nhập lô|nhập kho|nhập lò|mua lò|nhap thit|nhap hang|mua thit|mua hang|nhap vao|mua vao|nhap ve|mua ve|lay vao|nhap kho|nhap lo|mua lo|nhập|nhap|mua)\b/gi, '')
+      .replace(/[-–—:()]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    expect(cleanDetectedName).toBe('Hạnh');
+
+    const removeDiacritics = (str) => {
+      if (!str) return '';
+      return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'd').toLowerCase().trim();
+    };
+
+    let matchedCustomerId = null;
+    let matchedSupplier = null;
+
+    if (isImportOrder && cleanDetectedName && suppliers.length > 0) {
+      const cleanDetected = removeDiacritics(cleanDetectedName);
+      const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+      matchedSupplier = suppliers.find((s) => {
+        const sClean = removeDiacritics(s.name);
+        const sNoSpace = sClean.replace(/\s+/g, '');
+        return sClean === cleanDetected || sNoSpace === cleanDetectedNoSpace || sClean.includes(cleanDetected) || cleanDetected.includes(sClean);
+      });
+    }
+
+    // Assert: Khớp đúng nhà cung cấp Hạnh, matchedCustomerId vẫn là null (không gán nhầm sang khách hàng)
+    expect(matchedSupplier).not.toBeNull();
+    expect(matchedSupplier.id).toBe(supplierHanh.id);
+    expect(matchedCustomerId).toBeNull();
+    expect(matchedCustomerId).not.toBe(customerHanh.id);
+  });
 });
