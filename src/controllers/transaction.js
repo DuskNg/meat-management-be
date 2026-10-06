@@ -20,7 +20,7 @@ const notifyCustomerUpdate = (userId, action, payload = {}) => {
 const createTransaction = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId, date, note, items, source, isBatch, profitPercent, priceChangeReason } = req.body;
+    const { customerId, date, note, items, source, isBatch, profitPercent, priceChangeReason, updateCustomPrice } = req.body;
 
     if (!customerId) {
       throw new BadRequestError('Mã khách hàng là bắt buộc.');
@@ -185,26 +185,28 @@ const createTransaction = async (req, res, next) => {
         },
       });
 
-      // Cập nhật hoặc lưu mới đơn giá thịt của loại thịt này cho khách hàng này (kèm lý do đổi giá nếu có)
-      for (const item of formattedItems) {
-        await tx.customerProductPrice.upsert({
-          where: {
-            customerId_productId: {
+      // Cập nhật hoặc lưu mới đơn giá thịt của loại thịt này cho khách hàng này nếu được phép (mặc định true, nếu updateCustomPrice === false thì chỉ áp dụng cho lần nợ này)
+      if (updateCustomPrice !== false) {
+        for (const item of formattedItems) {
+          await tx.customerProductPrice.upsert({
+            where: {
+              customerId_productId: {
+                customerId,
+                productId: item.productId,
+              },
+            },
+            update: {
+              price: item.price,
+              ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
+            },
+            create: {
               customerId,
               productId: item.productId,
+              price: item.price,
+              changeReason: priceChangeReason?.trim() || null,
             },
-          },
-          update: {
-            price: item.price,
-            ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
-          },
-          create: {
-            customerId,
-            productId: item.productId,
-            price: item.price,
-            changeReason: priceChangeReason?.trim() || null,
-          },
-        });
+          });
+        }
       }
 
       // Tự động gắn các ảnh hóa đơn chưa được liên kết của khách này trong cùng ngày vào đơn nợ vừa tạo
@@ -396,7 +398,7 @@ const updateTransaction = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
     const { id } = req.params;
-    const { date, note, items, profitPercent, priceChangeReason } = req.body;
+    const { date, note, items, profitPercent, priceChangeReason, updateCustomPrice } = req.body;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       throw new BadRequestError('Đơn hàng phải có ít nhất một dòng mặt hàng.');
@@ -581,27 +583,29 @@ const updateTransaction = async (req, res, next) => {
         });
       }
 
-      // Cập nhật hoặc lưu mới đơn giá bán thực tế của loại thịt cho khách hàng này (kèm lý do đổi giá nếu có)
-      const customerId = existingTransaction.customerId;
-      for (const item of formattedItems) {
-        await tx.customerProductPrice.upsert({
-          where: {
-            customerId_productId: {
+      // Cập nhật hoặc lưu mới đơn giá bán thực tế của loại thịt cho khách hàng này (kèm lý do đổi giá nếu có, nếu updateCustomPrice === false thì chỉ áp dụng cho đơn nợ này)
+      if (updateCustomPrice !== false) {
+        const customerId = existingTransaction.customerId;
+        for (const item of formattedItems) {
+          await tx.customerProductPrice.upsert({
+            where: {
+              customerId_productId: {
+                customerId,
+                productId: item.productId,
+              },
+            },
+            update: {
+              price: item.price,
+              ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
+            },
+            create: {
               customerId,
               productId: item.productId,
+              price: item.price,
+              changeReason: priceChangeReason?.trim() || null,
             },
-          },
-          update: {
-            price: item.price,
-            ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
-          },
-          create: {
-            customerId,
-            productId: item.productId,
-            price: item.price,
-            changeReason: priceChangeReason?.trim() || null,
-          },
-        });
+          });
+        }
       }
 
       return transaction;

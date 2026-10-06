@@ -324,6 +324,9 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "TRƯỜNG HOÀNG (NGUYỄN KHUYẾN)":
       + Nếu người nói đọc là "Trường Hoàng", "Nguyễn Khuyến Trường Hoàng", "Trường Hoàng Nguyễn Khuyến", "quán Trường Hoàng":
       + BẮT BUỘC trả về customer_name là: "Trường hoàng(nguyễn khuyến)".
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CUỐN AN KHÁNH":
+      + Nếu người nói đọc là "An Khang", "an khang", "ankhang", "An khánh", "an khanh", "ankhanh", "Cuốn an khang", "quán An Khang":
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Cuốn an khánh".
 
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "TRƯỜNG HOÀNG (NGUYỄN KHUYẾN)":
       + Nếu người nói đọc là "Trường Hoàng", "Nguyễn Khuyến Trường Hoàng", "Trường Hoàng Nguyễn Khuyến", "quán Trường Hoàng":
@@ -346,7 +349,9 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
        3) NẾU HÌNH ẢNH MỜ HOẶC CAMERA CHỈ CHĨA VÀO ĐỒNG HỒ CÂN:
           Dựa vào khách hàng quen để điền tên món thịt mà khách đó chuyên lấy:
           - Nếu là khách Hương (Hương Mỹ Đình): BẮT BUỘC điền món "xô" (giá mặc định 230000).
-          - Nếu là khách Chị Tuyết: Điền món "Thăn" (hoặc "Thịt chín").
+          - Nếu là khách Chị Tuyết:
+            * KHI GỬI LẠI / TRẢ HÀNG (người nói đọc "gửi lại", "trả về", "gửi về", "trả lại"): BẮT BUỘC MẶC ĐỊNH điền món "Thịt chín" (hoặc "Chín").
+            * KHI MUA HÀNG MỚI: Điền món "Thăn" (hoặc "Thịt chín").
           - Nếu là khách Cồ Hải: Điền món "Thịt lạm" (hoặc "Lạm gầu").
           - Nếu là khách Phở Tưởng (chị Luyến): Điền món "Gầu Bò" (hoặc "Thịt lạm").
           - Nếu là khách Thăn Bình Đà (Anh Nghĩa): Điền món "Thăn".
@@ -357,7 +362,12 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
      + Nếu người nói đọc từ "chín", "thịt chín", "bò chín" (ví dụ: "chín chị tuyết lấy thêm 1.56", "chín một phẩy năm sáu", "thịt chín 2 cân", "chín lấy thêm..."):
      + BẮT BUỘC hiểu từ "chín" ở đây là MÓN THỊT CHÍN (không phải số 9 hay từ chỉ trạng thái). Tên món thịt (name) BẮT BUỘC trả về là: "Thịt chín".
      + Các từ ngữ hành động như "lấy thêm", "lấy", "của", "giao thêm", "đưa thêm" chỉ là lời nói hành động, TUYỆT ĐỐI KHÔNG đưa vào tên món thịt.
-   - QUY TẮC ĐẶC THÙ CHO KHÁCH "HƯƠNG" (CỰC KỲ QUAN TRỌNG):
+   - QUY TẮC ĐẶC THÙ CHO KHÁCH "CHỊ TUYẾT" GỬI LẠI / TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):
+      + Khi video là của khách "Chị Tuyết" (hoặc "Tuyết", "quán Tuyết") và là ĐƠN GỬI LẠI / GỬI VỀ / TRẢ HÀNG / TRẢ VỀ:
+      + NẾU NGƯỜI NÓI KHÔNG ĐỌC TÊN THỊT (người nói chỉ đọc tên khách hoặc chỉ đọc số cân, ví dụ: "chị Tuyết gửi lại 5.3", "chị Tuyết gửi về...", "gửi lại chị Tuyết...", "trả về chị Tuyết 5.3 cân", hoặc chỉ chĩa camera vào cân miếng thịt gửi lại mà không nhắc tên món thịt):
+        * BẮT BUỘC MẶC ĐỊNH TÊN MÓN THỊT (name) LÀ: "Thịt chín" (hoặc "Chín").
+        * TUYỆT ĐỐI KHÔNG điền "Thăn", "Tái", hay món nào khác khi khách Chị Tuyết gửi lại mà không đọc tên thịt!
+    - QUY TẮC ĐẶC THÙ CHO KHÁCH "HƯƠNG" (CỰC KỲ QUAN TRỌNG):
      + Nếu trong video đọc tên khách là "Hương" (hoặc "Chị Hương", "cô Hương", "Hương Mỹ Đình"...) và có số cân thịt nhưng KHÔNG ĐỌC TÊN THỊT (ví dụ người nói chỉ đọc: "Hương 5 cân", "Hương bốn phẩy hai cân", "chị Hương 3 cân rưỡi", hoặc chỉ quay cân cho Hương):
        * Tên món thịt (name) BẮT BUỘC trả về là: "xô" (hoặc "thịt xô").
        * Đơn giá (price): nếu không có giá khác, mặc định là 230000 (230k).
@@ -429,15 +439,21 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
      + BẮT BUỘC đặt "note": "[Trả lại hàng]" (nếu có nội dung thêm thì ghép vào sau, ví dụ: "[Trả lại hàng] Khách gửi lại").
      + Vẫn bóc tách chính xác customer_name và items (tên món thịt, số cân, giá, tiền).
      + Các từ ngữ "gửi lại", "gửi về", "trả hàng", "trả về", "trả lại", "hàng trả" CHỈ DÙNG ĐỂ XÁC ĐỊNH LOẠI ĐƠN, TUYỆT ĐỐI CẤM đưa vào tên khách hàng (customer_name) hay tên món thịt (name)!
+      + ĐẶC BIỆT LƯU Ý CHO KHÁCH "CHỊ TUYẾT": Nếu là khách Chị Tuyết gửi lại / gửi về / trả hàng mà người nói không đọc tên thịt, BẮT BUỘC MẶC ĐỊNH tên món thịt (name) là: "Thịt chín" (hoặc "Chín").
 
 3.1. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN NHẬP HÀNG / MUA THỊT / NHẬP VÀO (CỰC KỲ QUAN TRỌNG):
-   - Khi người nói dùng các từ ngữ như: "nhập", "nhập vào", "nhập về", "nhập hàng", "nhập thịt", "mua", "mua vào", "mua về", "mua hàng", "mua thịt", "lấy vào", "lấy thịt về", "lấy hàng về", "nhập kho", "nhập lò", "mua lò" (ý nghĩa: chủ buôn NHẬP THỊT / MUA THỊT TỪ NHÀ CUNG CẤP VÀO KHO, KHÔNG PHẢI BÁN CHO KHÁCH VÀ KHÔNG PHẢI KHÁCH TRẢ HÀNG):
-   - BẮT BUỘC nhận diện đây là ĐƠN NHẬP HÀNG:
-     + BẮT BUỘC đặt "is_import": true.
-     + BẮT BUỘC đặt "is_return": false (TUYỆT ĐỐI CẤM đặt is_return = true vì đây là NHẬP HÀNG, KHÔNG PHẢI TRẢ HÀNG).
-     + BẮT BUỘC đặt "note": "Nhập hàng" (chữ "Nhập hàng", không thêm gì khác trừ khi người nói đọc thêm ghi chú cụ thể).
-     + Bóc tách tên nhà cung cấp nếu có vào "customer_name" và items (tên món thịt, số cân, giá, tiền).
-     + Các từ ngữ "nhập", "mua", "nhập vào", "mua vào", "nhập hàng", "mua hàng", "nhập thịt", "mua thịt" CHỈ DÙNG ĐỂ XÁC ĐỊNH LOẠI ĐƠN, TUYỆT ĐỐI CẤM đưa vào tên món thịt hay tên đối tác!
+   - ĐẶC BIỆT LƯU Ý PHÂN BIỆT ĐỐI TÁC:
+     + NẾU ĐỐI TÁC LÀ KHÁCH HÀNG (người mua thịt quen thuộc trong danh bạ khách hàng, ví dụ các quán phở, quán bún, chị Hạnh sân bóng...):
+       * Khi người nói đọc hoặc có chữ "nhập hàng", "nhập thịt", "nhập về": BẢN CHẤT LÀ KHÁCH HÀNG TRẢ HÀNG (để giảm trừ nợ, KHÔNG phải đơn nợ mới và KHÔNG phải nhập NCC)!
+       * BẮT BUỘC đặt "is_return": true.
+       * BẮT BUỘC đặt "is_import": false.
+       * BẮT BUỘC đặt "note": "NHẬP HÀNG".
+     + CHỈ KHI ĐỐI TÁC LÀ NHÀ CUNG CẤP (lò mổ, trại bò, người giao thịt đầu vào cho chủ buôn):
+       * BẮT BUỘC đặt "is_import": true.
+       * BẮT BUỘC đặt "is_return": false.
+       * BẮT BUỘC đặt "note": "Nhập hàng".
+       * Bóc tách tên nhà cung cấp vào "customer_name".
+   - Các từ ngữ "nhập", "mua", "nhập vào", "nhập hàng", "nhập thịt" CHỈ DÙNG ĐỂ XÁC ĐỊNH LOẠI ĐƠN, TUYỆT ĐỐI CẤM đưa vào tên món thịt hay tên đối tác!
 
 4. Lưu ý:
    - Người nói có thể dùng khẩu ngữ tiếng Việt (cân = kg, lạng = 0.1kg, rưỡi = .5, chẵn...).
@@ -629,6 +645,9 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
     - QUY TẮC ĐẶC BIỆT CHO KHÁCH "THĂN BÌNH ĐÀ" / "ANH NGHĨA":
       + Nếu trên hóa đơn ghi "anh nghĩa", "anh ngĩa", "nghĩa", "ngĩa", "bình đà", "thăn bình đà":
       + BẮT BUỘC nhận diện customer_name là: "Thăn bình đà(anh Nghĩa)" (hoặc "Thăn bình đà").
+    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CUỐN AN KHÁNH":
+      + Nếu trên hóa đơn ghi "An Khang", "an khang", "ankhang", "An khánh", "an khanh", "ankhanh", "Cuốn an khang", "quán An Khang":
+      + BẮT BUỘC nhận diện và trả về customer_name là: "Cuốn an khánh".
     - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "BÀ LƯU":
       + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:" (nằm trên dòng kẻ chấm ngay dưới chữ in đỏ "HÓA ĐƠN BÁN"):
         1) Chữ thứ 1: Chữ "b" có nét sổ thẳng đứng vươn CỰC KỲ CAO đâm thẳng lên qua chữ in "Đ" của "HÓA ĐƠN", bụng dưới chữ "b" bo tròn rồi nối liền mạch không nhấc bút sang chữ "a" thảo tròn nhỏ -> tạo thành chữ "ba" (Bà).
@@ -720,14 +739,16 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      + BẮT BUỘC đặt "note": "[Trả lại hàng]".
      + Vẫn bóc tách chính xác customer_name và danh sách các món thịt (name, quantity, price, amount).
      + TUYỆT ĐỐI CẤM đưa các chữ "trả", "trả hàng", "gửi về", "trả về", "trả lại", "hàng trả" vào tên khách hàng hay tên món thịt!
+      + ĐẶC BIỆT LƯU Ý CHO KHÁCH "CHỊ TUYẾT": Nếu trên giấy ghi khách Chị Tuyết gửi lại / trả hàng mà không ghi rõ tên thịt (chỉ ghi số cân), BẮT BUỘC MẶC ĐỊNH tên món thịt (name) là: "Thịt chín" (hoặc "Chín").
 
 4.1. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN NHẬP HÀNG / PHIẾU NHẬP LÒ MỔ (CỰC KỲ QUAN TRỌNG):
-   - Khi trên phiếu có ghi hoặc in: "nhập", "nhập vào", "mua vào", "nhập hàng", "nhập thịt", "mua hàng", "mua thịt", "nhập kho", "nhập lò", "mua lò", "lò mổ", "phiếu nhập"...:
-   - BẮT BUỘC nhận diện đây là ĐƠN NHẬP HÀNG:
-     + BẮT BUỘC đặt "is_import": true.
-     + BẮT BUỘC đặt "is_return": false.
-     + BẮT BUỘC đặt "note": "Nhập hàng".
-     + Bóc tách tên nhà cung cấp vào customer_name.
+   - ĐẶC BIỆT LƯU Ý PHÂN BIỆT ĐỐI TÁC:
+     + NẾU ĐỐI TÁC LÀ KHÁCH HÀNG (người mua thịt quen thuộc trong danh bạ khách hàng):
+       * Khi trên phiếu ghi "nhập", "nhập hàng", "nhập thịt": BẢN CHẤT LÀ KHÁCH HÀNG TRẢ HÀNG (trừ nợ)!
+       * BẮT BUỘC đặt "is_return": true, "is_import": false, "note": "NHẬP HÀNG".
+     + CHỈ KHI TRÊN PHIẾU LÀ NHÀ CUNG CẤP / LÒ MỔ (in chữ Lò mổ, phiếu nhập kho nhà cung cấp):
+       * BẮT BUỘC đặt "is_import": true, "is_return": false, "note": "Nhập hàng".
+       * Bóc tách tên nhà cung cấp vào customer_name.
 
 Chỉ trả về JSON theo đúng cấu trúc:
 {
@@ -836,19 +857,7 @@ Chỉ trả về JSON theo đúng cấu trúc:
       returnRegex.test(geminiResult.text || '')
     );
 
-    if (isImportOrder) {
-      parsedJson.is_import = true;
-      parsedJson.is_return = false;
-      parsedJson.target_type = 'supplier';
-    } else if (isReturnOrder) {
-      parsedJson.is_return = true;
-      parsedJson.is_import = false;
-    } else {
-      parsedJson.is_return = false;
-      parsedJson.is_import = false;
-    }
-
-    // Làm sạch tên khách hàng nếu dính các từ khóa trả hàng / nhập hàng
+    // Làm sạch tên đối tác nếu dính các từ khóa trả hàng / nhập hàng
     let cleanDetectedCustomerName = detectedCustomerName;
     if (cleanDetectedCustomerName && (isReturnOrder || isImportOrder)) {
       cleanDetectedCustomerName = cleanDetectedCustomerName
@@ -858,7 +867,51 @@ Chỉ trả về JSON theo đúng cấu trúc:
         .trim();
     }
 
-    // Chuẩn bị note của submission: Đơn nợ mới để trống, đơn trả ghi chú "Trả hàng", nhập hàng ghi chú "Nhập hàng"
+    // So khớp đối tác trước: Xác định Nhà cung cấp vs Khách hàng
+    let matchedCustomerId = null;
+    let matchedSupplier = null;
+    const customerNameToMatch = cleanDetectedCustomerName || detectedCustomerName;
+
+    // Nếu ban đầu nghi ngờ là đơn nhập hàng: Kiểm tra xem có phải thực sự là NCC không
+    if (isImportOrder && customerNameToMatch) {
+      const cleanDetected = removeDiacritics(customerNameToMatch.toLowerCase().trim());
+      const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+      if (suppliers && suppliers.length > 0) {
+        matchedSupplier = suppliers.find((s) => {
+          const sClean = removeDiacritics(s.name.toLowerCase().trim());
+          const sNoSpace = sClean.replace(/\s+/g, '');
+          return sClean === cleanDetected || sNoSpace === cleanDetectedNoSpace || sClean.includes(cleanDetected) || cleanDetected.includes(sClean);
+        });
+      }
+
+      // Nếu không khớp bất kỳ Nhà cung cấp nào:
+      // Bản chất đơn "nhập hàng" của khách hàng là TRẢ HÀNG (trừ nợ), chỉ thay text ghi chú là "NHẬP HÀNG"!
+      if (!matchedSupplier) {
+        isImportOrder = false;
+        isReturnOrder = true;
+      }
+    }
+
+    if (isImportOrder) {
+      parsedJson.is_import = true;
+      parsedJson.is_return = false;
+      parsedJson.target_type = 'supplier';
+    } else if (isReturnOrder) {
+      parsedJson.is_return = true;
+      parsedJson.is_import = false;
+      parsedJson.target_type = 'customer';
+    } else {
+      parsedJson.is_return = false;
+      parsedJson.is_import = false;
+      parsedJson.target_type = 'customer';
+    }
+
+    // Chuẩn bị note của submission:
+    // - Đơn nhập hàng của khách hàng: Ghi chú "NHẬP HÀNG", loại đơn TRẢ HÀNG
+    // - Đơn trả hàng: Ghi chú "Trả hàng"
+    // - Đơn nhập nhà cung cấp: Ghi chú "Nhập hàng"
+    // - Đơn nợ mới: để trống
     let submissionNote = '';
     if (!isValidInvoice) {
       submissionNote = '[Không phải hóa đơn] Giấy nháp / Mặt sau';
@@ -866,37 +919,29 @@ Chỉ trả về JSON theo đúng cấu trúc:
       submissionNote = 'Nhập hàng';
       parsedJson.note = 'Nhập hàng';
     } else if (isReturnOrder) {
-      submissionNote = 'Trả hàng';
-      parsedJson.note = 'Trả hàng';
+      const hasImportWord = (
+        (parsedJson.note && importRegex.test(parsedJson.note)) ||
+        (submission.note && importRegex.test(submission.note)) ||
+        importRegex.test(geminiResult.text || '')
+      );
+      submissionNote = hasImportWord ? 'NHẬP HÀNG' : 'Trả hàng';
+      parsedJson.note = submissionNote;
     } else {
       submissionNote = ''; // Đơn nợ mới: không cần nhập gì
     }
 
-    // 6. Giữ nguyên ngày nộp hiện tại của submission (không chia ra từng ngày theo hóa đơn giấy)
+    // 6. Giữ nguyên ngày nộp hiện tại của submission
     const submissionDate = submission.date || new Date();
 
-    // 7. So khớp đối tác:
-    // Nếu là đơn NHẬP HÀNG: So khớp với danh sách Nhà cung cấp (suppliers), KHÔNG gán vào khách hàng
-    // Nếu là đơn BÁN HÀNG / TRẢ HÀNG: So khớp với danh bạ Khách hàng (customers)
-    let matchedCustomerId = null;
-    let matchedSupplier = null;
-    const customerNameToMatch = cleanDetectedCustomerName || detectedCustomerName;
-
-    if (isImportOrder && customerNameToMatch && suppliers && suppliers.length > 0) {
-      const cleanDetected = removeDiacritics(customerNameToMatch.toLowerCase().trim());
-      const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
-      matchedSupplier = suppliers.find((s) => {
-        const sClean = removeDiacritics(s.name.toLowerCase().trim());
-        const sNoSpace = sClean.replace(/\s+/g, '');
-        return sClean === cleanDetected || sNoSpace === cleanDetectedNoSpace || sClean.includes(cleanDetected) || cleanDetected.includes(sClean);
-      });
+    // 7. Gán kết quả khớp đối tác
+    if (isImportOrder) {
       if (matchedSupplier) {
         parsedJson.matched_supplier_id = matchedSupplier.id;
         parsedJson.supplier_name = matchedSupplier.name;
       } else {
         parsedJson.supplier_name = customerNameToMatch;
       }
-    } else if (!isImportOrder && customerNameToMatch) {
+    } else if (customerNameToMatch) {
       const cleanDetected = removeDiacritics(customerNameToMatch.toLowerCase().trim());
       const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
 
@@ -943,6 +988,30 @@ Chỉ trả về JSON theo đúng cấu trúc:
 
         if (bepTrungKinhCust) {
           matchedCustomerId = bepTrungKinhCust.id;
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Ưu tiên khớp khách "Cuốn an khánh" nếu AI nhận diện là "An Khang", "an khang", "ankhang", "an khanh", "cuon an khang"...
+        if (
+          cleanDetectedNoSpace === 'ankhang' ||
+          cleanDetectedNoSpace === 'ankhanh' ||
+          cleanDetected.includes('an khang') ||
+          cleanDetected.includes('an khanh') ||
+          cleanDetectedNoSpace.includes('ankhang') ||
+          cleanDetectedNoSpace.includes('ankhanh') ||
+          cleanDetected.includes('cuon an khang')
+        ) {
+          const cuonAnKhanhCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('cuon an khanh') || (cClean.includes('an khanh') && cClean.includes('cuon'));
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('an khanh');
+          });
+          if (cuonAnKhanhCust) {
+            matchedCustomerId = cuonAnKhanhCust.id;
+          }
         }
       }
 
@@ -1972,12 +2041,24 @@ Chỉ trả về JSON theo đúng cấu trúc:
       const cleanLower = removeDiacritics(cleanedRaw || rawLower);
 
       // Ưu tiên chuẩn hóa theo quy tắc từ lóng
-      const normalizedName =
+      let normalizedName =
         SPECIAL_MEAT_MAP[cleanedRaw] ||
         SPECIAL_MEAT_MAP[rawLower] ||
         SPECIAL_MEAT_MAP[cleanLower] ||
         SPECIAL_MEAT_MAP[removeDiacritics(rawLower)] ||
         (cleanedRaw ? (cleanedRaw.charAt(0).toUpperCase() + cleanedRaw.slice(1)) : rawOriginal || 'Thịt lẻ').trim();
+
+      // QUY TẮC ĐẶC THÙ CHO KHÁCH CHỊ TUYẾT GỬI LẠI: Nếu không đọc rõ tên thịt, mặc định là Thịt chín
+      const isTuyetCustomer = Boolean(
+        (customerNameToMatch && removeDiacritics(customerNameToMatch.toLowerCase()).includes('tuyet')) ||
+        (matchedCustomer && removeDiacritics(matchedCustomer.name.toLowerCase()).includes('tuyet'))
+      );
+      if (isReturnOrder && isTuyetCustomer) {
+        if (!cleanedRaw || normalizedName === 'Thịt lẻ' || normalizedName === 'Tiền hàng' || normalizedName === '' || !item.name) {
+          normalizedName = 'Thịt chín';
+        }
+      }
+
       const cleanItemName = removeDiacritics(normalizedName.toLowerCase());
 
       // So khớp với danh mục sản phẩm của chủ buôn

@@ -1487,6 +1487,531 @@ const publishByToken = async (req, res, next) => {
   }
 };
 
+// ─────────────────────────────────────────────────────────────
+// 3. TÍNH NĂNG BÁO HÀNG & CHỐT ĐƠN CHO NHÀ HÀNG (HÔM NAY / HÔM SAU)
+// ─────────────────────────────────────────────────────────────
+
+// Helper chuẩn hóa ngày theo giờ Việt Nam (UTC+7)
+const getVnDateRange = (dateInput, dateType = 'today') => {
+  const now = new Date();
+  const vnNow = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+
+  let targetYear = vnNow.getUTCFullYear();
+  let targetMonth = vnNow.getUTCMonth();
+  let targetDay = vnNow.getUTCDate();
+
+  if (dateInput) {
+    let cleanStr = String(dateInput).trim();
+    if (cleanStr.includes('/')) {
+      const parts = cleanStr.split('/');
+      if (parts.length === 3) {
+        cleanStr = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      }
+    }
+    const match = cleanStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      targetYear = parseInt(match[1], 10);
+      targetMonth = parseInt(match[2], 10) - 1;
+      targetDay = parseInt(match[3], 10);
+    }
+  } else if (dateType === 'tomorrow') {
+    const tomorrow = new Date(Date.UTC(targetYear, targetMonth, targetDay + 1));
+    targetYear = tomorrow.getUTCFullYear();
+    targetMonth = tomorrow.getUTCMonth();
+    targetDay = tomorrow.getUTCDate();
+  }
+
+  // startOfDay và endOfDay theo giờ Việt Nam UTC+7
+  const startOfDay = new Date(Date.UTC(targetYear, targetMonth, targetDay, 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
+  const endOfDay = new Date(Date.UTC(targetYear, targetMonth, targetDay, 23, 59, 59, 999) - 7 * 60 * 60 * 1000);
+  const normalizedDate = new Date(Date.UTC(targetYear, targetMonth, targetDay, 0, 0, 0, 0));
+  const yyyy = String(targetYear);
+  const mm = String(targetMonth + 1).padStart(2, '0');
+  const dd = String(targetDay).padStart(2, '0');
+  const dateString = `${yyyy}-${mm}-${dd}`;
+  const displayDate = `${dd}/${mm}/${yyyy}`;
+
+  return {
+    startOfDay,
+    endOfDay,
+    normalizedDate,
+    dateString,
+    displayDate,
+  };
+};
+
+// [POST] /api/v1/portal/delivery-request/:token
+// Khách hàng / Nhà hàng gửi hoặc cập nhật báo hàng từ Portal
+const submitDeliveryRequest = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const { customerId, dateType = 'today', deliveryDate, note } = req.body;
+
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token },
+      include: {
+        customers: {
+          include: { customer: true }
+        }
+      }
+    });
+
+    if (!portalLink || !portalLink.isActive) {
+      throw new NotFoundError('Đường dẫn không tồn tại hoặc đã bị thu hồi.');
+    }
+
+    // Xác định khách hàng báo hàng
+    let targetCustomerId = customerId;
+    if (!targetCustomerId) {
+      if (portalLink.customers && portalLink.customers.length > 0) {
+        targetCustomerId = portalLink.customers[0].customerId;
+      } else {
+        throw new BadRequestError('Không tìm thấy thông tin khách hàng liên kết với đường dẫn này.');
+      }
+    }
+
+    // Kiểm tra xem khách hàng có thuộc portalLink không
+    const isValidCustomer = portalLink.customers.some(c => c.customerId === targetCustomerId);
+    if (!isValidCustomer) {
+      throw new BadRequestError('Khách hàng không thuộc danh sách quản lý của nhóm này.');
+    }
+
+    const { startOfDay, endOfDay, normalizedDate, dateString, displayDate } = getVnDateRange(deliveryDate, dateType);
+
+    // Tìm đơn báo hàng đã có trong ngày đó
+    const existing = await prisma.portalDeliveryRequest.findFirst({
+      where: {
+        portalLinkId: portalLink.id,
+        customerId: targetCustomerId,
+        deliveryDate: {
+          gte: startOfDay,
+          lte: endOfDay
+        }
+      }
+    });
+
+    let result;
+    if (existing) {
+      result = await prisma.portalDeliveryRequest.update({
+        where: { id: existing.id },
+        data: {
+          dateType: dateType || existing.dateType,
+          deliveryDate: normalizedDate,
+          note: note !== undefined ? note : existing.note,
+          status: 'pending',
+          isConfirmed: false,
+          confirmedAt: null,
+          updatedAt: new Date()
+        },
+        include: {
+          customer: { select: { id: true, name: true, phone: true } }
+        }
+      });
+    } else {
+      result = await prisma.portalDeliveryRequest.create({
+        data: {
+          userId: portalLink.userId,
+          portalLinkId: portalLink.id,
+          customerId: targetCustomerId,
+          deliveryDate: normalizedDate,
+          dateType: dateType || 'today',
+          note: note || '',
+          status: 'pending',
+          isConfirmed: false
+        },
+        include: {
+          customer: { select: { id: true, name: true, phone: true } }
+        }
+      });
+    }
+
+    // Gửi thông báo real-time qua Socket nếu có kết nối
+    try {
+      emitWorkspaceEvent(portalLink.userId, 'PORTAL_DELIVERY_REQUEST', {
+        type: 'PORTAL_DELIVERY_REQUEST',
+        requestId: result.id,
+        customerId: targetCustomerId,
+        customerName: result.customer?.name,
+        deliveryDate: dateString,
+        displayDate
+      });
+    } catch (_) {}
+
+    res.status(200).json({
+      success: true,
+      message: `Đã gửi báo lấy hàng cho ngày ${displayDate} thành công!`,
+      data: {
+        ...result,
+        formattedDeliveryDate: displayDate,
+        dateString
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [GET] /api/v1/portal/delivery-request/:token
+// Lấy các lượt báo hàng gần đây trên cổng portal
+const getPortalDeliveryRequests = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token },
+      select: { id: true, isActive: true }
+    });
+
+    if (!portalLink || !portalLink.isActive) {
+      throw new NotFoundError('Đường dẫn không tồn tại hoặc đã bị thu hồi.');
+    }
+
+    // Lấy các request trong khoảng 7 ngày qua và tương lai
+    const now = new Date();
+    const pastDate = new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000);
+    const futureDate = new Date(now.getTime() + 4 * 24 * 60 * 60 * 1000);
+
+    const requests = await prisma.portalDeliveryRequest.findMany({
+      where: {
+        portalLinkId: portalLink.id,
+        status: { not: 'cancelled' },
+        deliveryDate: {
+          gte: pastDate,
+          lte: futureDate
+        }
+      },
+      include: {
+        customer: { select: { id: true, name: true, phone: true } }
+      },
+      orderBy: { deliveryDate: 'asc' }
+    });
+
+    const formatted = requests.map(r => {
+      const d = new Date(r.deliveryDate);
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const yyyy = d.getUTCFullYear();
+      return {
+        ...r,
+        formattedDeliveryDate: `${dd}/${mm}/${yyyy}`,
+        dateString: `${yyyy}-${mm}-${dd}`
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: formatted
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [DELETE] /api/v1/portal/delivery-request/:token/:id
+// Khách hủy báo hàng
+const cancelDeliveryRequest = async (req, res, next) => {
+  try {
+    const { token, id } = req.params;
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token },
+      select: { id: true, isActive: true }
+    });
+
+    if (!portalLink || !portalLink.isActive) {
+      throw new NotFoundError('Đường dẫn không tồn tại hoặc đã bị thu hồi.');
+    }
+
+    const request = await prisma.portalDeliveryRequest.findFirst({
+      where: {
+        id,
+        portalLinkId: portalLink.id
+      }
+    });
+
+    if (!request) {
+      throw new NotFoundError('Không tìm thấy yêu cầu báo hàng.');
+    }
+
+    await prisma.portalDeliveryRequest.update({
+      where: { id: request.id },
+      data: {
+        status: 'cancelled',
+        updatedAt: new Date()
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Đã hủy báo hàng thành công!'
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [GET] /api/v1/portal/manage/delivery-requests
+// Chủ buôn lấy danh sách nhà hàng báo hàng theo ngày và đối soát công nợ
+const getAdminDeliveryRequests = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { date, dateType = 'today' } = req.query;
+
+    const { startOfDay, endOfDay, normalizedDate, dateString, displayDate } = getVnDateRange(date, dateType);
+
+    // Lấy tất cả request báo hàng trong ngày của chủ buôn
+    const requests = await prisma.portalDeliveryRequest.findMany({
+      where: {
+        userId,
+        deliveryDate: {
+          gte: startOfDay,
+          lte: endOfDay
+        },
+        status: { not: 'cancelled' }
+      },
+      include: {
+        customer: { select: { id: true, name: true, phone: true, address: true } },
+        portalLink: { select: { id: true, name: true, token: true } }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    // Lấy thông tin công nợ phát sinh trong ngày này cho các khách hàng trên
+    const customerIds = requests.map(r => r.customerId);
+    let transactionsMap = {};
+
+    if (customerIds.length > 0) {
+      const transactions = await prisma.transaction.findMany({
+        where: {
+          userId,
+          customerId: { in: customerIds },
+          date: {
+            gte: startOfDay,
+            lte: endOfDay
+          }
+        },
+        select: {
+          id: true,
+          customerId: true,
+          totalAmount: true
+        }
+      });
+
+      transactions.forEach(tx => {
+        if (!transactionsMap[tx.customerId]) {
+          transactionsMap[tx.customerId] = {
+            count: 0,
+            totalAmount: 0
+          };
+        }
+        transactionsMap[tx.customerId].count += 1;
+        transactionsMap[tx.customerId].totalAmount += Number(tx.totalAmount || 0);
+      });
+    }
+
+    const items = requests.map(r => {
+      const txInfo = transactionsMap[r.customerId];
+      const hasDebt = Boolean(txInfo && txInfo.count > 0);
+      return {
+        ...r,
+        formattedDeliveryDate: displayDate,
+        dateString,
+        hasDebt,
+        debtCount: txInfo ? txInfo.count : 0,
+        debtAmount: txInfo ? txInfo.totalAmount : 0
+      };
+    });
+
+    const totalRequests = items.length;
+    const confirmedCount = items.filter(i => i.isConfirmed).length;
+    const billedCount = items.filter(i => i.hasDebt).length;
+    const unbilledCount = totalRequests - billedCount;
+    const unbilledCustomers = items.filter(i => !i.hasDebt).map(i => ({
+      requestId: i.id,
+      customerId: i.customerId,
+      name: i.customer?.name,
+      phone: i.customer?.phone,
+      note: i.note,
+      isConfirmed: i.isConfirmed
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        date: dateString,
+        formattedDate: displayDate,
+        summary: {
+          totalRequests,
+          confirmedCount,
+          billedCount,
+          unbilledCount
+        },
+        requests: items,
+        unbilledCustomers
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [PUT] /api/v1/portal/manage/delivery-requests/:id/confirm
+// Chủ buôn chốt / hủy chốt có hàng cho nhà hàng
+const confirmDeliveryRequest = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { id } = req.params;
+    const { isConfirmed = true } = req.body;
+
+    const request = await prisma.portalDeliveryRequest.findFirst({
+      where: { id, userId }
+    });
+
+    if (!request) {
+      throw new NotFoundError('Không tìm thấy yêu cầu báo hàng.');
+    }
+
+    const updated = await prisma.portalDeliveryRequest.update({
+      where: { id },
+      data: {
+        isConfirmed: Boolean(isConfirmed),
+        status: isConfirmed ? 'confirmed' : 'pending',
+        confirmedAt: isConfirmed ? new Date() : null,
+        updatedAt: new Date()
+      },
+      include: {
+        customer: { select: { id: true, name: true } }
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: isConfirmed ? 'Đã chốt có hàng cho nhà hàng thành công!' : 'Đã hủy chốt hàng.',
+      data: updated
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [PUT] /api/v1/portal/manage/delivery-requests/bulk-confirm
+// Chủ buôn chốt hàng loạt
+const bulkConfirmDeliveryRequests = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { ids, date, dateType = 'today', isConfirmed = true } = req.body;
+
+    let whereClause = { userId, status: { not: 'cancelled' } };
+
+    if (Array.isArray(ids) && ids.length > 0) {
+      whereClause.id = { in: ids };
+    } else {
+      const { startOfDay, endOfDay } = getVnDateRange(date, dateType);
+      whereClause.deliveryDate = {
+        gte: startOfDay,
+        lte: endOfDay
+      };
+    }
+
+    const result = await prisma.portalDeliveryRequest.updateMany({
+      where: whereClause,
+      data: {
+        isConfirmed: Boolean(isConfirmed),
+        status: isConfirmed ? 'confirmed' : 'pending',
+        confirmedAt: isConfirmed ? new Date() : null,
+        updatedAt: new Date()
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Đã ${isConfirmed ? 'chốt' : 'hủy chốt'} ${result.count} nhà hàng có hàng!`,
+      data: { count: result.count }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [GET] /api/v1/portal/manage/delivery-requests/unbilled
+// Kiểm tra danh sách các khách hàng đã báo hàng nhưng CHƯA CÓ CÔNG NỢ trong ngày
+const checkUnbilledDeliveryRequests = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { date, dateType = 'today' } = req.query;
+
+    const { startOfDay, endOfDay, dateString, displayDate } = getVnDateRange(date, dateType);
+
+    const requests = await prisma.portalDeliveryRequest.findMany({
+      where: {
+        userId,
+        deliveryDate: {
+          gte: startOfDay,
+          lte: endOfDay
+        },
+        status: { not: 'cancelled' }
+      },
+      include: {
+        customer: { select: { id: true, name: true, phone: true } },
+        portalLink: { select: { id: true, name: true } }
+      }
+    });
+
+    if (requests.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          date: dateString,
+          formattedDate: displayDate,
+          totalRequests: 0,
+          billedCount: 0,
+          unbilledCount: 0,
+          unbilledCustomers: []
+        }
+      });
+    }
+
+    const customerIds = requests.map(r => r.customerId);
+    const existingTransactions = await prisma.transaction.findMany({
+      where: {
+        userId,
+        customerId: { in: customerIds },
+        date: {
+          gte: startOfDay,
+          lte: endOfDay
+        }
+      },
+      select: { customerId: true }
+    });
+
+    const billedCustomerSet = new Set(existingTransactions.map(t => t.customerId));
+
+    const unbilledCustomers = requests
+      .filter(r => !billedCustomerSet.has(r.customerId))
+      .map(r => ({
+        requestId: r.id,
+        customerId: r.customerId,
+        customerName: r.customer?.name || 'Khách hàng',
+        phone: r.customer?.phone,
+        portalName: r.portalLink?.name,
+        note: r.note,
+        isConfirmed: r.isConfirmed
+      }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        date: dateString,
+        formattedDate: displayDate,
+        totalRequests: requests.length,
+        billedCount: requests.length - unbilledCustomers.length,
+        unbilledCount: unbilledCustomers.length,
+        unbilledCustomers
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   // Public
   getPublicPortalInfo,
@@ -1496,6 +2021,9 @@ module.exports = {
   submitPortalFeedback,
   publishByToken,
   syncInvoiceViaPortal,
+  submitDeliveryRequest,
+  getPortalDeliveryRequests,
+  cancelDeliveryRequest,
   // Private Manage
   getPortalLinks,
   createPortalLink,
@@ -1505,5 +2033,9 @@ module.exports = {
   getPortalFeedbacks,
   resolvePortalFeedback,
   publishPortalData,
-  publishAllPortalData
+  publishAllPortalData,
+  getAdminDeliveryRequests,
+  confirmDeliveryRequest,
+  bulkConfirmDeliveryRequests,
+  checkUnbilledDeliveryRequests
 };

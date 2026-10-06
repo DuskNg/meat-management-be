@@ -593,7 +593,7 @@ const approveStaffSubmission = async (req, res, next) => {
     const userId = req.workspaceOwnerId || req.user.id;
     const currentUserId = req.user.id;
     const { id } = req.params;
-    const { customerId, date, note, items, priceChangeReason } = req.body;
+    const { customerId, date, note, items, priceChangeReason, updateCustomPrice } = req.body;
 
     const submission = await prisma.staffSubmission.findFirst({
       where: { id, userId },
@@ -728,9 +728,15 @@ const approveStaffSubmission = async (req, res, next) => {
     }
 
     // Kiểm tra đơn có phải là đơn trả hàng hay không
+    // ĐẶC BIỆT: Đối với khách hàng, các đơn có ghi chú "nhập hàng" bản chất 100% là khách trả hàng (trừ nợ)
     const isReturnOrder = Boolean(
       req.body.isReturn ||
-      (finalNote && (finalNote.includes('[Trả lại hàng]') || finalNote.includes('[Trả hàng]') || /(trả hàng|gửi về|trả về|trả lại)/i.test(finalNote)))
+      (finalNote && (
+        finalNote.includes('[Trả lại hàng]') ||
+        finalNote.includes('[Trả hàng]') ||
+        /(trả hàng|gửi về|trả về|trả lại)/i.test(finalNote) ||
+        (!isSupplierTarget && /(?:nhập hàng|nhap hang|nhập thịt|nhap thit)/i.test(finalNote))
+      ))
     );
 
     // Thực hiện transaction: Nếu đơn NCC -> Tạo/Cập nhật SupplierTransaction; Nếu đơn trả hàng -> Tạo/Cập nhật Payment; Nếu đơn bán -> Tạo/Cập nhật Transaction
@@ -1163,38 +1169,40 @@ const approveStaffSubmission = async (req, res, next) => {
         });
       }
 
-      // 5. Tự động đồng bộ và cập nhật đơn giá bán/trả vào Bảng giá riêng (CustomerProductPrice) của khách hàng
-      for (const it of finalItems) {
-        let pId = it.matchedProductId || it.productId;
-        const itemPrice = parseFloat(it.price) || 0;
-        if (itemPrice > 0 && finalCustomerId) {
-          if (!pId && it.rawName) {
-            const foundP = await tx.product.findFirst({
-              where: { userId, isActive: true, name: { equals: it.rawName, mode: 'insensitive' } },
-            });
-            if (foundP) pId = foundP.id;
-          }
-          if (pId) {
-            const prod = await tx.product.findUnique({ where: { id: pId } });
-            if (prod && prod.name !== 'Tiền hàng' && !prod.name.toLowerCase().startsWith('tiền')) {
-              await tx.customerProductPrice.upsert({
-                where: {
-                  customerId_productId: {
+      // 5. Tự động đồng bộ và cập nhật đơn giá bán/trả vào Bảng giá riêng (CustomerProductPrice) của khách hàng (nếu updateCustomPrice !== false)
+      if (updateCustomPrice !== false) {
+        for (const it of finalItems) {
+          let pId = it.matchedProductId || it.productId;
+          const itemPrice = parseFloat(it.price) || 0;
+          if (itemPrice > 0 && finalCustomerId) {
+            if (!pId && it.rawName) {
+              const foundP = await tx.product.findFirst({
+                where: { userId, isActive: true, name: { equals: it.rawName, mode: 'insensitive' } },
+              });
+              if (foundP) pId = foundP.id;
+            }
+            if (pId) {
+              const prod = await tx.product.findUnique({ where: { id: pId } });
+              if (prod && prod.name !== 'Tiền hàng' && !prod.name.toLowerCase().startsWith('tiền')) {
+                await tx.customerProductPrice.upsert({
+                  where: {
+                    customerId_productId: {
+                      customerId: finalCustomerId,
+                      productId: pId,
+                    },
+                  },
+                  update: {
+                    price: itemPrice,
+                    ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
+                  },
+                  create: {
                     customerId: finalCustomerId,
                     productId: pId,
+                    price: itemPrice,
+                    changeReason: priceChangeReason?.trim() || null,
                   },
-                },
-                update: {
-                  price: itemPrice,
-                  ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
-                },
-                create: {
-                  customerId: finalCustomerId,
-                  productId: pId,
-                  price: itemPrice,
-                  changeReason: priceChangeReason?.trim() || null,
-                },
-              });
+                });
+              }
             }
           }
         }

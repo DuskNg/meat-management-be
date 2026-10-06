@@ -20,6 +20,11 @@ router.get('/branches-debt/:token', portalController.getBranchesDebtByMonth);
 // Gửi phản hồi / khiếu nại / báo lệch từ cổng portal
 router.post('/feedback/:token', portalController.submitPortalFeedback);
 
+// Đơn báo lấy hàng từ portal (hôm nay / ngày mai)
+router.post('/delivery-request/:token', portalController.submitDeliveryRequest);
+router.get('/delivery-request/:token', portalController.getPortalDeliveryRequests);
+router.delete('/delivery-request/:token/:id', portalController.cancelDeliveryRequest);
+
 // Đồng bộ video/ảnh hóa đơn lên Cloudinary qua portal (không cần auth Bearer, xác thực qua portal token + session)
 router.post('/sync-invoice/:token/:invoiceId', portalController.syncInvoiceViaPortal);
 
@@ -53,5 +58,11 @@ router.get('/manage/feedbacks', authenticateToken, resolveWorkspace, portalContr
 
 // Xử lý / đóng phản hồi
 router.put('/manage/feedbacks/:id', authenticateToken, resolveWorkspace, portalController.resolvePortalFeedback);
+
+// Quản lý đơn báo hàng & Chốt đơn từ nhà hàng (Hôm nay / Ngày mai)
+router.get('/manage/delivery-requests', authenticateToken, resolveWorkspace, portalController.getAdminDeliveryRequests);
+router.put('/manage/delivery-requests/:id/confirm', authenticateToken, resolveWorkspace, portalController.confirmDeliveryRequest);
+router.put('/manage/delivery-requests/bulk-confirm', authenticateToken, resolveWorkspace, portalController.bulkConfirmDeliveryRequests);
+router.get('/manage/delivery-requests/unbilled', authenticateToken, resolveWorkspace, portalController.checkUnbilledDeliveryRequests);
 
 module.exports = router;

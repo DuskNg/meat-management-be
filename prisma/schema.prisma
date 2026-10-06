@@ -54,6 +54,7 @@ model User {
   staffSubmissions     StaffSubmission[]     // Danh sách các lượt nộp hóa đơn/video của nhân viên
   quickPriceLinks      QuickPriceLink[]      // Danh sách link Zalo cho chủ cập nhật giá nhanh
   bankTransactions     BankTransaction[]     // Danh sách các giao dịch ngân hàng từ SePay
+  portalDeliveryRequests PortalDeliveryRequest[] // Danh sách đơn báo hàng từ Portal
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
   workspaceMemberships WorkspaceMember[]      @relation("WorkspaceMembers")        // Các workspace mà user này là thành viên
@@ -106,6 +107,7 @@ model Customer {
   staffSubmissions    StaffSubmission[]    // Các hóa đơn/video AI nhận diện của khách hàng này
   bankTransactions    BankTransaction[]    // Các giao dịch ngân hàng khớp với khách hàng này
   periodicReminders   PeriodicReminderConfig[] // Cấu hình lịch gửi công nợ định kỳ của khách hàng này
+  portalDeliveryRequests PortalDeliveryRequest[] // Danh sách các lượt báo hàng của khách hàng này
 
   @@index([userId]) // Tối ưu hóa truy vấn tìm kiếm danh sách khách hàng của từng chủ buôn
   @@map("customers") // Đặt tên bảng trong PostgreSQL là "customers"
@@ -596,6 +598,7 @@ model PortalLink {
   updatedAt    DateTime @updatedAt
 
   feedbacks    PortalFeedback[]
+  deliveryRequests PortalDeliveryRequest[] // Danh sách các lượt báo hàng qua link này
 
   @@index([userId])
   @@index([token])
@@ -641,6 +644,34 @@ model PortalFeedback {
   @@index([customerId])
   @@index([status])
   @@map("portal_feedbacks")
+}
+
+// ─── ĐƠN BÁO LẤY HÀNG TỪ CỔNG PORTAL (HÔM NAY / HÔM SAU) ───
+model PortalDeliveryRequest {
+  id              String      @id @default(uuid())
+  userId          String      // ID của chủ buôn quản lý
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portalLinkId    String      // ID của link ghim Zalo
+  portalLink      PortalLink  @relation(fields: [portalLinkId], references: [id], onDelete: Cascade)
+  customerId      String      // ID của khách hàng / nhà hàng báo hàng
+  customer        Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  deliveryDate    DateTime    // Ngày nhận hàng (chuẩn hóa đầu ngày 00:00:00)
+  dateType        String      @default("today") // "today" (hôm nay) | "tomorrow" (hôm sau)
+  note            String?     // Ghi chú khi báo hàng (ví dụ: lấy như cũ, giao sớm...)
+
+  status          String      @default("pending") // "pending" (Chờ chốt), "confirmed" (Đã chốt có hàng), "cancelled" (Khách hủy)
+  isConfirmed     Boolean     @default(false)     // Chủ buôn đã chốt giao hàng
+  confirmedAt     DateTime?   // Thời điểm chủ buôn chốt
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@index([userId])
+  @@index([customerId])
+  @@index([portalLinkId])
+  @@index([deliveryDate])
+  @@map("portal_delivery_requests")
 }
 
 model TransactionInvoice {

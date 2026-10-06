@@ -381,5 +381,101 @@ describe('Luồng Nghiệp Vụ: Bảo Toàn Đơn Giá Riêng Của Khách Hàn
       where: { id: link.id },
     });
   });
+
+  it('9. Khi ghi nợ với updateCustomPrice: false (Chỉ lần này): Đơn nợ tính theo giá mới nhưng bảng giá riêng KHÔNG bị thay đổi', async () => {
+    // 1. Arrange: Kiểm tra giá riêng hiện tại của khách
+    const currentCustomPrice = await prisma.customerProductPrice.findUnique({
+      where: {
+        customerId_productId: {
+          customerId: testCustomer.id,
+          productId: testProduct.id,
+        },
+      },
+    });
+    const oldPriceValue = Number(currentCustomPrice.price); // Giá riêng hiện hành
+
+    // 2. Act: Ghi nợ với đơn giá mới 125.000đ nhưng gửi updateCustomPrice: false (Chỉ áp dụng lần này)
+    const newPriceForThisDebt = 125000;
+    const res = await request(app)
+      .post('/api/v1/transactions')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        customerId: testCustomer.id,
+        date: '2026-10-05',
+        note: 'Đơn nợ chỉ áp dụng giá mới lần này',
+        updateCustomPrice: false,
+        items: [
+          {
+            productId: testProduct.id,
+            quantity: 3,
+            price: newPriceForThisDebt,
+          },
+        ],
+      });
+
+    // 3. Assert:
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    // Đơn nợ được tạo với tổng tiền = 3 * 125.000 = 375.000đ
+    expect(Number(res.body.data.totalAmount)).toBe(375000);
+
+    // BẢO TOÀN GIÁ RIÊNG: Giá trong bảng customer_product_prices vẫn phải là oldPriceValue, KHÔNG bị đổi thành 125.000đ
+    const preservedPrice = await prisma.customerProductPrice.findUnique({
+      where: {
+        customerId_productId: {
+          customerId: testCustomer.id,
+          productId: testProduct.id,
+        },
+      },
+    });
+    expect(Number(preservedPrice.price)).toBe(oldPriceValue);
+    expect(Number(preservedPrice.price)).not.toBe(newPriceForThisDebt);
+
+    // Dọn dẹp đơn nợ test
+    await prisma.transactionItem.deleteMany({ where: { transactionId: res.body.data.id } });
+    await prisma.transaction.delete({ where: { id: res.body.data.id } });
+  });
+
+  it('10. Khi ghi nợ với updateCustomPrice: true (Cập nhật từ bây giờ): Bảng giá riêng được cập nhật sang giá mới kèm lý do', async () => {
+    const updatedPriceValue = 115000;
+    const reasonText = 'Thịt ngon loại 1 cập nhật từ bây giờ';
+
+    const res = await request(app)
+      .post('/api/v1/transactions')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        customerId: testCustomer.id,
+        date: '2026-10-05',
+        note: 'Đơn nợ cập nhật giá từ bây giờ',
+        updateCustomPrice: true,
+        priceChangeReason: reasonText,
+        items: [
+          {
+            productId: testProduct.id,
+            quantity: 2,
+            price: updatedPriceValue,
+          },
+        ],
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+
+    // Giá trong bảng customer_product_prices phải được cập nhật thành 115.000đ kèm lý do
+    const updatedPrice = await prisma.customerProductPrice.findUnique({
+      where: {
+        customerId_productId: {
+          customerId: testCustomer.id,
+          productId: testProduct.id,
+        },
+      },
+    });
+    expect(Number(updatedPrice.price)).toBe(updatedPriceValue);
+    expect(updatedPrice.changeReason).toBe(reasonText);
+
+    // Dọn dẹp đơn nợ test
+    await prisma.transactionItem.deleteMany({ where: { transactionId: res.body.data.id } });
+    await prisma.transaction.delete({ where: { id: res.body.data.id } });
+  });
 });
 
