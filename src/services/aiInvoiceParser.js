@@ -2031,6 +2031,8 @@ Chỉ trả về JSON theo đúng cấu trúc:
     };
 
     const baseItemTime = Date.now();
+    // Lấy thông tin khách hàng đã so khớp nếu có
+    const matchedCustomer = matchedCustomerId ? customers.find((c) => c.id === matchedCustomerId) : null;
     const itemsToCreate = rawItems.map((item, index) => {
       const rawOriginal = (item.name || '').trim();
       const rawLower = rawOriginal.toLowerCase();
