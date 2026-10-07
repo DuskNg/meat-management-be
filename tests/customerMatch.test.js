@@ -387,5 +387,90 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
 
     expect(rawItems[0].name).toBe('Thịt chín');
   });
+
+  describe('So khớp sản phẩm thông minh (Product Matching Integrity): Bảo toàn sau khi đổi tên thịt', () => {
+    const { matchProductByName } = require('../src/services/aiInvoiceParser');
+
+    const sampleProducts = [
+      { id: 'prod-diem-bo', name: 'Diềm bò' },
+      { id: 'prod-diem-bo-thai', name: 'Diềm bò thái' },
+      { id: 'prod-than-bo', name: 'Thăn bò' },
+      { id: 'prod-tai-bo', name: 'Tái (bò)' },
+      { id: 'prod-bap-bo', name: 'Bắp bò' },
+      { id: 'prod-bap-giay', name: 'Bắp giây' },
+      { id: 'prod-lac-vai', name: 'Lạc vai' },
+      { id: 'prod-la-vai', name: 'Lá vai' },
+      { id: 'prod-bo-xay', name: 'bò xay' },
+      { id: 'prod-chin', name: 'Chín(vai + lạm)' },
+      { id: 'prod-gau-bo', name: 'Gầu bò' },
+      { id: 'prod-gau-coc', name: 'Gầu cộc' },
+    ];
+
+    it('7. Khi bóc tách "diềm thăn bò" hoặc "diềm thăn" hoặc "diềm bò": Bắt buộc khớp vào "Diềm bò", TUYỆT ĐỐI KHÔNG nhảy sang "Thăn bò"', () => {
+      // Trường hợp người dùng đổi Diềm thăn thành Diềm bò
+      const match1 = matchProductByName('diem than bo', sampleProducts);
+      expect(match1).not.toBeNull();
+      expect(match1.name).toBe('Diềm bò');
+      expect(match1.id).not.toBe('prod-than-bo');
+
+      const match2 = matchProductByName('diem than', sampleProducts);
+      expect(match2).not.toBeNull();
+      expect(match2.name).toBe('Diềm bò');
+
+      const match3 = matchProductByName('diem bo', sampleProducts);
+      expect(match3).not.toBeNull();
+      expect(match3.name).toBe('Diềm bò');
+
+      const match4 = matchProductByName('diem bo thai', sampleProducts);
+      expect(match4).not.toBeNull();
+      expect(match4.name).toBe('Diềm bò thái');
+
+      // Ngược lại, khi là "thăn bò" hoặc "thăn" thì vẫn phải về "Thăn bò"
+      const matchThan = matchProductByName('than bo', sampleProducts);
+      expect(matchThan).not.toBeNull();
+      expect(matchThan.name).toBe('Thăn bò');
+    });
+
+    it('8. Khi bóc tách "thịt lá vai" hoặc "lá vai" hoặc "lá": Bắt buộc khớp vào "Lá vai", TUYỆT ĐỐI KHÔNG nhảy sang "Lạc vai"', () => {
+      const matchLa1 = matchProductByName('thit la vai', sampleProducts);
+      expect(matchLa1).not.toBeNull();
+      expect(matchLa1.name).toBe('Lá vai');
+      expect(matchLa1.id).not.toBe('prod-lac-vai');
+
+      const matchLa2 = matchProductByName('la vai', sampleProducts);
+      expect(matchLa2).not.toBeNull();
+      expect(matchLa2.name).toBe('Lá vai');
+
+      // Khi là "lạc vai" hoặc "vai" thì về "Lạc vai"
+      const matchLacVai = matchProductByName('lac vai', sampleProducts);
+      expect(matchLacVai).not.toBeNull();
+      expect(matchLacVai.name).toBe('Lạc vai');
+
+      const matchVai = matchProductByName('vai', sampleProducts);
+      expect(matchVai).not.toBeNull();
+      expect(matchVai.name).toBe('Lạc vai');
+    });
+
+    it('9. Khi bóc tách "vai xay" hoặc "bò xay" hoặc "xay": Bắt buộc khớp vào "bò xay"', () => {
+      const matchXay1 = matchProductByName('vai xay', sampleProducts);
+      expect(matchXay1).not.toBeNull();
+      expect(matchXay1.name).toBe('bò xay');
+
+      const matchXay2 = matchProductByName('bo xay', sampleProducts);
+      expect(matchXay2).not.toBeNull();
+      expect(matchXay2.name).toBe('bò xay');
+    });
+
+    it('10. Khi bóc tách "bắp giây" hoặc "bap giay": Bắt buộc khớp vào "Bắp giây", không nhầm sang "Bắp bò"', () => {
+      const matchBapGiay = matchProductByName('bap giay', sampleProducts);
+      expect(matchBapGiay).not.toBeNull();
+      expect(matchBapGiay.name).toBe('Bắp giây');
+      expect(matchBapGiay.id).not.toBe('prod-bap-bo');
+
+      const matchBapBo = matchProductByName('bap bo', sampleProducts);
+      expect(matchBapBo).not.toBeNull();
+      expect(matchBapBo.name).toBe('Bắp bò');
+    });
+  });
 });
 

@@ -68,6 +68,164 @@ const normalizeWeightQuantity = (val) => {
   return null;
 };
 
+/**
+ * So khớp sản phẩm với danh mục sản phẩm của chủ buôn theo từ khóa chuẩn xác,
+ * ngăn chặn triệt để tình trạng nhận nhầm chéo (ví dụ: Diềm bò thành Thăn bò, Lá vai thành Lạc vai).
+ */
+const matchProductByName = (cleanItemName, products, customerPriceMap = new Map()) => {
+  if (!cleanItemName || !Array.isArray(products) || products.length === 0) return null;
+  const cleanLower = removeDiacritics(cleanItemName.toLowerCase().trim());
+  const cleanNoSpace = cleanLower.replace(/\s+/g, '');
+
+  // 1. So khớp 100% chính xác tuyệt đối (exact match)
+  const exactMatches = products.filter((p) => {
+    const pClean = removeDiacritics(p.name.toLowerCase().trim());
+    return pClean === cleanLower || pClean.replace(/\s+/g, '') === cleanNoSpace;
+  });
+  if (exactMatches.length > 0) {
+    if (customerPriceMap && customerPriceMap.size > 0) {
+      const customMatch = exactMatches.find((p) => customerPriceMap.has(p.id));
+      if (customMatch) return customMatch;
+    }
+    return exactMatches[0];
+  }
+
+  // 2. Bảo vệ đặc thù: Từ khóa "diềm" (diem) - BẮT BUỘC chỉ khớp Diềm bò / Diềm bò thái, CẤM nhảy sang Thăn bò!
+  if (cleanLower.includes('diem')) {
+    const isThai = cleanLower.includes('thai');
+    const diemProds = products.filter((p) => removeDiacritics(p.name.toLowerCase()).includes('diem'));
+    if (diemProds.length > 0) {
+      if (customerPriceMap && customerPriceMap.size > 0) {
+        const customDiem = diemProds.find((p) => customerPriceMap.has(p.id) && (isThai ? removeDiacritics(p.name.toLowerCase()).includes('thai') : !removeDiacritics(p.name.toLowerCase()).includes('thai')));
+        if (customDiem) return customDiem;
+      }
+      if (isThai) {
+        return diemProds.find((p) => removeDiacritics(p.name.toLowerCase()).includes('thai')) || diemProds[0];
+      }
+      return diemProds.find((p) => !removeDiacritics(p.name.toLowerCase()).includes('thai')) || diemProds[0];
+    }
+  }
+
+  // 3. Bảo vệ đặc thù: Từ khóa "lá" (la / la vai / lá vai) - BẮT BUỘC khớp Lá vai, CẤM nhảy sang Lạc vai!
+  if (cleanLower === 'la' || cleanLower === 'la vai' || cleanLower === 'thit la vai' || cleanLower === 'thit la' || (cleanLower.includes('la vai') && !cleanLower.includes('lac'))) {
+    const laVaiProd = products.find((p) => {
+      const pClean = removeDiacritics(p.name.toLowerCase().trim());
+      return pClean === 'la vai' || (pClean.includes('la vai') && !pClean.includes('lac'));
+    });
+    if (laVaiProd) return laVaiProd;
+  }
+
+  // 4. Từ khóa "lạc vai" / "vai" / "vai bò" - BẮT BUỘC khớp Lạc vai
+  if (cleanLower === 'vai' || cleanLower === 'lac vai' || cleanLower === 'thit vai' || cleanLower === 'thit lac vai' || cleanLower === 'vai bo') {
+    const lacVaiProd = products.find((p) => {
+      const pClean = removeDiacritics(p.name.toLowerCase().trim());
+      return pClean === 'lac vai' || pClean.includes('lac vai');
+    }) || products.find((p) => {
+      const pClean = removeDiacritics(p.name.toLowerCase().trim());
+      return pClean.includes('vai') && !pClean.includes('xay') && !pClean.includes('suon') && !pClean.includes('la') && !pClean.includes('u');
+    });
+    if (lacVaiProd) return lacVaiProd;
+  }
+
+  // 5. Từ khóa "xay" / "bò xay" / "vai xay" - BẮT BUỘC khớp bò xay
+  if (cleanLower.includes('xay')) {
+    const xayProd = products.find((p) => removeDiacritics(p.name.toLowerCase()).includes('xay'));
+    if (xayProd) return xayProd;
+  }
+
+  // 6. Từ khóa "chín" / "thịt chín" - BẮT BUỘC ưu tiên Chín(vai + lạm) hoặc Chín
+  if (cleanLower.includes('chin')) {
+    if (customerPriceMap && customerPriceMap.size > 0) {
+      const customChin = products.find((p) => customerPriceMap.has(p.id) && removeDiacritics(p.name.toLowerCase()).includes('chin'));
+      if (customChin) return customChin;
+    }
+    const chinProd = products.find((p) => removeDiacritics(p.name.toLowerCase()).includes('chin'));
+    if (chinProd) return chinProd;
+  }
+
+  // 7. Từ khóa "sườn xg" vs "sườn bò" vs "sườn"
+  if (cleanLower.includes('xg') || cleanLower.includes('xuong')) {
+    const xgProd = products.find((p) => {
+      const pClean = removeDiacritics(p.name.toLowerCase());
+      return pClean.includes('suon xg') || (pClean.includes('suon') && (pClean.includes('xg') || pClean.includes('xuong')));
+    }) || products.find((p) => removeDiacritics(p.name.toLowerCase()).includes('xg bo'));
+    if (xgProd) return xgProd;
+  }
+  if (cleanLower === 'suon' || cleanLower === 'thit suon') {
+    const suonProd = products.find((p) => removeDiacritics(p.name.toLowerCase().trim()) === 'suon');
+    if (suonProd) return suonProd;
+  }
+  if (cleanLower.includes('suon bo')) {
+    const suonBoProd = products.find((p) => removeDiacritics(p.name.toLowerCase().trim()) === 'suon bo');
+    if (suonBoProd) return suonBoProd;
+  }
+
+  // 8. Từ khóa "bắp giây" vs "bắp bò"
+  if (cleanLower.includes('giay') || cleanLower.includes('day')) {
+    const bapGiayProd = products.find((p) => removeDiacritics(p.name.toLowerCase()).includes('bap giay'));
+    if (bapGiayProd) return bapGiayProd;
+  }
+  if (cleanLower === 'bap' || cleanLower === 'bap bo' || cleanLower === 'thit bap') {
+    const bapBoProd = products.find((p) => removeDiacritics(p.name.toLowerCase().trim()) === 'bap bo');
+    if (bapBoProd) return bapBoProd;
+  }
+
+  // 9. Từ khóa "gầu cộc" vs "gầu bò"
+  if (cleanLower.includes('coc')) {
+    const gauCocProd = products.find((p) => removeDiacritics(p.name.toLowerCase()).includes('gau coc'));
+    if (gauCocProd) return gauCocProd;
+  }
+  if (cleanLower === 'gau' || cleanLower === 'gau bo' || cleanLower === 'thit gau') {
+    const gauBoProd = products.find((p) => removeDiacritics(p.name.toLowerCase().trim()) === 'gau bo');
+    if (gauBoProd) return gauBoProd;
+  }
+
+  // 10. Từ khóa "lạm gầu" vs "lạm"
+  if (cleanLower.includes('lam gau') || cleanLower.includes('nam gau')) {
+    const lamGauProd = products.find((p) => removeDiacritics(p.name.toLowerCase()).includes('lam gau'));
+    if (lamGauProd) return lamGauProd;
+  }
+  if (cleanLower === 'lam' || cleanLower === 'thit lam' || cleanLower === 'nam') {
+    const lamProd = products.find((p) => {
+      const pClean = removeDiacritics(p.name.toLowerCase().trim());
+      return pClean === 'lam' || pClean === 'nam';
+    });
+    if (lamProd) return lamProd;
+  }
+
+  // 11. Từ khóa "thăn bò" vs "thăn"
+  if (cleanLower === 'than' || cleanLower === 'than bo' || cleanLower === 'thit than') {
+    const thanBoProd = products.find((p) => removeDiacritics(p.name.toLowerCase().trim()) === 'than bo') ||
+      products.find((p) => removeDiacritics(p.name.toLowerCase().trim()) === 'than');
+    if (thanBoProd) return thanBoProd;
+  }
+
+  // 12. Từ khóa "tái (bò)" vs "tái"
+  if (cleanLower === 'tai' || cleanLower === 'tai bo' || cleanLower === 'tai (bo)' || cleanLower === 'thit tai') {
+    const taiProd = products.find((p) => {
+      const pClean = removeDiacritics(p.name.toLowerCase().trim());
+      return pClean === 'tai (bo)' || pClean === 'tai bo' || pClean === 'tai';
+    });
+    if (taiProd) return taiProd;
+  }
+
+  // 13. Ưu tiên trong bảng giá riêng nếu có so khớp một phần
+  if (customerPriceMap && customerPriceMap.size > 0) {
+    const customProd = products.find((p) => {
+      if (!customerPriceMap.has(p.id)) return false;
+      const pClean = removeDiacritics(p.name.toLowerCase().trim());
+      return pClean.includes(cleanLower) || cleanLower.includes(pClean);
+    });
+    if (customProd) return customProd;
+  }
+
+  // 14. Fallback chung cuối cùng: So khớp bao hàm chuỗi
+  return products.find((p) => {
+    const pClean = removeDiacritics(p.name.toLowerCase().trim());
+    return pClean.includes(cleanLower) || cleanLower.includes(pClean);
+  }) || null;
+};
+
 // Helper tải file từ URL thành base64 để gửi tới Gemini inlineData (đọc trực tiếp đĩa cứng nếu là file cục bộ)
 const fetchFileAsBase64 = async (url) => {
   if (!url) return null;
@@ -385,18 +543,26 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
      + Nếu trong video người nói đọc là "bê", "thịt bê", "bê ba chỉ":
      + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Bê ba chỉ".
 
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "TÁI" (THỊT TÁI):
-     + Nếu trong video người nói đọc là "tái", "thịt tái", "bò tái" (ví dụ: "tái 1 9 5", "tái một phẩy chín năm", "thịt tái 2 cân"):
-     + BẮT BUỘC nhận diện tên món thịt (name) là: "Tái" (hoặc "Thịt tái").
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "BẮP" (BẮP BÒ) (CỰC KỲ QUAN TRỌNG):
-     + Nếu trong video người nói đọc là "bắp", "thịt bắp", "bắp bò", "bắp hoa", "quả bắp", "bap" (ví dụ: "bắp 1.6", "bắp 1 6", "bắp 300", "bắp 2 cân", "chị Tuyết bắp...", "trả bắp...", "bắp..."):
-     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Bắp Bò". Tuyệt đối không chỉ để là "bắp" cụt lủn hay nhầm sang loại thịt khác.
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "VAI XAY" (BÒ XAY):
-     + Nếu trong video người nói đọc là "bò xay", "thịt bò xay", "vai xay", "thịt vai xay", "xay":
-     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Vai xay".
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "THỊT LA VAI" / "LÁ" / "LA" (CỰC KỲ QUAN TRỌNG):
+   - QUY TẮC ĐẶC BIỆT CHO MÓN "DIỀM BÒ" (CỰC KỲ QUAN TRỌNG - CHỦ BUÔN ĐÃ ĐỔI DIỀM THĂN THÀNH DIỀM BÒ):
+     + Bất kể người nói đọc là "diềm", "thịt diềm", "diềm bò", "diềm thăn", "diềm thăn bò": Tên món thịt (name) BẮT BUỘC chuẩn hóa và trả về là: "Diềm bò".
+     + Nếu người nói đọc là "diềm thái", "diềm bò thái", "diềm thăn thái": Tên món thịt (name) BẮT BUỘC chuẩn hóa và trả về là: "Diềm bò thái".
+     + TUYỆT ĐỐI CẤM trả về "Thăn bò", "Thăn" hay "Diềm thăn" khi người nói nhắc đến diềm hoặc diềm thăn!
+   - QUY TẮC ĐẶC BIỆT CHO MÓN "LÁ VAI" (LÁ / LA):
      + Nếu trong video người nói đọc là "lá", "la", "lá vai", "la vai", "thịt la", "thịt lá", "thịt la vai", "thịt lá vai":
-     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "thịt la vai". Tuyệt đối không chỉ ghi "lá" hay "la" đơn thuần hay nhầm sang món khác.
+     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Lá vai". Tuyệt đối không ghi "thịt la vai" hay nhầm sang "Lạc vai".
+   - QUY TẮC ĐẶC BIỆT CHO MÓN "BÒ XAY" (VAI XAY / BÒ XAY):
+     + Nếu trong video người nói đọc là "bò xay", "thịt bò xay", "vai xay", "thịt vai xay", "xay":
+     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "bò xay".
+   - QUY TẮC ĐẶC BIỆT CHO MÓN "THĂN BÒ":
+     + Nếu trong video người nói đọc là "thăn", "thịt thăn", "thăn bò":
+     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Thăn bò".
+   - QUY TẮC ĐẶC BIỆT CHO MÓN "TÁI (BÒ)" (THỊT TÁI):
+     + Nếu trong video người nói đọc là "tái", "thịt tái", "bò tái" (ví dụ: "tái 1 9 5", "tái một phẩy chín năm", "thịt tái 2 cân"):
+     + BẮT BUỘC nhận diện tên món thịt (name) là: "Tái (bò)".
+   - QUY TẮC ĐẶC BIỆT CHO MÓN "BẮP BÒ" VÀ "BẮP GIÂY" (CỰC KỲ QUAN TRỌNG):
+     + Nếu trong video người nói đọc là "bắp giây", "bắp dây", "bap giay": BẮT BUỘC trả về: "Bắp giây".
+     + Nếu trong video người nói đọc là "bắp", "thịt bắp", "bắp bò", "bắp hoa", "quả bắp", "bap" (ví dụ: "bắp 1.6", "bắp 1 6", "bắp 300", "bắp 2 cân", "chị Tuyết bắp...", "trả bắp...", "bắp..."):
+     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Bắp bò". Tuyệt đối không chỉ để là "bắp" cụt lủn hay nhầm sang loại thịt khác.
 
    - Khối lượng / Số lượng (quantity) - QUY TẮC QUAN TRỌNG KHI ĐỌC SỐ CÂN VÀ NHÌN MÀN HÌNH CÂN ĐIỆN TỬ:
      + QUY TẮC ĐẶC BIỆT: ĐỌC TỪNG CHỮ SỐ LIÊN TIẾP (CÂN ĐIỆN TỬ BỎ DẤU CHẤM/PHẨY):
@@ -526,16 +692,18 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      + "bằng" / "bang" / "quả bằng": Chữ "b" sổ thẳng đứng cao, "ang" có nét đuôi chữ "g" sổ dài thòng xuống dưới dòng, dấu huyền trên "a" -> BẮT BUỘC trả về: "quả bằng".
      + "Trắng" / "trang" / "quả trắng": Chữ "T" viết hoa thẳng có gạch ngang, chữ "r-a-n-g" với đuôi chữ "g" móc dài xuống dưới, dấu á và dấu sắc trên "a" -> BẮT BUỘC trả về: "quả trắng".
      + "Quạt" / "quat": Chữ "Q" viết hoa tròn to lượn đuôi ở đáy, "uat" có gạch ngang dứt khoát của chữ "t" -> BẮT BUỘC trả về: "quạt".
-     + "Thăn" / "than" / "thăn bò": Chữ "T" viết hoa có gạch ngang cao, "h-a-n" viết liền nét, dấu á uốn cong trên đầu chữ "a" -> BẮT BUỘC trả về: "Thăn".
+     + "Thăn" / "than" / "thăn bò": Chữ "T" viết hoa có gạch ngang cao, "h-a-n" viết liền nét, dấu á uốn cong trên đầu chữ "a" -> BẮT BUỘC trả về: "Thăn bò".
+     + "diềm" / "diềm thăn" / "diềm bò" / "dt": Chữ "d" cong tròn móc, theo sau là "iềm" hoặc "thăn" -> BẮT BUỘC trả về: "Diềm bò" (nếu có chữ "thái" thì trả về: "Diềm bò thái"). TUYỆT ĐỐI CẤM trả về "Thăn bò" hay "Thăn"!
      + "xg" / "x" / "xg bò": Chữ "x" chéo mềm mại, chữ "g" đuôi móc dài xuống dưới dòng kẻ (hoặc chỉ ghi 1 ký tự "x" / "X") -> BẮT BUỘC trả về: "Xg Bò".
-     + "Tai" hoặc "Tái" (chữ T hoa uốn lượn viết liền chữ ái): BẮT BUỘC trả về tên là "Tái (Bò)".
-     + "bắp" hoặc "Bắp": BẮT BUỘC trả về tên là "Bắp Bò".
-     + "Lá" / "lá" / "la" / "lá vai" / "la vai" / "thịt la" / "thịt lá" / "thịt la vai": Chữ "L" hoa thảo nét cong cao nối liền chữ "á" hoặc "a" (có thể kèm "vai") -> BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "thịt la vai".
+     + "Tai" hoặc "Tái" (chữ T hoa uốn lượn viết liền chữ ái): BẮT BUỘC trả về tên là "Tái (bò)".
+     + "bắp" hoặc "Bắp": BẮT BUỘC trả về tên là "Bắp bò".
+     + "bắp giây" hoặc "bắp dây": BẮT BUỘC trả về tên là "Bắp giây".
+     + "Lá" / "lá" / "la" / "lá vai" / "la vai" / "thịt la" / "thịt lá" / "thịt la vai": Chữ "L" hoa thảo nét cong cao nối liền chữ "á" hoặc "a" (có thể kèm "vai") -> BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Lá vai".
       + QUY TẮC ĐẶC BIỆT CHO MÓN "VAI" -> "LẠC VAI":
         * Khi ở cột Tên hàng hóa trên tích kê / hóa đơn ghi chữ "vai", "Vai", "thịt vai", "thit vai", "lạc vai", "lac vai", "thịt lạc vai":
         * BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Lạc vai" (để hệ thống khớp chính xác vào sản phẩm "Lạc vai" của cửa hàng).
-        * TUYỆT ĐỐI KHÔNG nhận nhầm sang "Lá vai", "Vai xay" hay "Sườn vai" (trừ khi có ghi rõ chữ "xay" hoặc chữ "sườn")!
-      + "Sườn" / "suon" / "sườn bò": Chữ "S" hoa to lượn sóng mềm mại, "ườn" viết liền nét có dấu huyền -> BẮT BUỘC trả về tên là: "Sườn".
+        * TUYỆT ĐỐI KHÔNG nhận nhầm sang "Lá vai", "bò xay" hay "Sườn vai" (trừ khi có ghi rõ chữ "xay" hoặc chữ "sườn")!
+      + "Sườn" / "suon" / "sườn bò": Chữ "S" hoa to lượn sóng mềm mại, "ườn" viết liền nét có dấu huyền -> BẮT BUỘC trả về tên là: "Sườn" (nếu có chữ "bò" thì là "Sườn bò").
        + PHÂN TÍCH ĐẶC TẢ NÉT CHỮ MÓN "SƯỜN XG" (CẢ DẠNG "SƯỜN XG" LẪN "XƯỜN XG"):
          * Đặc trưng thị giác chữ viết tay:
            1) Từ thứ 1: Chữ "S" in hoa uốn lượn cong to mềm mại vươn cao, theo sau là nét "ườn" viết thảo có nét dấu huyền "\" khá dài chém nghiêng phía trên, kết thúc bằng chữ "n" móc tròn xuống dòng (AI OCR rất dễ nhìn nhầm thành: "Sườn", "Suon", "Scion", "Sian", "Sùn", "Scòn", "Siơn", hoặc người viết theo phương ngữ địa phương dùng chữ "x" viết thành "xườn", "x lơn", "xldn", "xuan", "xian", "x long").
@@ -546,7 +714,7 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
          * QUY TẮC BẮT BUỘC: Khi ở cột Tên hàng hóa nhìn thấy chữ viết tay dạng:
            "Sườn xg", "Sườn xG", "Sườn KG", "Sườn kg", "Suon kg", "Suon KG", "Sườn k.g", "Sườn x.g", "Sườn xq", "Scion kg", "Scion xg", "Sian xg", "Sian kg", "Sùn xg", "Sùn kg", "Scòn xg", "Siơn xg", "xườn xg", "xườn xương", "sườn xương", "x lơn x lơng", "xldn xldug", "xlan xg", "xuan xg", "s xg", "s kg":
            => BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Sườn xg", số lượng (quantity) là con số bên cạnh.
-     + "bò xay" / "bo xay" / "vai xay" / "thịt bò xay" / "xay": BẮT BUỘC trả về tên là: "Vai xay".
+     + "bò xay" / "bo xay" / "vai xay" / "thịt bò xay" / "xay": BẮT BUỘC trả về tên là: "bò xay".
       + PHÂN TÍCH NÉT CHỮ MÓN "BÊ" -> "BÊ BA CHỈ" (CỰC KỲ QUAN TRỌNG):
         * Nét chữ viết tay: Chữ "b" có nét khuyết trên vươn rất cao lên tận mép trên của dòng, thân thẳng đứng, bụng dưới tròn có nét thắt loop nhỏ; chữ "e" viết liền mạch hình bầu dục nhỏ nằm sát bên phải nét thắt, phía trên đầu chữ "e" có nét phẩy hoặc dấu mũ nhỏ (nhìn giống "bê", "be", "bè", "bé", "bc", "b.").
         * Số cân bên cạnh: Ví dụ "12,2" hoặc "12.2" (số 1 nét móc sổ thẳng, số 2 uốn tròn đầu có nét thắt ở chân, dấu phẩy giữa hai số 2) -> quantity: 12.2.
@@ -2005,38 +2173,57 @@ Chỉ trả về JSON theo đúng cấu trúc:
       'thịt quạt': 'quạt',
       'xuong quat': 'quạt',
       'xương quạt': 'quạt',
-      // Thăn
-      'than': 'Thăn',
-      'thăn': 'Thăn',
-      'than bo': 'Thăn',
-      'thăn bò': 'Thăn',
-      'thit than': 'Thăn',
-      'thịt thăn': 'Thăn',
-      // Tái
-      'tai': 'Tái',
-      'tái': 'Tái',
-      'thit tai': 'Tái',
-      'thịt tái': 'Tái',
-      'bo tai': 'Tái',
-      'bò tái': 'Tái',
-      // Lá, la -> thịt la vai
-      'la': 'thịt la vai',
-      'lá': 'thịt la vai',
-      'thit la': 'thịt la vai',
-      'thịt lá': 'thịt la vai',
-      'la vai': 'thịt la vai',
-      'lá vai': 'thịt la vai',
-      'thit la vai': 'thịt la vai',
-      'thịt la vai': 'thịt la vai',
-      'thit la vay': 'thịt la vai',
-      'thịt la vây': 'thịt la vai',
-      'thịt lá vai': 'thịt la vai',
-      'la bo': 'thịt la vai',
-      'lá bò': 'thịt la vai',
-      'la xach': 'thịt la vai',
-      'lá xách': 'thịt la vai',
-      'sach': 'thịt la vai',
-      'sách': 'thịt la vai',
+      // Thăn bò (DB: "Thăn bò")
+      'than': 'Thăn bò',
+      'thăn': 'Thăn bò',
+      'than bo': 'Thăn bò',
+      'thăn bò': 'Thăn bò',
+      'thit than': 'Thăn bò',
+      'thịt thăn': 'Thăn bò',
+      // Tái (bò) (DB: "Tái (bò)")
+      'tai': 'Tái (bò)',
+      'tái': 'Tái (bò)',
+      'thit tai': 'Tái (bò)',
+      'thịt tái': 'Tái (bò)',
+      'bo tai': 'Tái (bò)',
+      'bò tái': 'Tái (bò)',
+      // Diềm bò & Diềm bò thái (DB: "Diềm bò", "Diềm bò thái")
+      // Người dùng đã đổi từ "Diềm thăn" sang "Diềm bò", bắt buộc map mọi biến thể diềm thăn/diềm về Diềm bò
+      'diem': 'Diềm bò',
+      'diềm': 'Diềm bò',
+      'diem bo': 'Diềm bò',
+      'diềm bò': 'Diềm bò',
+      'diem than': 'Diềm bò',
+      'diềm thăn': 'Diềm bò',
+      'diem than bo': 'Diềm bò',
+      'diềm thăn bò': 'Diềm bò',
+      'thit diem': 'Diềm bò',
+      'thịt diềm': 'Diềm bò',
+      'dt': 'Diềm bò',
+      'd bo': 'Diềm bò',
+      'd bò': 'Diềm bò',
+      'diem thai': 'Diềm bò thái',
+      'diềm thái': 'Diềm bò thái',
+      'diem bo thai': 'Diềm bò thái',
+      'diềm bò thái': 'Diềm bò thái',
+      // Lá vai (DB: "Lá vai")
+      'la': 'Lá vai',
+      'lá': 'Lá vai',
+      'thit la': 'Lá vai',
+      'thịt lá': 'Lá vai',
+      'la vai': 'Lá vai',
+      'lá vai': 'Lá vai',
+      'thit la vai': 'Lá vai',
+      'thịt la vai': 'Lá vai',
+      'thit la vay': 'Lá vai',
+      'thịt la vây': 'Lá vai',
+      'thịt lá vai': 'Lá vai',
+      'la bo': 'Lá vai',
+      'lá bò': 'Lá vai',
+      'la xach': 'Lá vai',
+      'lá xách': 'Lá vai',
+      'sach': 'Lá vai',
+      'sách': 'Lá vai',
       // Sườn
       'suon': 'Sườn',
       'sườn': 'Sườn',
@@ -2056,15 +2243,27 @@ Chỉ trả về JSON theo đúng cấu trúc:
       'thịt lạc vai': 'Lạc vai',
       'vai bo': 'Lạc vai',
       'vai bò': 'Lạc vai',
-      // Vai xay (Bò xay)
-      'bo xay': 'Vai xay',
-      'bò xay': 'Vai xay',
-      'thit bo xay': 'Vai xay',
-      'thịt bò xay': 'Vai xay',
-      'vai xay': 'Vai xay',
-      'thit vai xay': 'Vai xay',
-      'thịt vai xay': 'Vai xay',
-      'xay': 'Vai xay',
+      // bò xay (DB: "bò xay")
+      'bo xay': 'bò xay',
+      'bò xay': 'bò xay',
+      'thit bo xay': 'bò xay',
+      'thịt bò xay': 'bò xay',
+      'vai xay': 'bò xay',
+      'thit vai xay': 'bò xay',
+      'thịt vai xay': 'bò xay',
+      'xay': 'bò xay',
+      // Bắp giây (DB: "Bắp giây")
+      'bap giay': 'Bắp giây',
+      'bắp giây': 'Bắp giây',
+      'bap day': 'Bắp giây',
+      'bắp dây': 'Bắp giây',
+      'giay': 'Bắp giây',
+      'giây': 'Bắp giây',
+      // Gầu cộc (DB: "Gầu cộc")
+      'gau coc': 'Gầu cộc',
+      'gầu cộc': 'Gầu cộc',
+      'gau coc bo': 'Gầu cộc',
+      'gầu cộc bò': 'Gầu cộc',
     };
 
     const baseItemTime = Date.now();
@@ -2122,36 +2321,8 @@ Chỉ trả về JSON theo đúng cấu trúc:
 
       const cleanItemName = removeDiacritics(normalizedName.toLowerCase());
 
-      // So khớp với danh mục sản phẩm của chủ buôn
-      let matchedProd = null;
-      if (cleanItemName === 'lac vai' || cleanItemName === 'vai' || cleanItemName === 'thit vai' || cleanItemName === 'thit lac vai') {
-        matchedProd = products.find((p) => {
-          const pClean = removeDiacritics(p.name.toLowerCase().trim());
-          return pClean === 'lac vai' || pClean.includes('lac vai');
-        }) || products.find((p) => {
-          const pClean = removeDiacritics(p.name.toLowerCase().trim());
-          return pClean.includes('vai') && !pClean.includes('xay') && !pClean.includes('suon') && !pClean.includes('la');
-        });
-      }
-
-      // ƯU TIÊN SỐ 1: Nếu khách có bảng giá riêng, khớp sản phẩm trong bảng giá riêng trước (đặc biệt là món chín)
-      if (!matchedProd && customerPriceMap.size > 0) {
-        matchedProd = products.find((p) => {
-          if (!customerPriceMap.has(p.id)) return false;
-          const pClean = removeDiacritics(p.name.toLowerCase().trim());
-          if (cleanItemName.includes('chin') || cleanItemName === 'thit chin') {
-            return pClean.includes('chin') || pClean === 'chin';
-          }
-          return pClean === cleanItemName || cleanItemName.includes(pClean) || pClean.includes(cleanItemName);
-        });
-      }
-
-      if (!matchedProd) {
-        matchedProd = products.find((p) => {
-          const pName = removeDiacritics(p.name.toLowerCase().trim());
-          return pName === cleanItemName || cleanItemName.includes(pName) || pName.includes(cleanItemName);
-        });
-      }
+      // So khớp với danh mục sản phẩm của chủ buôn bằng thuật toán so khớp chính xác matchProductByName
+      const matchedProd = matchProductByName(cleanItemName, products, customerPriceMap);
 
       let price = item.price != null ? parseFloat(item.price) : null;
       let amount = item.amount != null ? parseFloat(item.amount) : null;
@@ -2292,5 +2463,6 @@ Chỉ trả về JSON theo đúng cấu trúc:
 
 module.exports = {
   parseStaffSubmission,
+  matchProductByName,
 };
 
