@@ -269,4 +269,123 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
     expect(matchedCustomerId).toBeNull();
     expect(matchedCustomerId).not.toBe(customerHanh.id);
   });
+
+  it('5. Khách Chị Tuyết khi lấy thịt số lượng lớn > 10kg: Bắt buộc auto là Thịt chín và khớp giá riêng 145.000đ', async () => {
+    // Tạo 2 sản phẩm: Thăn bò (255k) và Chín(vai + lạm) (145k)
+    const productThan = await prisma.product.create({
+      data: {
+        userId: testUser.id,
+        name: 'Thăn bò',
+        defaultPrice: 240000,
+        unit: 'kg',
+      },
+    });
+
+    const productChin = await prisma.product.create({
+      data: {
+        userId: testUser.id,
+        name: 'Chín(vai + lạm)',
+        defaultPrice: 160000,
+        unit: 'kg',
+      },
+    });
+
+    // Thiết lập giá riêng cho Chị Tuyết: Thăn bò = 255k, Chín = 145k
+    await prisma.customerProductPrice.createMany({
+      data: [
+        {
+          customerId: tuyetCustomer.id,
+          productId: productThan.id,
+          price: 255000,
+        },
+        {
+          customerId: tuyetCustomer.id,
+          productId: productChin.id,
+          price: 145000,
+        },
+      ],
+    });
+
+    // Lấy bảng giá riêng của Chị Tuyết
+    const customerPrices = await prisma.customerProductPrice.findMany({
+      where: { customerId: tuyetCustomer.id },
+    });
+    const customerPriceMap = new Map();
+    customerPrices.forEach((cp) => customerPriceMap.set(cp.productId, parseFloat(cp.price)));
+
+    const products = [productThan, productChin];
+    const removeDiacritics = (str) => {
+      if (!str) return '';
+      return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'd').toLowerCase().trim();
+    };
+
+    // Mô phỏng AI bóc tách video: Khách Tuyết, khối lượng 18.49kg (> 10kg), tên thịt AI đọc là "Thăn" hoặc để trống
+    const rawItems = [{ name: 'Thăn', quantity: 18.49 }];
+    const cleanCustDetected = removeDiacritics(tuyetCustomer.name);
+    const isVideo = true;
+    const isTuyetCustomer = cleanCustDetected.includes('tuyet');
+
+    // Chạy logic xử lý đặc thù cho Chị Tuyết
+    rawItems.forEach((item) => {
+      const itemClean = removeDiacritics((item.name || '').toLowerCase().trim());
+      const qtyVal = item.quantity != null ? parseFloat(String(item.quantity).replace(',', '.')) : null;
+      const isLargeQty = qtyVal != null && qtyVal > 10;
+      const isNoMeatName = !itemClean || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', 'than', 'than bo', ''].includes(itemClean) || !item.name;
+
+      if (isLargeQty || isNoMeatName) {
+        item.name = 'Thịt chín';
+      }
+    });
+
+    expect(rawItems[0].name).toBe('Thịt chín');
+
+    // Khớp sản phẩm và tính tiền
+    const cleanItemName = removeDiacritics(rawItems[0].name.toLowerCase());
+    let matchedProd = null;
+    if (customerPriceMap.size > 0) {
+      matchedProd = products.find((p) => {
+        if (!customerPriceMap.has(p.id)) return false;
+        const pClean = removeDiacritics(p.name.toLowerCase().trim());
+        if (cleanItemName.includes('chin') || cleanItemName === 'thit chin') {
+          return pClean.includes('chin') || pClean === 'chin';
+        }
+        return pClean === cleanItemName || cleanItemName.includes(pClean) || pClean.includes(cleanItemName);
+      });
+    }
+
+    expect(matchedProd).not.toBeNull();
+    expect(matchedProd.id).toBe(productChin.id);
+
+    const price = customerPriceMap.get(matchedProd.id);
+    expect(price).toBe(145000);
+    const amount = Math.round(rawItems[0].quantity * price);
+    expect(amount).toBe(2681050); // 18.49 * 145000 = 2681050 (không phải 4714950 của thăn 255k)
+  });
+
+  it('6. Khách Chị Tuyết khi không đọc tên thịt: Bắt buộc auto là Thịt chín', async () => {
+    const removeDiacritics = (str) => {
+      if (!str) return '';
+      return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'd').toLowerCase().trim();
+    };
+
+    // Mô phỏng video không đọc tên thịt (chỉ đọc cân nặng 4.5kg, tên thịt để trống)
+    const rawItems = [{ name: '', quantity: 4.5 }];
+    const cleanCustDetected = removeDiacritics(tuyetCustomer.name);
+    const isVideo = true;
+    const isTuyetCustomer = cleanCustDetected.includes('tuyet');
+
+    rawItems.forEach((item) => {
+      const itemClean = removeDiacritics((item.name || '').toLowerCase().trim());
+      const qtyVal = item.quantity != null ? parseFloat(String(item.quantity).replace(',', '.')) : null;
+      const isLargeQty = qtyVal != null && qtyVal > 10;
+      const isNoMeatName = !itemClean || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', 'than', 'than bo', ''].includes(itemClean) || !item.name;
+
+      if (isLargeQty || isNoMeatName) {
+        item.name = 'Thịt chín';
+      }
+    });
+
+    expect(rawItems[0].name).toBe('Thịt chín');
+  });
 });
+

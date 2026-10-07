@@ -350,8 +350,10 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
           Dựa vào khách hàng quen để điền tên món thịt mà khách đó chuyên lấy:
           - Nếu là khách Hương (Hương Mỹ Đình): BẮT BUỘC điền món "xô" (giá mặc định 230000).
           - Nếu là khách Chị Tuyết:
+            * KHI LẤY SỐ LƯỢNG LỚN > 10KG (ví dụ: 18.49kg, 15kg, 20kg...): BẮT BUỘC AUTO LÀ MÓN "Thịt chín" (hoặc "Chín").
+            * KHI NGƯỜI NÓI KHÔNG ĐỌC TÊN THỊT (chỉ đọc tên khách hoặc chỉ đọc số cân): BẮT BUỘC AUTO LÀ MÓN "Thịt chín" (hoặc "Chín").
             * KHI GỬI LẠI / TRẢ HÀNG (người nói đọc "gửi lại", "trả về", "gửi về", "trả lại"): BẮT BUỘC MẶC ĐỊNH điền món "Thịt chín" (hoặc "Chín").
-            * KHI MUA HÀNG MỚI: Điền món "Thăn" (hoặc "Thịt chín").
+            * CHỈ ĐIỀN MÓN KHÁC (như "Thăn", "Tái") khi người nói NÓI RÕ TÊN MÓN ĐÓ VÀ số lượng <= 10kg.
           - Nếu là khách Cồ Hải: Điền món "Thịt lạm" (hoặc "Lạm gầu").
           - Nếu là khách Phở Tưởng (chị Luyến): Điền món "Gầu Bò" (hoặc "Thịt lạm").
           - Nếu là khách Thăn Bình Đà (Anh Nghĩa): Điền món "Thăn".
@@ -362,11 +364,12 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
      + Nếu người nói đọc từ "chín", "thịt chín", "bò chín" (ví dụ: "chín chị tuyết lấy thêm 1.56", "chín một phẩy năm sáu", "thịt chín 2 cân", "chín lấy thêm..."):
      + BẮT BUỘC hiểu từ "chín" ở đây là MÓN THỊT CHÍN (không phải số 9 hay từ chỉ trạng thái). Tên món thịt (name) BẮT BUỘC trả về là: "Thịt chín".
      + Các từ ngữ hành động như "lấy thêm", "lấy", "của", "giao thêm", "đưa thêm" chỉ là lời nói hành động, TUYỆT ĐỐI KHÔNG đưa vào tên món thịt.
-   - QUY TẮC ĐẶC THÙ CHO KHÁCH "CHỊ TUYẾT" GỬI LẠI / TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):
-      + Khi video là của khách "Chị Tuyết" (hoặc "Tuyết", "quán Tuyết") và là ĐƠN GỬI LẠI / GỬI VỀ / TRẢ HÀNG / TRẢ VỀ:
-      + NẾU NGƯỜI NÓI KHÔNG ĐỌC TÊN THỊT (người nói chỉ đọc tên khách hoặc chỉ đọc số cân, ví dụ: "chị Tuyết gửi lại 5.3", "chị Tuyết gửi về...", "gửi lại chị Tuyết...", "trả về chị Tuyết 5.3 cân", hoặc chỉ chĩa camera vào cân miếng thịt gửi lại mà không nhắc tên món thịt):
-        * BẮT BUỘC MẶC ĐỊNH TÊN MÓN THỊT (name) LÀ: "Thịt chín" (hoặc "Chín").
-        * TUYỆT ĐỐI KHÔNG điền "Thăn", "Tái", hay món nào khác khi khách Chị Tuyết gửi lại mà không đọc tên thịt!
+   - QUY TẮC ĐẶC THÙ CHO KHÁCH "CHỊ TUYẾT" (CỰC KỲ QUAN TRỌNG):
+      + Khi video là của khách "Chị Tuyết" (hoặc "Tuyết", "quán Tuyết"):
+      + NẾU SỐ LƯỢNG LỚN > 10KG (ví dụ: 18.49kg, 12kg, 15.7kg, 20kg...): BẮT BUỘC AUTO TÊN MÓN THỊT (name) LÀ: "Thịt chín".
+      + NẾU NGƯỜI NÓI KHÔNG ĐỌC TÊN THỊT (người nói chỉ đọc tên khách hoặc chỉ đọc số cân, hoặc chỉ chĩa camera vào cân): BẮT BUỘC AUTO TÊN MÓN THỊT (name) LÀ: "Thịt chín".
+      + KHI LÀ ĐƠN GỬI LẠI / GỬI VỀ / TRẢ HÀNG / TRẢ VỀ: BẮT BUỘC AUTO TÊN MÓN THỊT (name) LÀ: "Thịt chín".
+      + TUYỆT ĐỐI KHÔNG tự ý điền "Thăn", "Thăn bò", "Tái" khi khách Chị Tuyết lấy > 10kg hoặc khi không đọc rõ tên thịt!
     - QUY TẮC ĐẶC THÙ CHO KHÁCH "HƯƠNG" (CỰC KỲ QUAN TRỌNG):
      + Nếu trong video đọc tên khách là "Hương" (hoặc "Chị Hương", "cô Hương", "Hương Mỹ Đình"...) và có số cân thịt nhưng KHÔNG ĐỌC TÊN THỊT (ví dụ người nói chỉ đọc: "Hương 5 cân", "Hương bốn phẩy hai cân", "chị Hương 3 cân rưỡi", hoặc chỉ quay cân cho Hương):
        * Tên món thịt (name) BẮT BUỘC trả về là: "xô" (hoặc "thịt xô").
@@ -1783,20 +1786,54 @@ Chỉ trả về JSON theo đúng cấu trúc:
       });
     }
 
+    // Xử lý đặc thù cho video khách "Chị Tuyết":
+    // 1) Khi lấy thịt số lượng lớn > 10kg thì auto là chín
+    // 2) Nếu không đọc tên thịt (hoặc tên thịt chung chung), thì auto là chín
+    const isTuyetCustomerEarly = cleanCustDetected.includes('tuyet') ||
+      (matchedCustomerId && customers.some((c) => c.id === matchedCustomerId && removeDiacritics(c.name.toLowerCase()).includes('tuyet')));
+
+    if (isVideo && isTuyetCustomerEarly) {
+      rawItems.forEach((item) => {
+        const itemClean = removeDiacritics((item.name || '').toLowerCase().trim());
+        const qtyVal = item.quantity != null ? parseFloat(String(item.quantity).replace(',', '.')) : null;
+        const isLargeQty = qtyVal != null && qtyVal > 10;
+        const isNoMeatName = !itemClean || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', 'than', 'than bo', ''].includes(itemClean) || !item.name;
+
+        // Khách chị Tuyết: số lượng lớn > 10kg HOẶC không đọc tên thịt -> auto là Thịt chín
+        if (isLargeQty || isNoMeatName) {
+          item.name = 'Thịt chín';
+          // Tìm giá riêng món chín của Tuyết (Chín(vai + lạm) - 145k) trong bảng giá riêng
+          const chinProd = products.find((p) => {
+            const pClean = removeDiacritics(p.name.toLowerCase().trim());
+            return customerPriceMap.has(p.id) && (pClean.includes('chin') || pClean === 'chin');
+          }) || products.find((p) => {
+            const pClean = removeDiacritics(p.name.toLowerCase().trim());
+            return pClean.includes('chin') || pClean === 'chin';
+          });
+          if (chinProd && customerPriceMap.has(chinProd.id)) {
+            item.price = customerPriceMap.get(chinProd.id);
+            if (qtyVal != null) {
+              item.amount = Math.round(qtyVal * item.price);
+            }
+          }
+        }
+      });
+    }
+
     // Fallback thông minh cho video: Nếu có số kg nhưng tên thịt bị bỏ trống hoặc chung chung
     if (isVideo) {
       rawItems.forEach((item) => {
         const itemClean = removeDiacritics((item.name || '').toLowerCase().trim());
         if (!itemClean || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', ''].includes(itemClean)) {
-          if (customerPriceMap.size > 0) {
+          if (isTuyetCustomerEarly) {
+            item.name = 'Thịt chín';
+          } else if (customerPriceMap.size > 0) {
             const firstProdId = customerPriceMap.keys().next().value;
             const customProd = products.find((p) => p.id === firstProdId);
             if (customProd) {
               item.name = customProd.name;
               if (item.price == null) item.price = customerPriceMap.get(firstProdId);
             }
-          } else if (cleanCustDetected.includes('tuyet')) {
-            item.name = 'Thăn';
           } else if (cleanCustDetected.includes('hai')) {
             item.name = 'Thịt lạm';
           } else if (cleanCustDetected.includes('tuong') || cleanCustDetected.includes('luyen')) {
@@ -2050,15 +2087,37 @@ Chỉ trả về JSON theo đúng cấu trúc:
         SPECIAL_MEAT_MAP[removeDiacritics(rawLower)] ||
         (cleanedRaw ? (cleanedRaw.charAt(0).toUpperCase() + cleanedRaw.slice(1)) : rawOriginal || 'Thịt lẻ').trim();
 
-      // QUY TẮC ĐẶC THÙ CHO KHÁCH CHỊ TUYẾT GỬI LẠI: Nếu không đọc rõ tên thịt, mặc định là Thịt chín
+      // Xử lý khối lượng cho từng dòng:
+      // normalizeWeightQuantity chỉ áp dụng cho VIDEO khi người nói đọc các chữ số cân điện tử liền nhau
+      let qty = isVideo
+        ? normalizeWeightQuantity(item.quantity)
+        : (item.quantity != null ? parseFloat(String(item.quantity).replace(',', '.')) : null);
+      if (qty != null && (isNaN(qty) || qty <= 0)) {
+        qty = null;
+      }
+
+      // QUY TẮC ĐẶC THÙ CHO KHÁCH CHỊ TUYẾT:
+      // 1) Khi lấy thịt số lượng lớn > 10kg thì auto là chín
+      // 2) Nếu không đọc tên thịt (hoặc tên thịt chung chung), thì auto là chín
+      // 3) Khi gửi lại / trả hàng mà không đọc rõ tên thịt, mặc định là Thịt chín
       const isTuyetCustomer = Boolean(
         (customerNameToMatch && removeDiacritics(customerNameToMatch.toLowerCase()).includes('tuyet')) ||
-        (matchedCustomer && removeDiacritics(matchedCustomer.name.toLowerCase()).includes('tuyet'))
+        (matchedCustomer && removeDiacritics(matchedCustomer.name.toLowerCase()).includes('tuyet')) ||
+        (cleanCustDetected && cleanCustDetected.includes('tuyet'))
       );
-      if (isReturnOrder && isTuyetCustomer) {
-        if (!cleanedRaw || normalizedName === 'Thịt lẻ' || normalizedName === 'Tiền hàng' || normalizedName === '' || !item.name) {
-          normalizedName = 'Thịt chín';
-        }
+
+      const isLargeQtyForTuyet = isTuyetCustomer && qty != null && qty > 10;
+      const isNoMeatNameForTuyet = isTuyetCustomer && (
+        !cleanedRaw ||
+        normalizedName === 'Thịt lẻ' ||
+        normalizedName === 'Tiền hàng' ||
+        normalizedName === '' ||
+        !item.name ||
+        ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', 'than', 'than bo', 'thit than'].includes(cleanLower)
+      );
+
+      if (isTuyetCustomer && (isLargeQtyForTuyet || isNoMeatNameForTuyet || isReturnOrder)) {
+        normalizedName = 'Thịt chín';
       }
 
       const cleanItemName = removeDiacritics(normalizedName.toLowerCase());
@@ -2074,6 +2133,19 @@ Chỉ trả về JSON theo đúng cấu trúc:
           return pClean.includes('vai') && !pClean.includes('xay') && !pClean.includes('suon') && !pClean.includes('la');
         });
       }
+
+      // ƯU TIÊN SỐ 1: Nếu khách có bảng giá riêng, khớp sản phẩm trong bảng giá riêng trước (đặc biệt là món chín)
+      if (!matchedProd && customerPriceMap.size > 0) {
+        matchedProd = products.find((p) => {
+          if (!customerPriceMap.has(p.id)) return false;
+          const pClean = removeDiacritics(p.name.toLowerCase().trim());
+          if (cleanItemName.includes('chin') || cleanItemName === 'thit chin') {
+            return pClean.includes('chin') || pClean === 'chin';
+          }
+          return pClean === cleanItemName || cleanItemName.includes(pClean) || pClean.includes(cleanItemName);
+        });
+      }
+
       if (!matchedProd) {
         matchedProd = products.find((p) => {
           const pName = removeDiacritics(p.name.toLowerCase().trim());
@@ -2081,14 +2153,6 @@ Chỉ trả về JSON theo đúng cấu trúc:
         });
       }
 
-      // Xử lý khối lượng và tiền cho từng dòng:
-      // normalizeWeightQuantity chỉ áp dụng cho VIDEO khi người nói đọc các chữ số cân điện tử liền nhau
-      let qty = isVideo
-        ? normalizeWeightQuantity(item.quantity)
-        : (item.quantity != null ? parseFloat(String(item.quantity).replace(',', '.')) : null);
-      if (qty != null && (isNaN(qty) || qty <= 0)) {
-        qty = null;
-      }
       let price = item.price != null ? parseFloat(item.price) : null;
       let amount = item.amount != null ? parseFloat(item.amount) : null;
 
