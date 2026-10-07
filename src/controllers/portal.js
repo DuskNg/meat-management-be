@@ -1545,7 +1545,7 @@ const getVnDateRange = (dateInput, dateType = 'today') => {
 const submitDeliveryRequest = async (req, res, next) => {
   try {
     const { token } = req.params;
-    const { customerId, dateType = 'today', deliveryDate, note } = req.body;
+    const { customerId, customerIds, dateType = 'today', deliveryDate, note } = req.body;
 
     const portalLink = await prisma.portalLink.findUnique({
       where: { token },
@@ -1560,90 +1560,105 @@ const submitDeliveryRequest = async (req, res, next) => {
       throw new NotFoundError('Đường dẫn không tồn tại hoặc đã bị thu hồi.');
     }
 
-    // Xác định khách hàng báo hàng
-    let targetCustomerId = customerId;
-    if (!targetCustomerId) {
-      if (portalLink.customers && portalLink.customers.length > 0) {
-        targetCustomerId = portalLink.customers[0].customerId;
-      } else {
-        throw new BadRequestError('Không tìm thấy thông tin khách hàng liên kết với đường dẫn này.');
-      }
+    // Xác định danh sách khách hàng báo hàng (hỗ trợ cả mảng customerIds hoặc customerId đơn lẻ)
+    let targetCustomerIds = [];
+    if (Array.isArray(customerIds) && customerIds.length > 0) {
+      targetCustomerIds = Array.from(new Set(customerIds.filter(Boolean)));
+    } else if (customerId) {
+      targetCustomerIds = [customerId];
+    } else if (portalLink.customers && portalLink.customers.length > 0) {
+      targetCustomerIds = [portalLink.customers[0].customerId];
+    } else {
+      throw new BadRequestError('Không tìm thấy thông tin khách hàng liên kết với đường dẫn này.');
     }
 
-    // Kiểm tra xem khách hàng có thuộc portalLink không
-    const isValidCustomer = portalLink.customers.some(c => c.customerId === targetCustomerId);
-    if (!isValidCustomer) {
-      throw new BadRequestError('Khách hàng không thuộc danh sách quản lý của nhóm này.');
+    // Lọc các khách hàng hợp lệ thuộc portalLink
+    const validPortalCustMap = new Map(portalLink.customers.map(c => [c.customerId, c.customer]));
+    const validTargetIds = targetCustomerIds.filter(id => validPortalCustMap.has(id));
+
+    if (validTargetIds.length === 0) {
+      throw new BadRequestError('Các khách hàng được chọn không thuộc danh sách quản lý của nhóm này.');
     }
 
     const { startOfDay, endOfDay, normalizedDate, dateString, displayDate } = getVnDateRange(deliveryDate, dateType);
 
-    // Tìm đơn báo hàng đã có trong ngày đó
-    const existing = await prisma.portalDeliveryRequest.findFirst({
-      where: {
-        portalLinkId: portalLink.id,
-        customerId: targetCustomerId,
-        deliveryDate: {
-          gte: startOfDay,
-          lte: endOfDay
-        }
-      }
-    });
-
-    let result;
-    if (existing) {
-      result = await prisma.portalDeliveryRequest.update({
-        where: { id: existing.id },
-        data: {
-          dateType: dateType || existing.dateType,
-          deliveryDate: normalizedDate,
-          note: note !== undefined ? note : existing.note,
-          status: 'pending',
-          isConfirmed: false,
-          confirmedAt: null,
-          updatedAt: new Date()
-        },
-        include: {
-          customer: { select: { id: true, name: true, phone: true } }
-        }
-      });
-    } else {
-      result = await prisma.portalDeliveryRequest.create({
-        data: {
-          userId: portalLink.userId,
+    const results = [];
+    for (const targetCustomerId of validTargetIds) {
+      // Tìm đơn báo hàng đã có trong ngày đó
+      const existing = await prisma.portalDeliveryRequest.findFirst({
+        where: {
           portalLinkId: portalLink.id,
           customerId: targetCustomerId,
-          deliveryDate: normalizedDate,
-          dateType: dateType || 'today',
-          note: note || '',
-          status: 'pending',
-          isConfirmed: false
-        },
-        include: {
-          customer: { select: { id: true, name: true, phone: true } }
+          deliveryDate: {
+            gte: startOfDay,
+            lte: endOfDay
+          }
         }
       });
+
+      let itemResult;
+      if (existing) {
+        itemResult = await prisma.portalDeliveryRequest.update({
+          where: { id: existing.id },
+          data: {
+            dateType: dateType || existing.dateType,
+            deliveryDate: normalizedDate,
+            note: note !== undefined ? note : existing.note,
+            status: 'pending',
+            isConfirmed: false,
+            confirmedAt: null,
+            updatedAt: new Date()
+          },
+          include: {
+            customer: { select: { id: true, name: true, phone: true } }
+          }
+        });
+      } else {
+        itemResult = await prisma.portalDeliveryRequest.create({
+          data: {
+            userId: portalLink.userId,
+            portalLinkId: portalLink.id,
+            customerId: targetCustomerId,
+            deliveryDate: normalizedDate,
+            dateType: dateType || 'today',
+            note: note || '',
+            status: 'pending',
+            isConfirmed: false
+          },
+          include: {
+            customer: { select: { id: true, name: true, phone: true } }
+          }
+        });
+      }
+
+      // Gửi thông báo real-time qua Socket nếu có kết nối
+      try {
+        emitWorkspaceEvent(portalLink.userId, 'PORTAL_DELIVERY_REQUEST', {
+          type: 'PORTAL_DELIVERY_REQUEST',
+          requestId: itemResult.id,
+          customerId: targetCustomerId,
+          customerName: itemResult.customer?.name,
+          deliveryDate: dateString,
+          displayDate
+        });
+      } catch (_) {}
+
+      results.push(itemResult);
     }
 
-    // Gửi thông báo real-time qua Socket nếu có kết nối
-    try {
-      emitWorkspaceEvent(portalLink.userId, 'PORTAL_DELIVERY_REQUEST', {
-        type: 'PORTAL_DELIVERY_REQUEST',
-        requestId: result.id,
-        customerId: targetCustomerId,
-        customerName: result.customer?.name,
-        deliveryDate: dateString,
-        displayDate
-      });
-    } catch (_) {}
+    const firstResult = results[0];
+    const successMsg = results.length > 1
+      ? `Đã gửi báo lấy hàng cho ${results.length} cơ sở vào ngày ${displayDate} thành công!`
+      : `Đã gửi báo lấy hàng cho ngày ${displayDate} thành công!`;
 
     res.status(200).json({
       success: true,
-      message: `Đã gửi báo lấy hàng cho ngày ${displayDate} thành công!`,
+      message: successMsg,
       data: {
-        ...result,
+        ...firstResult,
         formattedDeliveryDate: displayDate,
-        dateString
+        dateString,
+        results
       }
     });
   } catch (err) {
@@ -2012,6 +2027,34 @@ const checkUnbilledDeliveryRequests = async (req, res, next) => {
   }
 };
 
+// [DELETE] /api/v1/portal/manage/delivery-requests/:id
+// Chủ buôn xóa lượt báo hàng
+const deleteAdminDeliveryRequest = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { id } = req.params;
+
+    const request = await prisma.portalDeliveryRequest.findFirst({
+      where: { id, userId }
+    });
+
+    if (!request) {
+      throw new NotFoundError('Không tìm thấy yêu cầu báo hàng.');
+    }
+
+    await prisma.portalDeliveryRequest.delete({
+      where: { id }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Đã xóa lượt báo hàng thành công!'
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   // Public
   getPublicPortalInfo,
@@ -2037,5 +2080,6 @@ module.exports = {
   getAdminDeliveryRequests,
   confirmDeliveryRequest,
   bulkConfirmDeliveryRequests,
-  checkUnbilledDeliveryRequests
+  checkUnbilledDeliveryRequests,
+  deleteAdminDeliveryRequest
 };

@@ -64,5 +64,6 @@ router.get('/manage/delivery-requests', authenticateToken, resolveWorkspace, por
 router.put('/manage/delivery-requests/:id/confirm', authenticateToken, resolveWorkspace, portalController.confirmDeliveryRequest);
 router.put('/manage/delivery-requests/bulk-confirm', authenticateToken, resolveWorkspace, portalController.bulkConfirmDeliveryRequests);
 router.get('/manage/delivery-requests/unbilled', authenticateToken, resolveWorkspace, portalController.checkUnbilledDeliveryRequests);
+router.delete('/manage/delivery-requests/:id', authenticateToken, resolveWorkspace, portalController.deleteAdminDeliveryRequest);
 
 module.exports = router;

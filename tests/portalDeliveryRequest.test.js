@@ -99,6 +99,22 @@ describe('Luồng Nghiệp Vụ: Báo Hàng Qua Portal & Chốt Đơn & Đối S
     expect(res.body.data.dateType).toBe('tomorrow');
   });
 
+  test('2.1. Nhóm portal gửi báo hàng đồng thời cho nhiều nhà hàng trong nhóm (mảng customerIds)', async () => {
+    const res = await request(app)
+      .post(`/api/v1/portal/delivery-request/${portalLink.token}`)
+      .send({
+        customerIds: [testCust1.id, testCust2.id],
+        dateType: 'tomorrow',
+        note: 'Cả 2 quán đều lấy hàng sớm'
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.results).toBeDefined();
+    expect(res.body.data.results.length).toBe(2);
+    expect(res.body.message).toContain('Đã gửi báo lấy hàng cho 2 cơ sở');
+  });
+
   test('3. Xem danh sách báo hàng gần đây trên cổng Portal', async () => {
     const res = await request(app)
       .get(`/api/v1/portal/delivery-request/${portalLink.token}`);
@@ -192,5 +208,28 @@ describe('Luồng Nghiệp Vụ: Báo Hàng Qua Portal & Chốt Đơn & Đối S
 
     const found = unbilledRes.body.data.unbilledCustomers.find(c => c.customerId === testCust1.id);
     expect(found).toBeUndefined();
+  });
+
+  test('8. Chủ buôn xóa lượt báo hàng thành công', async () => {
+    // Lấy requestId của testCust2 trong ngày mai
+    const listRes = await request(app)
+      .get('/api/v1/portal/manage/delivery-requests?dateType=tomorrow')
+      .set('Authorization', `Bearer ${testToken}`);
+
+    const reqItem = listRes.body.data.requests[0];
+    expect(reqItem).toBeDefined();
+
+    const delRes = await request(app)
+      .delete(`/api/v1/portal/manage/delivery-requests/${reqItem.id}`)
+      .set('Authorization', `Bearer ${testToken}`);
+
+    expect(delRes.status).toBe(200);
+    expect(delRes.body.success).toBe(true);
+
+    // Kiểm tra trong database đã bị xóa
+    const checkDb = await prisma.portalDeliveryRequest.findUnique({
+      where: { id: reqItem.id }
+    });
+    expect(checkDb).toBeNull();
   });
 });
