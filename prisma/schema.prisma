@@ -55,6 +55,7 @@ model User {
   quickPriceLinks      QuickPriceLink[]      // Danh sách link Zalo cho chủ cập nhật giá nhanh
   bankTransactions     BankTransaction[]     // Danh sách các giao dịch ngân hàng từ SePay
   portalDeliveryRequests PortalDeliveryRequest[] // Danh sách đơn báo hàng từ Portal
+  quickNote            QuickNote?            // Ghi chú cần nhớ của chủ buôn
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
   workspaceMemberships WorkspaceMember[]      @relation("WorkspaceMembers")        // Các workspace mà user này là thành viên
@@ -862,5 +863,16 @@ model PeriodicReminderConfig {
   @@index([userId])
   @@index([customerId])
   @@map("periodic_reminder_configs")
+}
+
+model QuickNote {
+  id        String   @id @default(uuid())
+  userId    String   @unique // Mỗi người dùng chỉ có một bản ghi chú cần nhớ duy nhất
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String?  @db.Text // Nội dung ghi chú cần nhớ
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("quick_notes")
 }
 
