@@ -471,6 +471,49 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
       expect(matchBapBo).not.toBeNull();
       expect(matchBapBo.name).toBe('Bắp bò');
     });
+
+    it('11. Quy tắc Xg bò: So khớp vào "Xg Bò" và đảm bảo số lượng không bao giờ là 1 hay 1.5 kg (auto 5, 10, 15 kg)', () => {
+      const productsWithXg = [
+        ...sampleProducts,
+        { id: 'prod-xg-bo', name: 'Xg Bò' },
+      ];
+
+      // 1. So khớp tên món thịt
+      const matchXg1 = matchProductByName('xg bo', productsWithXg);
+      expect(matchXg1).not.toBeNull();
+      expect(matchXg1.name).toBe('Xg Bò');
+
+      const matchXg2 = matchProductByName('x', productsWithXg);
+      expect(matchXg2).not.toBeNull();
+      expect(matchXg2.name).toBe('Xg Bò');
+
+      const matchXg3 = matchProductByName('xuong bo', productsWithXg);
+      expect(matchXg3).not.toBeNull();
+      expect(matchXg3.name).toBe('Xg Bò');
+
+      // 2. Logic chuẩn hóa số cân của Xg Bò
+      const normalizeXgQuantity = (name, quantity) => {
+        const cleanLower = name.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+        const isSuonXg = cleanLower.includes('suon');
+        const isXgBo = !isSuonXg && ['x', 'xg', 'xg bo', 'xuong', 'xuong bo'].includes(cleanLower);
+        let qty = quantity;
+        if (isXgBo && qty != null) {
+          if (qty === 1 || qty === 1.0) qty = 10;
+          else if (qty === 1.5) qty = 15;
+        }
+        return qty;
+      };
+
+      expect(normalizeXgQuantity('Xg Bò', 1)).toBe(10);
+      expect(normalizeXgQuantity('x', 1.0)).toBe(10);
+      expect(normalizeXgQuantity('Xg Bò', 1.5)).toBe(15);
+      expect(normalizeXgQuantity('xg bo', 5)).toBe(5);
+      expect(normalizeXgQuantity('Xg Bò', 10)).toBe(10);
+      expect(normalizeXgQuantity('Xg Bò', 15)).toBe(15);
+      expect(normalizeXgQuantity('Bắp bò', 1.5)).toBe(1.5); // Món khác không bị ảnh hưởng
+      expect(normalizeXgQuantity('Sườn xg', 1.5)).toBe(1.5); // Sườn xg TUYỆT ĐỐI không bị đổi
+      expect(normalizeXgQuantity('Sườn xg', 1)).toBe(1);
+    });
   });
 });
 

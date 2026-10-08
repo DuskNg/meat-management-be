@@ -143,7 +143,14 @@ const matchProductByName = (cleanItemName, products, customerPriceMap = new Map(
     if (chinProd) return chinProd;
   }
 
-  // 7. Từ khóa "sườn xg" vs "sườn bò" vs "sườn"
+  // 7. Từ khóa "Xg Bò" / "x" / "xg" / "xương bò" vs "sườn xg"
+  if (cleanLower === 'x' || cleanLower === 'xg' || cleanLower === 'xg bo' || cleanLower === 'xuong' || cleanLower === 'xuong bo') {
+    const xgBoProd = products.find((p) => {
+      const pClean = removeDiacritics(p.name.toLowerCase());
+      return (pClean.includes('xg bo') || pClean === 'xg' || pClean === 'xuong bo' || pClean === 'xuong') && !pClean.includes('suon');
+    });
+    if (xgBoProd) return xgBoProd;
+  }
   if (cleanLower.includes('xg') || cleanLower.includes('xuong')) {
     const xgProd = products.find((p) => {
       const pClean = removeDiacritics(p.name.toLowerCase());
@@ -563,6 +570,12 @@ Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG H
      + Nếu trong video người nói đọc là "bắp giây", "bắp dây", "bap giay": BẮT BUỘC trả về: "Bắp giây".
      + Nếu trong video người nói đọc là "bắp", "thịt bắp", "bắp bò", "bắp hoa", "quả bắp", "bap" (ví dụ: "bắp 1.6", "bắp 1 6", "bắp 300", "bắp 2 cân", "chị Tuyết bắp...", "trả bắp...", "bắp..."):
      + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Bắp bò". Tuyệt đối không chỉ để là "bắp" cụt lủn hay nhầm sang loại thịt khác.
+   - QUY TẮC ĐẶC BIỆT CHO MÓN "XG BÒ" / "XƯƠNG BÒ" (CỰC KỲ QUAN TRỌNG):
+     + Nếu trong video người nói đọc là "x", "xg", "xg bò", "xương", "xương bò": BẮT BUỘC trả về tên là: "Xg Bò".
+     + XG BÒ KHÔNG BAO GIỜ LÀ 1 KG HAY 1.5 KG, AUTO LÀ 5 KG, 10 KG, 15 KG!
+     + Nếu nghe hoặc nhìn thấy số cân cạnh món x/xg là 1 hoặc 1.0 -> BẮT BUỘC AUTO nhận diện là 10 (10 kg).
+     + Nếu nghe hoặc nhìn thấy số cân cạnh món x/xg là 1.5 -> BẮT BUỘC AUTO nhận diện là 15 (15 kg).
+     + Nếu là 5 -> nhận diện là 5 (5 kg).
 
    - Khối lượng / Số lượng (quantity) - QUY TẮC QUAN TRỌNG KHI ĐỌC SỐ CÂN VÀ NHÌN MÀN HÌNH CÂN ĐIỆN TỬ:
      + QUY TẮC ĐẶC BIỆT: ĐỌC TỪNG CHỮ SỐ LIÊN TIẾP (CÂN ĐIỆN TỬ BỎ DẤU CHẤM/PHẨY):
@@ -694,7 +707,15 @@ HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
      + "Quạt" / "quat": Chữ "Q" viết hoa tròn to lượn đuôi ở đáy, "uat" có gạch ngang dứt khoát của chữ "t" -> BẮT BUỘC trả về: "quạt".
      + "Thăn" / "than" / "thăn bò": Chữ "T" viết hoa có gạch ngang cao, "h-a-n" viết liền nét, dấu á uốn cong trên đầu chữ "a" -> BẮT BUỘC trả về: "Thăn bò".
      + "diềm" / "diềm thăn" / "diềm bò" / "dt": Chữ "d" cong tròn móc, theo sau là "iềm" hoặc "thăn" -> BẮT BUỘC trả về: "Diềm bò" (nếu có chữ "thái" thì trả về: "Diềm bò thái"). TUYỆT ĐỐI CẤM trả về "Thăn bò" hay "Thăn"!
-     + "xg" / "x" / "xg bò": Chữ "x" chéo mềm mại, chữ "g" đuôi móc dài xuống dưới dòng kẻ (hoặc chỉ ghi 1 ký tự "x" / "X") -> BẮT BUỘC trả về: "Xg Bò".
+     + "xg" / "x" / "xg bò" / "xương bò" / "xương":
+       * Nhận diện tên món: Chữ "x" chéo mềm mại, chữ "g" đuôi móc dài xuống dưới dòng kẻ (hoặc người viết chỉ ghi duy nhất 1 ký tự "x" hoặc "X") -> BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Xg Bò".
+       * QUY TẮC ĐẶC BIỆT BẮT BUỘC VỀ SỐ CÂN (QUANTITY) CỦA "XG BÒ":
+         - Trong nghiệp vụ giao thịt, XG BÒ (XƯƠNG BÒ) KHÔNG BAO GIỜ BÁN 1 KG HAY 1.5 KG! Xương bò luôn luôn được giao theo bọc/túi chẵn cân: AUTO 5 KG, 10 KG, 15 KG (hoặc 20, 25 kg...):
+         - Nếu nét chữ số cân cạnh món x/xg nhìn giống "1" hay "1.0" hay "1,0": BẮT BUỘC AUTO nhận diện là 10 (10 kg), TUYỆT ĐỐI CẤM NHẬN DIỆN LÀ 1 KG! (Do người viết viết số 10 thì nét số 0 bị mờ hoặc viết liền).
+         - Nếu nét chữ số cân cạnh món x/xg nhìn giống "1.5" hay "1,5": BẮT BUỘC AUTO nhận diện là 15 (15 kg), TUYỆT ĐỐI CẤM NHẬN DIỆN LÀ 1.5 KG! (Do người viết viết số 15 nét nối liền bị nhầm thành có dấu phẩy).
+         - Nếu nét chữ số cân là "5" (hoặc "5.0", "5,0"): nhận diện là 5 (5 kg).
+         - Nếu nét chữ số cân là "10": nhận diện là 10 (10 kg).
+         - Nếu nét chữ số cân là "15": nhận diện là 15 (15 kg).
      + "Tai" hoặc "Tái" (chữ T hoa uốn lượn viết liền chữ ái): BẮT BUỘC trả về tên là "Tái (bò)".
      + "bắp" hoặc "Bắp": BẮT BUỘC trả về tên là "Bắp bò".
      + "bắp giây" hoặc "bắp dây": BẮT BUỘC trả về tên là "Bắp giây".
@@ -969,17 +990,21 @@ Chỉ trả về JSON theo đúng cấu trúc:
             is_return: { type: 'BOOLEAN', nullable: true },
             is_import: { type: 'BOOLEAN', nullable: true },
             note: { type: 'STRING', nullable: true },
+            // Khai báo để AI được phép trả về cờ đơn nợ nhanh (trước đây bị schema loại bỏ)
+            is_quick_debt: { type: 'BOOLEAN', nullable: true },
+            sub_amounts: { type: 'ARRAY', nullable: true, items: { type: 'NUMBER' } },
             items: {
               type: 'ARRAY',
               items: {
                 type: 'OBJECT',
                 properties: {
                   name: { type: 'STRING' },
-                  quantity: { type: 'NUMBER' },
+                  // Cho phép null: đơn nợ nhanh chỉ có tiền, không có số cân (prompt yêu cầu quantity: null)
+                  quantity: { type: 'NUMBER', nullable: true },
                   price: { type: 'NUMBER', nullable: true },
                   amount: { type: 'NUMBER', nullable: true },
                 },
-                required: ['name', 'quantity'],
+                required: ['name'],
               },
             },
           },
@@ -2293,6 +2318,22 @@ Chỉ trả về JSON theo đúng cấu trúc:
         : (item.quantity != null ? parseFloat(String(item.quantity).replace(',', '.')) : null);
       if (qty != null && (isNaN(qty) || qty <= 0)) {
         qty = null;
+      }
+
+      // QUY TẮC BẢO VỆ ĐẶC BIỆT CHO XG BÒ (XƯƠNG BÒ):
+      // Xg bò không bao giờ là 1 và 1.5 kg, auto là 5, 10, 15 kg
+      // Chỉ áp dụng cho đúng món Xg Bò, TUYỆT ĐỐI loại trừ "Sườn xg" (sườn bán lẻ 1 - 1.5kg là bình thường)
+      const isSuonXg = cleanLower.includes('suon') || normalizedName === 'Sườn xg';
+      const isXgBo = !isSuonXg && Boolean(
+        normalizedName === 'Xg Bò' ||
+        ['x', 'xg', 'xg bo', 'xuong', 'xuong bo'].includes(cleanLower)
+      );
+      if (isXgBo && qty != null) {
+        if (qty === 1 || qty === 1.0) {
+          qty = 10;
+        } else if (qty === 1.5) {
+          qty = 15;
+        }
       }
 
       // QUY TẮC ĐẶC THÙ CHO KHÁCH CHỊ TUYẾT:
