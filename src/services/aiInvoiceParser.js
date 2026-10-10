@@ -389,586 +389,169 @@ const parseStaffSubmission = async (submissionId) => {
       }).catch((syncErr) => console.warn('[SYNC_FILETYPE_ERR]', syncErr.message));
     }
 
-    // 4. Chuẩn bị prompt AI chuyên sâu: Nếu là Video thì LẮNG NGHE GIỌNG NÓI, nếu là Ảnh thì đọc chữ tích kê
-    let promptText = '';
+    // 4. Chuẩn bị System Instruction và User Prompt theo chuẩn Google Gemini
+    let systemInstruction = '';
+    const userPrompt = isVideo
+      ? 'Hãy phân tích video bán thịt đính kèm (kết hợp âm thanh giọng nói và quan sát mặt cân điện tử) theo đúng các quy tắc hệ thống đã định nghĩa.'
+      : 'Hãy đọc và trích xuất dữ liệu từ hình ảnh hóa đơn / tích kê bán thịt đính kèm theo đúng các quy tắc hệ thống đã định nghĩa.';
 
     if (isVideo) {
-      promptText = `Bạn là trợ lý AI chuyên nghiệp phân tích VIDEO BÁN THỊT / GIAO THỊT bằng cách KẾT HỢP CẢ ÂM THANH (GIỌNG NÓI) VÀ HÌNH ẢNH (QUAN SÁT MẶT CÂN ĐIỆN TỬ VÀ MIẾNG THỊT).
+      systemInstruction = `Bạn là trợ lý AI chuyên gia phân tích VIDEO BÁN/GIAO THỊT BÒ (kết hợp âm thanh giọng nói và hình ảnh mặt cân điện tử / miếng thịt).
 
-DANH SÁCH KHÁCH HÀNG QUEN THUỘC CỦA CHỦ BUÔN:
-[${customerNamesList || 'Chưa có'}]
+DANH BẠ THAM CHIẾU CỬA HÀNG:
+- Khách hàng quen: [${customerNamesList || 'Chưa có'}]
+- Nhà cung cấp: [${supplierNamesList || 'Chưa có'}]
+- Món thịt thường bán: [${productNamesList || 'Chưa có'}]
 
-DANH SÁCH NHÀ CUNG CẤP QUEN THUỘC (NHẬP HÀNG / LÒ MỔ):
-[${supplierNamesList || 'Chưa có'}]
+I. XÁC ĐỊNH TÊN KHÁCH HÀNG (customer_name) TỪ GIỌNG NÓI:
+1. Quy tắc nhận diện theo tên gọi:
+- "Hương" / "Hương Mỹ Đình" => "Hương mỹ đình(xô 230)".
+- "Trường Hoàng" / "Nguyễn Khuyến Trường Hoàng" => "Trường hoàng(nguyễn khuyến)".
+- "Thầy" / "Cô Thảo" / "Cô Hảo" / "Cô Thảo thầy" => "Cô thảo(thầy)".
+- "Chị Tuyết" / "Tuyết" => "Chị Tuyết".
+- "Văn Khê" / "Van Khê" / "Van Hle" => "văn khê" (nếu nói "Bún huế văn khê" hoặc có "Bún Huế" => "Bún huế van khe").
+- "3Mien" / "3 Miền" / "Kim Liên" => "Bếp 3 miền kim liên".
+- "B1", "bếp 1" => "Bếp hàng xóm 1"; "B2" => "Bếp hàng xóm 2"; "B3" => "Bếp hàng xóm 3"; "B4" / "Vườn xanh" => "Nhà hàng vườn xanh".
+- "Hà Trì" => "Hà Trì" (phân biệt rõ: KHÔNG nhầm sang "Chị hạnh sân bóng hà trì" và KHÔNG nhầm sang "Cồ hải").
+- "Cồ Hải" / "Cổ Hải" => "Cồ hải".
+- "Hạnh" / "Chị Hạnh" / "Hạnh sân bóng" => "Chị hạnh sân bóng hà trì".
+- "Huyền" / "Huyền Đô Nghĩa" => "Huyền Đô Nghĩa".
+- "Phở Tưởng" / "Chị Luyến" => "Phở tưởng(chị Luyến)" (KHÔNG đọc thành "Phở Tiến").
+- "Chinga" / "Chị Thúy Nga" / "Cô Nga" => "Chị Thúy Nga".
+- "Anh Nghĩa" / "Thăn Bình Đà" => "Thăn bình đà(anh Nghĩa)".
+- "52" / "52 Trần Thái Tông" => "52  trần thái tông".
+- "Minh" / "Minh Trang" => "Minh trang".
+- "Trung Kính" / "Bếp Trung Kính" => "Trung kính".
+- "Thái Hà" => "Thái hà".
+- "Anh Thắng phố cổ" => "Anh thắng phố cổ".
+- "Phở Đông" => "Phở đông".
+- "Gia Hưng CS2" => "Gia Hưng cs2".
+- "Giảng Võ" / "Giang Võ" => "Giảng võ".
+- "794" / "794 Láng Hạ" / "The Industree" => "794 láng hạ".
+- "Cuốn An Khánh" / "An Khang" => "Cuốn an khánh".
+- Nếu không nhắc tên khách: trả về customer_name = null.
 
-DANH SÁCH CÁC MÓN THỊT THƯỜNG BÁN:
-[${productNamesList || 'Chưa có'}]
+II. BÓC TÁCH MÓN THỊT (items):
+1. Nguyên tắc sống còn: Luôn phải có tên món thịt (name). Tuyệt đối không để trống hoặc trả về rỗng nếu có thịt trên cân.
+2. Nhận diện kết hợp:
+- Lắng nghe từ ngữ chỉ món thịt.
+- Quan sát thị giác miếng thịt trên cân: Thịt luộc chín/nâu sẫm => "Thịt chín"; Nạc đỏ tươi => "Thăn" hoặc "Tái"; Có mỡ trắng/vàng viền quanh => "Gầu Bò" hoặc "Thịt lạm"; Bắp tròn vân hoa => "Bắp Bò"; Tảng có xương => "Sườn"; Xay nhuyễn => "bò xay"; Da mỏng => "Bê ba chỉ".
+- Trường hợp không nghe rõ hoặc camera chỉ chĩa mặt cân:
+  + Khách Hương: auto món "xô" (đơn giá mặc định 230000).
+  + Khách Chị Tuyết: Lấy > 10kg, hoặc trả hàng, hoặc không đọc tên thịt => auto món "Thịt chín". Chỉ điền món khác khi nói rõ tên món và <= 10kg.
+  + Khách Cồ Hải: auto món "Thịt lạm" (hoặc "Lạm gầu").
+  + Khách Phở Tưởng: auto món "Gầu Bò" (hoặc "Thịt lạm").
+  + Khách Thăn Bình Đà: auto món "Thăn".
+  + Khách khác: Chọn món phù hợp nhất trong danh mục món thịt thường bán.
+3. Chuẩn hóa tên món thịt:
+- "vai" / "lạc vai" => "Lạc vai".
+- "chín" / "thịt chín" => "Thịt chín" (từ "chín" là tên món thịt chín, KHÔNG phải số 9).
+- "lạm" => "Thịt lạm"; "lạm gầu" => "Lạm gầu".
+- "gầu" / "gàu" / "gâu" => "Gầu Bò".
+- "bê" / "thịt bê" => "Bê ba chỉ".
+- "diềm" / "diềm thăn" => "Diềm bò" ("diềm thái" => "Diềm bò thái"). TUYỆT ĐỐI CẤM trả về "Thăn bò".
+- "lá" / "la" / "lá vai" => "Lá vai".
+- "bò xay" / "vai xay" / "xay" => "bò xay".
+- "thăn" / "thịt thăn" => "Thăn bò".
+- "tái" / "thịt tái" => "Tái (bò)".
+- "bắp giây" / "bắp dây" => "Bắp giây"; "bắp" / "thịt bắp" => "Bắp bò".
+- "xg" / "xương" / "x" => "Xg Bò". Xương bò luôn chẵn 5, 10, 15 kg (1 hoặc 1.0 => 10kg; 1.5 => 15kg; 5 => 5kg).
 
-NHIỆM VỤ QUAN TRỌNG:
-Hãy KẾT HỢP LẮNG NGHE ÂM THANH / GIỌNG NÓI VÀ QUAN SÁT CÁC KHUNG HÌNH VIDEO (đặc biệt là màn hình cân điện tử):
+III. ĐỌC SỐ CÂN (quantity) VÀ MẶT CÂN ĐIỆN TỬ:
+- 3 chữ số liên tiếp X Y Z => hiểu là X.YZ kg (ví dụ: "tái 1 9 5" => món "Tái", quantity: 1.95; "4 8 4" => 4.84; "3 7 0" => 3.7).
+- 4 chữ số liên tiếp AB CD => hiểu là AB.CD kg (ví dụ: "1 6 9 2" => 16.92; "2 0 1 5" => 20.15; "1 2 5 0" => 12.5).
+- Khẩu ngữ "lẻ": "6 lẻ 69" => 6.69; "4 lẻ 5" => 4.5; "3 lẻ 05" => 3.05.
+- Nếu không đọc số cân: Đọc trực tiếp màn hình LED đỏ trên cân điện tử (ô Khối lượng kg, Đơn giá đ/kg, Thành tiền đ).
 
-1. Xác định Tên khách hàng (customer_name) từ giọng nói:
-   - Nghe xem người nói gọi tên ai hoặc giao cho ai (ví dụ: "Hương", "Hương Mỹ Đình", "Chị Lan", "A Hùng phở", "Quán Tuyết", "Thầy", "Cô Thảo"...).
-   - ĐẶC BIỆT: Nếu người nói gọi tên "Hương" (hoặc "Chị Hương", "cô Hương", "Hương Mỹ Đình"), hãy so khớp chuẩn hóa với khách "Hương mỹ đình(xô 230)". Nếu không nhắc tên khách hàng, trả về null.
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "TRƯỜNG HOÀNG (NGUYỄN KHUYẾN)":
-      + Quan sát nét chữ viết tay ở dòng Tên khách hàng / dưới tiêu đề "HÓA ĐƠN BÁN HÀNG":
-        * Dòng chữ viết tay thường ghi: "Nguyễn Khuyến Trường Hoàng", "Nguyễn Khuyến Trường hoàng", "Trường Hoàng", "Trường hoàng", "Nguyen Khuyen Truong Hoang", "Truong Hoang".
-        * Chữ "Nguyễn Khuyến" viết thảo liền nét kèm chữ "Trường Hoàng".
-      + QUY TẮC BẮT BUỘC: BẤT KỂ KHI NÀO thấy chữ viết tay ghi "Trường Hoàng", "Trường hoàng", hoặc "Nguyễn Khuyến Trường Hoàng" (hoặc chứa cả "Trường" và "Hoàng" hoặc cả "Khuyến" và "Trường Hoàng"):
-        => BẮT BUỘC nhận diện và trả về customer_name là: "Trường hoàng(nguyễn khuyến)" (để hệ thống khớp chính xác vào khách "Trường hoàng(nguyễn khuyến)" trong danh bạ).
-        => TUYỆT ĐỐI KHÔNG trả về "Nguyễn khuyến trường hoàng", không trả về "Nguyễn khuyến 1" hay tên khác!
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CÔ THẢO (THẦY)":
-      + BẤT KỲ VIDEO NÀO ĐỌC LÀ THẦY HOẶC CÔ THẢO (ví dụ: "thầy", "Thầy", "cô Thảo", "cô thảo", "Thảo", "cô Thảo thầy", "thầy Thảo", "Thảo thầy", "đưa cho thầy", "giao cho thầy", "của thầy", "của cô Thảo"... hoặc bất cứ câu nào có nhắc chữ "thầy" hay "thảo"): BẮT BUỘC trả về customer_name là "Cô thảo(thầy)". Tuyệt đối không để null và không nhầm sang khách khác.
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CHỊ TUYẾT" / "TUYẾT":
-      + Nếu người nói nhắc đến "chị Tuyết", "chị tuyết", "Tuyết", "quán Tuyết", "cô Tuyết", hoặc câu nói dạng: "chín chị tuyết lấy thêm 1.56", "chị Tuyết lấy thêm...", "chị Tuyết một phẩy...", "giao cho chị Tuyết"...:
-      + BẮT BUỘC nhận diện customer_name là: "Chị Tuyết" (hoặc tên khách có chữ "Tuyết" trong danh mục).
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "BÚN HUẾ VĂN KHÊ":
-      + Nếu người nói đọc là "bún huế", "Bún Huế", "bún huế văn khê", "quán bún huế", "bún bò huế", "bún bò huế văn khê", "Văn Khê", "quán Văn Khê":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Bún huế văn khê" (hoặc tên khách Bún Huế Văn Khê trong danh mục).
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "BẾP 3 MIỀN KIM LIÊN" (3MIEN / 3 MIỀN):
-      + Nếu người nói đọc là "3mien", "3 mien", "3 Miền", "3 miền", "ba miền", "bếp 3 miền", "kim liên", "bep 3 mien", "bếp ba miền", "quán 3 miền":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Bếp 3 miền kim liên". Tuyệt đối không để là "3mien" hay nhầm sang khách khác.
-    - QUY TẮC ĐẶC BIỆT CHO CÁC BẾP (B1, B2, B3, B4):
-      + Nếu đọc là "b1", "b 1", "bê một", "bếp 1", "bếp một", "trường bò 1": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 1".
-      + Nếu đọc là "b2", "b 2", "bê hai", "bếp 2", "bếp hai": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 2".
-      + Nếu đọc là "b3", "b 3", "bê ba", "bếp 3", "bếp ba": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 3".
-      + Nếu đọc là "b4", "b 4", "bê bốn", "bếp 4", "bếp bốn", "vườn xanh", "nhà hàng vườn xanh": BẮT BUỘC trả về customer_name là: "Nhà hàng vườn xanh".
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HÀ TRÌ" (PHÂN BIỆT VỚI "CHỊ HẠNH SÂN BÓNG HÀ TRÌ" VÀ "CỒ HẢI"):
-      + BẤT KỲ VIDEO NÀO NGƯỜI NÓI ĐỌC LÀ "HÀ TRÌ" (hoặc "Hà Trì", "Hà trì", "quán Hà Trì", "anh Hà Trì", "cô Hà Trì", "cô hà trì", "co ha tri", "ha tri", "ha ti"):
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Hà Trì".
-      + TUYỆT ĐỐI KHÔNG ĐƯỢC NHẬN NHẦM THÀNH "Chị hạnh sân bóng hà trì"! Vì nếu là khách "Chị hạnh sân bóng hà trì" thì người nói sẽ đọc là "chị Hạnh" (hoặc "Hạnh", "chị Hạnh sân bóng"). Khi người nói đọc là "Hà Trì" thì 100% là khách "Hà Trì".
-      + TUYỆT ĐỐI KHÔNG gán nhầm sang khách "Cồ Hải" (nếu người nói đọc là "Cồ Hải", "Cổ Hải" thì đó là khách "Cồ hải" riêng biệt, tuyệt đối không gán sang "Hà Trì").
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CỒ HẢI" / "CỔ HẢI" (CỰC KỲ QUAN TRỌNG):
-      + BẤT KỲ VIDEO NÀO NGƯỜI NÓI ĐỌC LÀ "CỒ HẢI", "Cổ Hải", "cồ hải", "cổ hải", "Cồ hải", "anh Hải", "quán Cồ Hải", "quán Cổ Hải":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Cồ hải" (hoặc "Cồ Hải").
-      + TUYỆT ĐỐI KHÔNG nhận nhầm sang "Hà Trì" hay khách khác!
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CHỊ HẠNH SÂN BÓNG HÀ TRÌ":
-      + Chỉ khi nào người nói đọc là "chị Hạnh", "chị hạnh", "Hạnh", "Hạnh sân bóng", "chị Hạnh sân bóng", "chị Hạnh hà trì", "sân bóng": BẮT BUỘC mới nhận diện và trả về customer_name là: "Chị hạnh sân bóng hà trì".
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HUYỀN ĐÔ NGHĨA":
-      + Nếu người nói đọc là "Huyền", "chị Huyền", "Huyền Đô Nghĩa", "Huyền đô ngĩa", "cửa hàng Huyền", "quán Huyền":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Huyền Đô Nghĩa".
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "PHỞ TƯỞNG (CHỊ LUYẾN)":
-      + Nếu người nói đọc là "phở Tưởng", "quán Tưởng", "anh Tưởng", "chị Luyến", "Phởtưởng", "Phở Tưởng", "Luyến":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Phở tưởng(chị Luyến)". Tuyệt đối không để là "Phở Tưởng" hay "Phởtưởng" trống trơn và không nhầm sang "Phở Tiến" hay khách khác.
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CHỊ THÚY NGA" (CHINGA):
-     + Nếu người nói đọc là "chinga", "Chinga", "chị Nga", "chị nga", "Nga", "cô Nga", "Thúy Nga", "chị Thúy Nga":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "Chị Thúy Nga" (hoặc tên khách Thúy Nga trong danh bạ). Tuyệt đối không nhầm sang khách khác.
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "THĂN BÌNH ĐÀ" / "ANH NGHĨA":
-     + Nếu người nói đọc là "anh nghĩa", "anh ngĩa", "nghĩa", "ngĩa", "bình đà", "thăn bình đà", "quán bình đà", "anh nghĩa bình đà":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "Thăn bình đà(anh Nghĩa)" (hoặc "Thăn bình đà"). Tuyệt đối không nhầm sang khách khác.
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "52 TRẦN THÁI TÔNG":
-     + Nếu người nói đọc là "52", "năm hai", "năm mươi hai", "52 trần thái tông", "trần thái tông 52":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "52  trần thái tông".
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "MINH TRANG":
-     + Nếu người nói đọc là "Minh", "minh", "Minh Trang", "minh trang":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "Minh trang".
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "TRUNG KÍNH" / "BẾP TRUNG KÍNH":
-     + Nếu người nói đọc là "Trung Kính", "trung kính", "bếp Trung Kính", "bếp trung kính":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "Trung kính".
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "THÁI HÀ":
-     + Nếu người nói đọc là "Thái Hà", "thái hà", "quán thái hà", "anh thái hà":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "Thái hà".
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "ANH THẮNG PHỐ CỔ":
-     + Nếu người nói đọc là "anh Thắng", "anh thắng", "thắng phố cổ", "anh thắng phố cổ":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "Anh thắng phố cổ".
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "PHỞ ĐÔNG":
-     + Nếu người nói đọc là "phở Đông", "phở đông", "quán phở đông", "anh Đông":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "Phở đông".
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "GIA HƯNG CS2":
-     + Nếu người nói đọc là "Gia Hưng cơ sở 2", "Gia Hưng CS2", "Gia Hưng 2", "Gia Hy CS2":
-     + BẮT BUỘC nhận diện và trả về customer_name là: "Gia Hưng cs2".
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "VĂN KHÊ" VÀ "BÚN HUẾ VĂN KHÊ":
-     + Nếu người nói chỉ đọc là "văn khê", "quán văn khê", "anh văn khê" (KHÔNG có chữ bún huế): BẮT BUỘC trả về customer_name là: "văn khê".
-     + Nếu người nói đọc là "bún huế", "bún huế văn khê", "bun hue", "bún bò huế": BẮT BUỘC trả về customer_name là: "Bún huế van khe".
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "GIẢNG VÕ" / "GIANG VÕ":
-      + Nếu người nói đọc là "Giảng Võ", "giảng võ", "Giang Võ", "giang võ", "quán Giảng Võ", "anh Giảng Võ":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Giảng võ".
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "794 LÁNG HẠ" / "794 ĐƯỜNG LÁNG" (THE INDUSTREE):
-      + Nếu người nói đọc là "794", "794 láng hạ", "794 đường láng", "the industree", "quán 794":
-      + BẮT BUỘC trả về customer_name là: "794 láng hạ" (hoặc "the industree(794 đường láng)"). Tuyệt đối không nhầm sang "Cuốn láng hạ".
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "TRƯỜNG HOÀNG (NGUYỄN KHUYẾN)":
-      + Nếu người nói đọc là "Trường Hoàng", "Nguyễn Khuyến Trường Hoàng", "Trường Hoàng Nguyễn Khuyến", "quán Trường Hoàng":
-      + BẮT BUỘC trả về customer_name là: "Trường hoàng(nguyễn khuyến)".
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CUỐN AN KHÁNH":
-      + Nếu người nói đọc là "An Khang", "an khang", "ankhang", "An khánh", "an khanh", "ankhanh", "Cuốn an khang", "quán An Khang":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Cuốn an khánh".
-
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "TRƯỜNG HOÀNG (NGUYỄN KHUYẾN)":
-      + Nếu người nói đọc là "Trường Hoàng", "Nguyễn Khuyến Trường Hoàng", "Trường Hoàng Nguyễn Khuyến", "quán Trường Hoàng":
-      + BẮT BUỘC trả về customer_name là: "Trường hoàng(nguyễn khuyến)".
-
-2. Bóc tách chi tiết các mặt hàng thịt (items) từ GIỌNG NÓI và HÌNH ẢNH MÀN HÌNH CÂN ĐIỆN TỬ:
-   - Tên món thịt (name) - QUY TẮC SỐNG CÒN (BẮT BUỘC LUÔN PHẢI CÓ TÊN MÓN THỊT):
-     + Trong phần lớn video cân thịt của nhân viên, nhân viên thường chỉ đọc tên khách hoặc chỉ đọc số cân (ví dụ: "Cô Hải 6.42", "chị Tuyết 11.48", "Hương 14.28"...) hoặc đọc tên thịt rất nhanh, nuốt âm, thậm chí KHÔNG ĐỌC TÊN THỊT mà chỉ chĩa camera vào đĩa cân.
-     + TUYỆT ĐỐI CẤM để trống tên món thịt (name) hoặc trả về danh sách items rỗng khi thấy có miếng thịt trên cân hoặc màn hình cân có số kg!
-     + BẮT BUỘC nhận diện tên món thịt (name) bằng cách KẾT HỢP:
-       1) LẮNG NGHE KỸ TỪNG ÂM THANH: Nghe xem có từ chỉ loại thịt nào không (chín, lạm, thăn, tái, gầu, bắp, xô, sườn, nạc, vai xay, bê...).
-       2) QUAN SÁT TRỰC TIẾP MIẾNG THỊT TRÊN MẶT ĐĨA CÂN TRONG VIDEO (THỊ GIÁC AI):
-          * Miếng thịt đã luộc chín (màu nâu sẫm, da săn, để nguyên tảng chín hoặc thái sẵn) -> Tên món (name): "Thịt chín".
-          * Miếng thịt nạc đỏ tươi, thớ dài mịn không mỡ -> Tên món (name): "Thăn" (hoặc "Tái").
-          * Miếng thịt có lớp mỡ trắng/vàng viền quanh hoặc xen kẽ thớ nạc -> Tên món (name): "Gầu Bò" (hoặc "Thịt lạm", "Lạm gầu").
-          * Khối thịt bắp tròn có vân hoa gân đan xen -> Tên món (name): "Bắp Bò".
-          * Tảng sườn, dẻ sườn có xương -> Tên món (name): "Sườn".
-          * Thịt xay nhuyễn -> Tên món (name): "Vai xay".
-          * Thịt bê có da mỏng dính -> Tên món (name): "Bê ba chỉ".
-       3) NẾU HÌNH ẢNH MỜ HOẶC CAMERA CHỈ CHĨA VÀO ĐỒNG HỒ CÂN:
-          Dựa vào khách hàng quen để điền tên món thịt mà khách đó chuyên lấy:
-          - Nếu là khách Hương (Hương Mỹ Đình): BẮT BUỘC điền món "xô" (giá mặc định 230000).
-          - Nếu là khách Chị Tuyết:
-            * KHI LẤY SỐ LƯỢNG LỚN > 10KG (ví dụ: 18.49kg, 15kg, 20kg...): BẮT BUỘC AUTO LÀ MÓN "Thịt chín" (hoặc "Chín").
-            * KHI NGƯỜI NÓI KHÔNG ĐỌC TÊN THỊT (chỉ đọc tên khách hoặc chỉ đọc số cân): BẮT BUỘC AUTO LÀ MÓN "Thịt chín" (hoặc "Chín").
-            * KHI GỬI LẠI / TRẢ HÀNG (người nói đọc "gửi lại", "trả về", "gửi về", "trả lại"): BẮT BUỘC MẶC ĐỊNH điền món "Thịt chín" (hoặc "Chín").
-            * CHỈ ĐIỀN MÓN KHÁC (như "Thăn", "Tái") khi người nói NÓI RÕ TÊN MÓN ĐÓ VÀ số lượng <= 10kg.
-          - Nếu là khách Cồ Hải: Điền món "Thịt lạm" (hoặc "Lạm gầu").
-          - Nếu là khách Phở Tưởng (chị Luyến): Điền món "Gầu Bò" (hoặc "Thịt lạm").
-          - Nếu là khách Thăn Bình Đà (Anh Nghĩa): Điền món "Thăn".
-          - Khách khác: Chọn loại thịt phù hợp nhất trong danh sách các món thường bán: [${productNamesList}].
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "VAI" -> "LẠC VAI":
-     + Nếu người nói đọc là "vai", "thịt vai", "lạc vai", "vai bò": Tên món thịt (name) BẮT BUỘC trả về là: "Lạc vai".
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "THỊT CHÍN" / "CHÍN" (CỰC KỲ QUAN TRỌNG):
-     + Nếu người nói đọc từ "chín", "thịt chín", "bò chín" (ví dụ: "chín chị tuyết lấy thêm 1.56", "chín một phẩy năm sáu", "thịt chín 2 cân", "chín lấy thêm..."):
-     + BẮT BUỘC hiểu từ "chín" ở đây là MÓN THỊT CHÍN (không phải số 9 hay từ chỉ trạng thái). Tên món thịt (name) BẮT BUỘC trả về là: "Thịt chín".
-     + Các từ ngữ hành động như "lấy thêm", "lấy", "của", "giao thêm", "đưa thêm" chỉ là lời nói hành động, TUYỆT ĐỐI KHÔNG đưa vào tên món thịt.
-   - QUY TẮC ĐẶC THÙ CHO KHÁCH "CHỊ TUYẾT" (CỰC KỲ QUAN TRỌNG):
-      + Khi video là của khách "Chị Tuyết" (hoặc "Tuyết", "quán Tuyết"):
-      + NẾU SỐ LƯỢNG LỚN > 10KG (ví dụ: 18.49kg, 12kg, 15.7kg, 20kg...): BẮT BUỘC AUTO TÊN MÓN THỊT (name) LÀ: "Thịt chín".
-      + NẾU NGƯỜI NÓI KHÔNG ĐỌC TÊN THỊT (người nói chỉ đọc tên khách hoặc chỉ đọc số cân, hoặc chỉ chĩa camera vào cân): BẮT BUỘC AUTO TÊN MÓN THỊT (name) LÀ: "Thịt chín".
-      + KHI LÀ ĐƠN GỬI LẠI / GỬI VỀ / TRẢ HÀNG / TRẢ VỀ: BẮT BUỘC AUTO TÊN MÓN THỊT (name) LÀ: "Thịt chín".
-      + TUYỆT ĐỐI KHÔNG tự ý điền "Thăn", "Thăn bò", "Tái" khi khách Chị Tuyết lấy > 10kg hoặc khi không đọc rõ tên thịt!
-    - QUY TẮC ĐẶC THÙ CHO KHÁCH "HƯƠNG" (CỰC KỲ QUAN TRỌNG):
-     + Nếu trong video đọc tên khách là "Hương" (hoặc "Chị Hương", "cô Hương", "Hương Mỹ Đình"...) và có số cân thịt nhưng KHÔNG ĐỌC TÊN THỊT (ví dụ người nói chỉ đọc: "Hương 5 cân", "Hương bốn phẩy hai cân", "chị Hương 3 cân rưỡi", hoặc chỉ quay cân cho Hương):
-       * Tên món thịt (name) BẮT BUỘC trả về là: "xô" (hoặc "thịt xô").
-       * Đơn giá (price): nếu không có giá khác, mặc định là 230000 (230k).
-       * Thành tiền (amount) = 230000 * số cân.
-   - ĐẶC BIỆT PHÂN BIỆT RÕ THỊT LẠM VÀ LẠM GẦU:
-     + Nếu người nói đọc là "lạm" (hoặc "nạm", "thịt lạm"): BẮT BUỘC ghi đúng tên là "Thịt lạm".
-     + Nếu người nói đọc là "lạm gầu" (hoặc "lạm gàu", "nạm gầu", "lạm và gầu"): BẮT BUỘC ghi đúng tên là "Lạm gầu", tuyệt đối không được nhầm lẫn hay rút gọn.
-   - QUY TẮC ĐẶC BIỆT CHO GẦU BÒ (KHI ĐỌC RẤT NHANH, NUỐT CHỮ, LƯỚT ÂM):
-     + Trong video, người nói có thể nói rất nhanh, lướt giọng hoặc nuốt chữ nghe thành "gâu", "gầu", "gàu", "gâu bò", "thịt gầu", "thịt gâu", "gầu bò"... (chỉ cần không đi kèm từ "lạm"):
-     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Gầu Bò".
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "BÊ" (CỰC KỲ QUAN TRỌNG):
-     + Nếu trong video người nói đọc là "bê", "thịt bê", "bê ba chỉ":
-     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Bê ba chỉ".
-
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "DIỀM BÒ" (CỰC KỲ QUAN TRỌNG - CHỦ BUÔN ĐÃ ĐỔI DIỀM THĂN THÀNH DIỀM BÒ):
-     + Bất kể người nói đọc là "diềm", "thịt diềm", "diềm bò", "diềm thăn", "diềm thăn bò": Tên món thịt (name) BẮT BUỘC chuẩn hóa và trả về là: "Diềm bò".
-     + Nếu người nói đọc là "diềm thái", "diềm bò thái", "diềm thăn thái": Tên món thịt (name) BẮT BUỘC chuẩn hóa và trả về là: "Diềm bò thái".
-     + TUYỆT ĐỐI CẤM trả về "Thăn bò", "Thăn" hay "Diềm thăn" khi người nói nhắc đến diềm hoặc diềm thăn!
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "LÁ VAI" (LÁ / LA):
-     + Nếu trong video người nói đọc là "lá", "la", "lá vai", "la vai", "thịt la", "thịt lá", "thịt la vai", "thịt lá vai":
-     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Lá vai". Tuyệt đối không ghi "thịt la vai" hay nhầm sang "Lạc vai".
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "BÒ XAY" (VAI XAY / BÒ XAY):
-     + Nếu trong video người nói đọc là "bò xay", "thịt bò xay", "vai xay", "thịt vai xay", "xay":
-     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "bò xay".
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "THĂN BÒ":
-     + Nếu trong video người nói đọc là "thăn", "thịt thăn", "thăn bò":
-     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Thăn bò".
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "TÁI (BÒ)" (THỊT TÁI):
-     + Nếu trong video người nói đọc là "tái", "thịt tái", "bò tái" (ví dụ: "tái 1 9 5", "tái một phẩy chín năm", "thịt tái 2 cân"):
-     + BẮT BUỘC nhận diện tên món thịt (name) là: "Tái (bò)".
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "BẮP BÒ" VÀ "BẮP GIÂY" (CỰC KỲ QUAN TRỌNG):
-     + Nếu trong video người nói đọc là "bắp giây", "bắp dây", "bap giay": BẮT BUỘC trả về: "Bắp giây".
-     + Nếu trong video người nói đọc là "bắp", "thịt bắp", "bắp bò", "bắp hoa", "quả bắp", "bap" (ví dụ: "bắp 1.6", "bắp 1 6", "bắp 300", "bắp 2 cân", "chị Tuyết bắp...", "trả bắp...", "bắp..."):
-     + BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Bắp bò". Tuyệt đối không chỉ để là "bắp" cụt lủn hay nhầm sang loại thịt khác.
-   - QUY TẮC ĐẶC BIỆT CHO MÓN "XG BÒ" / "XƯƠNG BÒ" (CỰC KỲ QUAN TRỌNG):
-     + Nếu trong video người nói đọc là "x", "xg", "xg bò", "xương", "xương bò": BẮT BUỘC trả về tên là: "Xg Bò".
-     + XG BÒ KHÔNG BAO GIỜ LÀ 1 KG HAY 1.5 KG, AUTO LÀ 5 KG, 10 KG, 15 KG!
-     + Nếu nghe hoặc nhìn thấy số cân cạnh món x/xg là 1 hoặc 1.0 -> BẮT BUỘC AUTO nhận diện là 10 (10 kg).
-     + Nếu nghe hoặc nhìn thấy số cân cạnh món x/xg là 1.5 -> BẮT BUỘC AUTO nhận diện là 15 (15 kg).
-     + Nếu là 5 -> nhận diện là 5 (5 kg).
-
-   - Khối lượng / Số lượng (quantity) - QUY TẮC QUAN TRỌNG KHI ĐỌC SỐ CÂN VÀ NHÌN MÀN HÌNH CÂN ĐIỆN TỬ:
-     + QUY TẮC ĐẶC BIỆT: ĐỌC TỪNG CHỮ SỐ LIÊN TIẾP (CÂN ĐIỆN TỬ BỎ DẤU CHẤM/PHẨY):
-       * Trong thực tế cân thịt, người đọc thường đọc rất nhanh các chữ số liên tiếp hiển thị trên cân điện tử 2 số lẻ:
-       * KHI ĐỌC 3 CHỮ SỐ LIÊN TIẾP (dạng X Y Z): BẮT BUỘC HIỂU LÀ X.YZ kg:
-         - Ví dụ: "tái 1 9 5" -> Món: "Tái", Khối lượng (quantity): 1.95 (nghĩa là 1.95 kg).
-         - Ví dụ: "1 9 5" hoặc "một chín năm" -> quantity: 1.95.
-         - Ví dụ: "4 8 4" hoặc "bốn tám tư" -> quantity: 4.84.
-         - Ví dụ: "3 7 0" hoặc "ba bảy mươi" -> quantity: 3.7 (3.70 kg).
-         - Ví dụ: "2 4 5" -> quantity: 2.45.
-       * KHI ĐỌC 4 CHỮ SỐ LIÊN TIẾP (dạng AB CD): BẮT BUỘC HIỂU LÀ AB.CD kg:
-         - Ví dụ: "1 6 9 2" hoặc "mười sáu chín hai" hoặc "một sáu chín hai" -> quantity: 16.92 (nghĩa là 16.92 kg).
-         - Ví dụ: "2 0 1 5" hoặc "hai mươi mười lăm" -> quantity: 20.15.
-         - Ví dụ: "1 2 5 0" hoặc "mười hai năm mươi" -> quantity: 12.5.
-         - Ví dụ: "2 4 8 0" -> quantity: 24.8.
-       * TUYỆT ĐỐI KHÔNG để quantity là 195 hay 1692 (không có miếng thịt nào nặng 195kg hay 1692kg)!
-     + TRƯỜNG HỢP NÓI RÕ CHỮ "CÂN" / "PHẨY" / "LẺ": (ví dụ: "5 cân" -> 5, "mười cân rưỡi" -> 10.5, "hai phẩy ba cân" -> 2.3, "1 phẩy 79" -> 1.79, "3 lạng" -> 0.3): Lấy số lượng theo lời đọc.
-     + QUY TẮC ĐẶC BIỆT TỪ "LẺ" (CÁCH NÓI DÂN GIAN SỐ THẬP PHÂN KG):
-       * Khi người nói dùng từ "lẻ" giữa 2 số, nghĩa là dấu phẩy thập phân (giống "phẩy"):
-         - "6 lẻ 69" → quantity: 6.69 (tức là 6.69 kg)
-         - "4 lẻ 50" hoặc "4 lẻ 5" → quantity: 4.5 (tức là 4.50 kg)
-         - "3 lẻ 05" hoặc "3 lẻ 5" → quantity: 3.05 (tức là 3.05 kg)
-         - "1 lẻ 20" → quantity: 1.2 (tức là 1.20 kg)
-         - "10 lẻ 35" → quantity: 10.35
-       * QUY TẮC: [số nguyên] lẻ [số sau dấu thập phân] = [số nguyên].[số sau dấu thập phân] kg.
-       * Nếu số sau "lẻ" là 1 chữ số (ví dụ "lẻ 5") thì hiểu là .50 (nửa cân), trừ khi ngữ cảnh rõ ràng là .05.
-     + TRƯỜNG HỢP 2 (NGƯỜI DÙNG QUAY VIDEO NHƯNG KHÔNG NÓI SỐ CÂN HOẶC ĐỌC KHÔNG RÕ):
-       * BẮT BUỘC QUAN SÁT MÀN HÌNH CÂN ĐIỆN TỬ TRÊN KHUNG HÌNH VIDEO:
-       * Trong video, người quay đặt miếng thịt lên cân điện tử tính tiền và camera quay rõ mặt cân.
-       * Hãy nhìn vào màn hình LED kỹ thuật số (đèn LED đỏ hoặc xanh) của cân:
-         1) Ô "KHỐI LƯỢNG (kg)" (ô trên cùng, ví dụ hiển thị số LED đỏ "1.79", "2.05", "0.86"):
-            => ĐỌC CHÍNH XÁC CON SỐ ĐANG HIỂN THỊ ĐỂ LÀM SỐ CÂN (quantity). Ví dụ: màn hình LED hiện "1.79" -> quantity: 1.79.
-         2) Ô "ĐƠN GIÁ (đ/kg)" (ô ở giữa, ví dụ hiển thị "200"): Nếu người nói không đọc giá khác, lấy đơn vị nghìn đồng là 200000 VND.
-         3) Ô "THÀNH TIỀN (đ)" (ô dưới cùng, ví dụ hiển thị "3.58" hoặc "358"): Nếu có hiển thị, đây là thành tiền (358000 VND).
-       * TUYỆT ĐỐI KHÔNG để quantity = 1 nếu trên mặt cân điện tử đang hiển thị số cân rõ ràng!
-   - Đơn giá (price): Nếu người nói có đọc đơn giá (ví dụ: "giá 240", "trăm tám một cân" -> 180000) hoặc đọc từ ô Đơn giá trên cân. Nếu không có giá, để null.
-   - Thành tiền (amount): Nếu người nói có đọc tổng tiền hoặc đọc từ ô Thành tiền trên cân. Nếu không có thì để null.
-
-3. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):
-   - Khi người nói dùng các từ ngữ như: "gửi lại", "gửi về", "trả hàng", "trả về", "trả lại", "hàng trả", "thu hồi", "bắn về", "quay đầu", "đổi trả" (ví dụ: "chín chị tuyết lấy thêm 1.56 trả về...", "gửi lại 2 cân gầu", "chín gửi về một phẩy năm sáu", "chị Tuyết gửi về...", "trả hàng 2 cân gầu", "trả về 3 cân thịt chín", "gửi lại 1.2kg thăn"...):
-   - BẮT BUỘC nhận diện đây là ĐƠN TRẢ HÀNG (khách gửi hàng trả lại để giảm trừ nợ, KHÔNG phải đơn mua mới):
-     + BẮT BUỘC đặt "is_return": true (đơn bán bình thường là false).
-     + BẮT BUỘC đặt "note": "[Trả lại hàng]" (nếu có nội dung thêm thì ghép vào sau, ví dụ: "[Trả lại hàng] Khách gửi lại").
-     + Vẫn bóc tách chính xác customer_name và items (tên món thịt, số cân, giá, tiền).
-     + Các từ ngữ "gửi lại", "gửi về", "trả hàng", "trả về", "trả lại", "hàng trả" CHỈ DÙNG ĐỂ XÁC ĐỊNH LOẠI ĐƠN, TUYỆT ĐỐI CẤM đưa vào tên khách hàng (customer_name) hay tên món thịt (name)!
-      + ĐẶC BIỆT LƯU Ý CHO KHÁCH "CHỊ TUYẾT": Nếu là khách Chị Tuyết gửi lại / gửi về / trả hàng mà người nói không đọc tên thịt, BẮT BUỘC MẶC ĐỊNH tên món thịt (name) là: "Thịt chín" (hoặc "Chín").
-
-3.1. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN NHẬP HÀNG / MUA THỊT / NHẬP VÀO (CỰC KỲ QUAN TRỌNG):
-   - ĐẶC BIỆT LƯU Ý PHÂN BIỆT ĐỐI TÁC:
-     + NẾU ĐỐI TÁC LÀ KHÁCH HÀNG (người mua thịt quen thuộc trong danh bạ khách hàng, ví dụ các quán phở, quán bún, chị Hạnh sân bóng...):
-       * Khi người nói đọc hoặc có chữ "nhập hàng", "nhập thịt", "nhập về": BẢN CHẤT LÀ KHÁCH HÀNG TRẢ HÀNG (để giảm trừ nợ, KHÔNG phải đơn nợ mới và KHÔNG phải nhập NCC)!
-       * BẮT BUỘC đặt "is_return": true.
-       * BẮT BUỘC đặt "is_import": false.
-       * BẮT BUỘC đặt "note": "NHẬP HÀNG".
-     + CHỈ KHI ĐỐI TÁC LÀ NHÀ CUNG CẤP (lò mổ, trại bò, người giao thịt đầu vào cho chủ buôn):
-       * BẮT BUỘC đặt "is_import": true.
-       * BẮT BUỘC đặt "is_return": false.
-       * BẮT BUỘC đặt "note": "Nhập hàng".
-       * Bóc tách tên nhà cung cấp vào "customer_name".
-   - Các từ ngữ "nhập", "mua", "nhập vào", "nhập hàng", "nhập thịt" CHỈ DÙNG ĐỂ XÁC ĐỊNH LOẠI ĐƠN, TUYỆT ĐỐI CẤM đưa vào tên món thịt hay tên đối tác!
-
-4. Lưu ý:
-   - Người nói có thể dùng khẩu ngữ tiếng Việt (cân = kg, lạng = 0.1kg, rưỡi = .5, chẵn...).
-   - BẮT BUỘC kết hợp cả nghe giọng nói và nhìn hình ảnh màn hình LED đỏ của cân điện tử để đảm bảo luôn lấy được số cân chính xác nhất.
-
-Chỉ trả về JSON theo đúng cấu trúc:
-{
-  "customer_name": "Tên khách hàng hoặc tên nhà cung cấp (nếu nhập hàng) hoặc null",
-  "is_return": false,
-  "is_import": false,
-  "note": "Ghi chú nếu có (nếu là nhập hàng thì ghi 'Nhập hàng', nếu là đơn trả thì là '[Trả lại hàng]')",
-  "items": [
-    {
-      "name": "Tên món thịt",
-      "quantity": 2.5,
-      "price": 240000,
-      "amount": 600000
-    }
-  ]
-}`;
+IV. ĐƠN TRẢ HÀNG & NHẬP HÀNG:
+- Trả hàng ("gửi lại", "gửi về", "trả hàng", "trả về", "hàng trả", "quay đầu"): Đặt "is_return": true, "note": "[Trả lại hàng]". (Khách Chị Tuyết trả hàng không đọc tên thịt => auto "Thịt chín").
+- Nhập hàng:
+  + Nếu là Khách hàng quen đọc "nhập hàng/nhập thịt": bản chất là khách trả hàng => "is_return": true, "is_import": false, "note": "NHẬP HÀNG".
+  + Nếu là Nhà cung cấp / Lò mổ: "is_import": true, "is_return": false, "note": "Nhập hàng", gán customer_name là tên nhà cung cấp.`;
     } else {
-      promptText = `Bạn là trợ lý AI chuyên gia hàng đầu về đọc và phân tích hóa đơn, tích kê bán buôn thịt bò viết tay của cửa hàng thịt Trường Nga (Bò - Trâu - Bê).
+      systemInstruction = `Bạn là trợ lý AI chuyên gia hàng đầu về đọc và phân tích hóa đơn, tích kê bán buôn thịt bò viết tay (Trường Nga).
 
-DANH SÁCH KHÁCH HÀNG QUEN THUỘC CỦA CHỦ BUÔN:
-[${customerNamesList || 'Chưa có'}]
+DANH BẠ THAM CHIẾU CỬA HÀNG:
+- Khách hàng quen: [${customerNamesList || 'Chưa có'}]
+- Nhà cung cấp: [${supplierNamesList || 'Chưa có'}]
+- Món thịt thường bán: [${productNamesList || 'Chưa có'}]
 
-DANH SÁCH NHÀ CUNG CẤP QUEN THUỘC (NHẬP HÀNG / LÒ MỔ):
-[${supplierNamesList || 'Chưa có'}]
+0. KIỂM TRA BỐ CỤC HÓA ĐƠN BÁN HÀNG:
+- Chỉ bóc tách khi ảnh có bố cục hóa đơn bán hàng tiêu chuẩn: Có tiêu đề in "HÓA ĐƠN BÁN HÀNG", bảng biểu kẻ ô chia cột (STT, Tên hàng, Số lượng, Đơn giá, Thành tiền) hoặc dòng in "Tên khách hàng:".
+- Nếu là giấy nháp trắng, mặt sau/mặt lưng hóa đơn, số tính nhẩm linh tinh => Đặt "is_valid_invoice": false, "customer_name": null, "items": [], "note": "Ảnh không có bố cục hóa đơn bán hàng (giấy nháp/mặt sau)".
 
-DANH SÁCH CÁC MÓN THỊT THƯỜNG BÁN:
-[${productNamesList || 'Chưa có'}]
+1. BÓC TÁCH MÓN THỊT & SỐ LIỆU:
+- Thứ tự dòng: Bắt buộc bóc tách từ trên xuống dưới (Top-to-Bottom), tuyệt đối không đảo lộn dòng (dòng 1 là items[0], dòng 2 là items[1]...).
+- Tự động xoay ảnh nếu ảnh chụp nghiêng hoặc ngược chiều.
+- Chuẩn hóa tên món thịt viết tay:
+  + "bắp" / "Bắp" => "Bắp Bò".
+  + "Gầu" / "Gàu" / "Gau" => "Gầu Bò".
+  + "Nam" / "Nạm" / "Lạm" => "Thịt lạm" (nếu ghi "lạm gầu" => "Lạm gầu").
+  + "bằng" / "quả bằng" => "quả bằng".
+  + "Trắng" / "quả trắng" => "quả trắng".
+  + "Quạt" => "quạt".
+  + "Thăn" / "thăn bò" => "Thăn bò".
+  + "diềm" / "diềm thăn" / "diềm bò" / "dt" => "Diềm bò" (nếu có chữ "thái" => "Diềm bò thái"). TUYỆT ĐỐI CẤM trả về "Thăn bò".
+  + "xg" / "x" / "xương" => "Xg Bò". Xương bò luôn chẵn 5, 10, 15 kg (viết giống 1 hoặc 1.0 => auto 10kg; 1.5 => auto 15kg; 5 => 5kg).
+  + "Tai" / "Tái" => "Tái (bò)".
+  + "bắp giây" / "bắp dây" => "Bắp giây".
+  + "Lá" / "lá vai" / "thịt la" => "Lá vai".
+  + "vai" / "lạc vai" => "Lạc vai" (KHÔNG nhầm sang "Lá vai" hay "bò xay").
+  + "Sườn" => "Sườn".
+  + "Sườn xg" (kể cả chữ viết xG/KG/kg có gạch chân dễ nhầm đơn vị) => "Sườn xg".
+  + "bò xay" / "vai xay" => "bò xay".
+  + "bê" / "bê ba chỉ" => "Bê ba chỉ".
+  + "chín" / "thịt chín" => "Thịt chín".
 
-HÃY QUAN SÁT VÀ BÓC TÁCH THEO ĐÚNG CÁC QUY TẮC BẮT BUỘC SAU:
+2. QUY TẮC ĐƠN NỢ NHANH & SỐ TIỀN:
+- Các con số hàng trăm (959, 836, 341...) HOÀN TOÀN KHÔNG CÓ DẤU CHẤM/PHẨY thập phân, phía dưới có đường gạch chân tổng tiền (ví dụ tổng 2136):
+  => ĐÂY LÀ TIỀN (VNĐ = số * 1000), KHÔNG PHẢI SỐ CÂN (CẤM biến thành 9.59kg hay 8.36kg).
+  => Trả về quantity: null, price và amount = số * 1000 (ví dụ 959 => 959000).
+- Hóa đơn chỉ có các con số tiền cộng lại không ghi tên món (ví dụ 756, 1118, 390 => tổng 2264):
+  => "is_quick_debt": true, "sub_amounts": [756000, 1118000, 390000], items gồm 1 dòng: name: "Tiền hàng", quantity: null, price: 2264000, amount: 2264000.
+- Hóa đơn chỉ có 1 con số tổng duy nhất ở đáy (ví dụ 1146, 3814): Trả về 1 dòng "Thịt lẻ" với quantity: 1, price = amount = tổng * 1000.
+- Hóa đơn có số kg thập phân (ví dụ 5.2, 1.95) và đơn giá: amount = Math.round(quantity * price).
 
-0. QUY TẮC BẮT BUỘC: KIỂM TRA BỐ CỤC HÓA ĐƠN BÁN HÀNG (CỰC KỲ QUAN TRỌNG):
-   - CHỈ QUÉT VÀ BÓC TÁCH KHI ẢNH CÓ BỐ CỤC CỦA MỘT TỜ HÓA ĐƠN BÁN HÀNG TIÊU CHUẨN:
-     + Mặt trước tờ hóa đơn có in tiêu đề "HÓA ĐƠN BÁN HÀNG" (hoặc "PHIẾU GIAO HÀNG", "CHUYÊN: BÁN BUÔN - BÁN LẺ...").
-     + Có bảng biểu kẻ ô chia các cột rõ ràng (STT, Tên hàng hóa, Số lượng, Đơn giá, Thành tiền) hoặc có dòng in sẵn "Tên khách hàng: ...".
-   - CÁC TRƯỜNG HỢP TUYỆT ĐỐI KHÔNG ĐƯỢC QUÉT (ĐÂY KHÔNG PHẢI HÓA ĐƠN BÁN HÀNG):
-     + Ảnh chụp mẩu giấy nháp trắng trơn, không có tiêu đề in hóa đơn, không có khung bảng biểu.
-     + Ảnh chụp MẶT SAU (MẶT LƯNG) của tờ hóa đơn để viết nháp vài con số linh tinh (mặt sau giấy trắng, chữ in hóa đơn bị lộn ngược mờ ở phía sau).
-     + Giấy xé tay tự do chỉ viết vài con số tính nhẩm nghuệch ngoạc không có bố cục hóa đơn.
-     => KHI GẶP CÁC ẢNH NÀY: TUYỆT ĐỐI KHÔNG ĐƯỢC QUÉT / BÓC TÁCH CÁC CON SỐ NHÁP THÀNH ĐƠN HÀNG!
-     => BẮT BUỘC TRẢ VỀ:
-        {
-          "is_valid_invoice": false,
-          "customer_name": null,
-          "invoice_date": null,
-          "is_return": false,
-          "note": "Ảnh không có bố cục hóa đơn bán hàng (giấy nháp/mặt sau)",
-          "items": []
-        }
+3. NHẬN DIỆN TÊN KHÁCH HÀNG & NÉT CHỮ VIẾT TAY:
+- "phở Tưởng" (chữ g có đuôi sổ thòng sâu xuống dưới dòng) => "Phở tưởng(chị Luyến)" (TUYỆT ĐỐI CẤM đọc thành "Phở Tiến").
+- "Cô Thảo" / "Cô Hảo" / "Thảo" / "Hảo" / "Thầy" (nét chữ viết tay "Cô Thảo" hay bị nhìn nhầm thành "Cô Hảo") => "Cô thảo(thầy)".
+- "Van khê" / "Văn Khê" / "Van Hle" / "Van Hie" / "Van khz" / "Van khe" (chữ viết tay "Van khê" hay bị nhìn nhầm thành "Van Hle" / "Van Hie") => "văn khê" (nếu có chữ "Bún Huế" đi kèm mới là "Bún huế văn khê", còn ghi riêng lẻ "Van khê" / "Văn Khê" / "Van Hle" => "văn khê").
+- "3Mien" / "3 Miền" / "Kim Liên" => "Bếp 3 miền kim liên".
+- Chữ viết tắt "b1" => "Bếp hàng xóm 1"; "b2" => "Bếp hàng xóm 2"; "b3" => "Bếp hàng xóm 3"; "b4" => "Nhà hàng vườn xanh".
+- "Huyền" / "Huyền Đô Nghĩa" => "Huyền Đô Nghĩa" (chỉ quan tâm con số tổng cuối cùng ở đáy => dòng "Thịt lẻ", quantity: 1).
+- "chinga" / "Chị Nga" / "Thúy Nga" => "Chị Thúy Nga".
+- "anh nghĩa" / "bình đà" => "Thăn bình đà(anh Nghĩa)".
+- "An Khang" / "Cuốn an khang" => "Cuốn an khánh".
+- "ba luu" / "bà lưu" / "ba liu" => "Bà lưu".
+- "Nguyễn Khuyến" đi kèm "Trường Hoàng" => "Nguyễn khuyến trường hoàng".
+- Chỉ có "Nguyễn Khuyến" đơn độc (KHÔNG có Hoàng/Trường) => "Sành lẩu CS1".
+- Số "52" (hoặc "52 trần thái tông") => "52  trần thái tông".
+- "minh" / "mih" / "Minh trang" => "Minh trang".
+- "Tuy kh" / "Trung kh" / "Trung kính" => "Trung kính".
+- "Thái Hà" / "Hkú Hà" / "Thai Ha" => "Thái hà".
+- "Hà Trì" => "Hà Trì" (KHÔNG nhầm sang "Chị hạnh sân bóng hà trì" và KHÔNG nhầm sang "Cồ hải").
+- "Hạnh" / "chị Hạnh sân bóng" => "Chị hạnh sân bóng hà trì".
+- "Cồ Hải" / "Cổ Hải" => "Cồ hải".
+- "Giang Võ" / "Giang Đỏ" / "Giảng Võ" => "Giảng võ".
+- Có 3 chữ số "794" (794 lang ha / 794 láng hạ) => "794 láng hạ" (TUYỆT ĐỐI CẤM nhận diện thành "Cuốn láng hạ").
+- Tiêu đề "LÒ MỔ MINH THUẤN" / "LÒ MỔ MINH THUẦN" => Nhà cung cấp "Minh thuần" (viết tắt B: Bắp bò, sx/sn: Sườn).
+- Ngày hóa đơn: Đọc định dạng DD/MM/YYYY. Bỏ qua nét gạch chéo khóa sổ.
 
-1. QUY TẮC BÓC TÁCH MÓN THỊT & SỐ LIỆU (KHI ĐÃ LÀ HÓA ĐƠN HỢP LỆ):
-   - BẮT BUỘC BÓC TÁCH CÁC MÓN THỊT THEO ĐÚNG THỨ TỰ TỪ TRÊN XUỐNG DƯỚI (Top-to-Bottom order) của cột "Tên hàng hóa" trên tờ hóa đơn:
-     + Tuyệt đối KHÔNG ĐƯỢC ĐẢO LỘN thứ tự các món thịt!
-     + Dòng viết đầu tiên ở trên cùng của hóa đơn BẮT BUỘC là phần tử ĐẦU TIÊN (items[0]).
-     + Dòng thứ 2 là items[1], dòng thứ 3 là items[2], dòng thứ 4 là items[3]... lần lượt theo đúng thứ tự các dòng kẻ từ trên xuống dưới.
-   - LƯU Ý VỀ HƯỚNG ẢNH (ẢNH BỊ XOAY NGANG 90 ĐỘ HOẶC XOAY DỌC):
-     + Ảnh chụp giấy nháp hoặc tích kê có thể bị chụp quay ngang 90 độ, quay ngược 180 độ hoặc quay 270 độ.
-     + BẮT BUỘC tự động xoay và định hướng theo chiều đọc của chữ viết tay để nhận diện đúng thứ tự các dòng từ trên xuống dưới (ví dụ dòng trên là "bắp 1.6", dòng dưới là "gầu 3.27").
-   - Dù hóa đơn có ghi giá tiền hay chỉ ghi tên món và số cân, hãy bóc tách TẤT CẢ các dòng món thịt nhìn thấy được.
-   - PHÂN TÍCH ĐẶC TẢ NÉT CHỮ VIẾT TAY CỦA CÁC MÓN THỊT (CỰC KỲ QUAN TRỌNG):
-     + "bắp" / "bap" / "Bắp": Chữ "b" nét sổ thẳng đứng cao, chữ "a-p" viết liền thảo, nét đuôi chữ "p" sổ dài xuống dưới dòng kẻ, dấu sắc hoặc mũ nhẹ trên chữ "a". Số cân viết cạnh (ví dụ: "- 1,6" hoặc "1.6" hoặc "1,6"): BẮT BUỘC nhận diện tên là: "Bắp Bò", số lượng (quantity): 1.6.
-     + "Gầu" / "Gau" / "gầu bò" / "gàu": Chữ "G" viết hoa thảo uốn lượn cong tròn rất to và điệu đà (nét cong rộng như chữ C lớn có móc lượn vào), nối tiếp "a-u" viết thảo liền mạch, có dấu huyền trên "a". Số cân viết cạnh (ví dụ: "3,27" hoặc "3.27"): BẮT BUỘC nhận diện tên là: "Gầu Bò", số lượng (quantity): 3.27.
-     + "Nam" / "Nạm" / "Lạm": Chữ "N" viết đứng 2 nét hoặc chữ "L", chữ "am" nối liền tròn -> BẮT BUỘC trả về: "Nam" (hoặc "Thịt lạm" / "Nạm").
-     + "bằng" / "bang" / "quả bằng": Chữ "b" sổ thẳng đứng cao, "ang" có nét đuôi chữ "g" sổ dài thòng xuống dưới dòng, dấu huyền trên "a" -> BẮT BUỘC trả về: "quả bằng".
-     + "Trắng" / "trang" / "quả trắng": Chữ "T" viết hoa thẳng có gạch ngang, chữ "r-a-n-g" với đuôi chữ "g" móc dài xuống dưới, dấu á và dấu sắc trên "a" -> BẮT BUỘC trả về: "quả trắng".
-     + "Quạt" / "quat": Chữ "Q" viết hoa tròn to lượn đuôi ở đáy, "uat" có gạch ngang dứt khoát của chữ "t" -> BẮT BUỘC trả về: "quạt".
-     + "Thăn" / "than" / "thăn bò": Chữ "T" viết hoa có gạch ngang cao, "h-a-n" viết liền nét, dấu á uốn cong trên đầu chữ "a" -> BẮT BUỘC trả về: "Thăn bò".
-     + "diềm" / "diềm thăn" / "diềm bò" / "dt": Chữ "d" cong tròn móc, theo sau là "iềm" hoặc "thăn" -> BẮT BUỘC trả về: "Diềm bò" (nếu có chữ "thái" thì trả về: "Diềm bò thái"). TUYỆT ĐỐI CẤM trả về "Thăn bò" hay "Thăn"!
-     + "xg" / "x" / "xg bò" / "xương bò" / "xương":
-       * Nhận diện tên món: Chữ "x" chéo mềm mại, chữ "g" đuôi móc dài xuống dưới dòng kẻ (hoặc người viết chỉ ghi duy nhất 1 ký tự "x" hoặc "X") -> BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Xg Bò".
-       * QUY TẮC ĐẶC BIỆT BẮT BUỘC VỀ SỐ CÂN (QUANTITY) CỦA "XG BÒ":
-         - Trong nghiệp vụ giao thịt, XG BÒ (XƯƠNG BÒ) KHÔNG BAO GIỜ BÁN 1 KG HAY 1.5 KG! Xương bò luôn luôn được giao theo bọc/túi chẵn cân: AUTO 5 KG, 10 KG, 15 KG (hoặc 20, 25 kg...):
-         - Nếu nét chữ số cân cạnh món x/xg nhìn giống "1" hay "1.0" hay "1,0": BẮT BUỘC AUTO nhận diện là 10 (10 kg), TUYỆT ĐỐI CẤM NHẬN DIỆN LÀ 1 KG! (Do người viết viết số 10 thì nét số 0 bị mờ hoặc viết liền).
-         - Nếu nét chữ số cân cạnh món x/xg nhìn giống "1.5" hay "1,5": BẮT BUỘC AUTO nhận diện là 15 (15 kg), TUYỆT ĐỐI CẤM NHẬN DIỆN LÀ 1.5 KG! (Do người viết viết số 15 nét nối liền bị nhầm thành có dấu phẩy).
-         - Nếu nét chữ số cân là "5" (hoặc "5.0", "5,0"): nhận diện là 5 (5 kg).
-         - Nếu nét chữ số cân là "10": nhận diện là 10 (10 kg).
-         - Nếu nét chữ số cân là "15": nhận diện là 15 (15 kg).
-     + "Tai" hoặc "Tái" (chữ T hoa uốn lượn viết liền chữ ái): BẮT BUỘC trả về tên là "Tái (bò)".
-     + "bắp" hoặc "Bắp": BẮT BUỘC trả về tên là "Bắp bò".
-     + "bắp giây" hoặc "bắp dây": BẮT BUỘC trả về tên là "Bắp giây".
-     + "Lá" / "lá" / "la" / "lá vai" / "la vai" / "thịt la" / "thịt lá" / "thịt la vai": Chữ "L" hoa thảo nét cong cao nối liền chữ "á" hoặc "a" (có thể kèm "vai") -> BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Lá vai".
-      + QUY TẮC ĐẶC BIỆT CHO MÓN "VAI" -> "LẠC VAI":
-        * Khi ở cột Tên hàng hóa trên tích kê / hóa đơn ghi chữ "vai", "Vai", "thịt vai", "thit vai", "lạc vai", "lac vai", "thịt lạc vai":
-        * BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Lạc vai" (để hệ thống khớp chính xác vào sản phẩm "Lạc vai" của cửa hàng).
-        * TUYỆT ĐỐI KHÔNG nhận nhầm sang "Lá vai", "bò xay" hay "Sườn vai" (trừ khi có ghi rõ chữ "xay" hoặc chữ "sườn")!
-      + "Sườn" / "suon" / "sườn bò": Chữ "S" hoa to lượn sóng mềm mại, "ườn" viết liền nét có dấu huyền -> BẮT BUỘC trả về tên là: "Sườn" (nếu có chữ "bò" thì là "Sườn bò").
-       + PHÂN TÍCH ĐẶC TẢ NÉT CHỮ MÓN "SƯỜN XG" (CẢ DẠNG "SƯỜN XG" LẪN "XƯỜN XG"):
-         * Đặc trưng thị giác chữ viết tay:
-           1) Từ thứ 1: Chữ "S" in hoa uốn lượn cong to mềm mại vươn cao, theo sau là nét "ườn" viết thảo có nét dấu huyền "\" khá dài chém nghiêng phía trên, kết thúc bằng chữ "n" móc tròn xuống dòng (AI OCR rất dễ nhìn nhầm thành: "Sườn", "Suon", "Scion", "Sian", "Sùn", "Scòn", "Siơn", hoặc người viết theo phương ngữ địa phương dùng chữ "x" viết thành "xườn", "x lơn", "xldn", "xuan", "xian", "x long").
-           2) Từ thứ 2: Viết tắt "xG" hoặc "xg" (nghĩa là "xương"):
-              - Ký tự đầu: Chữ "x" hai nét chéo giao nhau (viết nhanh nét chéo nhìn giống chữ "k" / "K").
-              - Ký tự sau: Chữ "G" hoa tròn có nét sổ thẳng và CÓ NÉT GẠCH CHÂN NGANG "_" Ở ĐÁY.
-              - CẢNH BÁO OCR CỰC KỲ NGUY HIỂM: Nét viết "xG" (kèm gạch chân) này rất dễ khiến AI OCR nhìn nhầm thành chữ "KG", "kg", "k.g", "x.g", "xq" (và bị AI hiểu lầm thành đơn vị tính Kilogram).
-         * QUY TẮC BẮT BUỘC: Khi ở cột Tên hàng hóa nhìn thấy chữ viết tay dạng:
-           "Sườn xg", "Sườn xG", "Sườn KG", "Sườn kg", "Suon kg", "Suon KG", "Sườn k.g", "Sườn x.g", "Sườn xq", "Scion kg", "Scion xg", "Sian xg", "Sian kg", "Sùn xg", "Sùn kg", "Scòn xg", "Siơn xg", "xườn xg", "xườn xương", "sườn xương", "x lơn x lơng", "xldn xldug", "xlan xg", "xuan xg", "s xg", "s kg":
-           => BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Sườn xg", số lượng (quantity) là con số bên cạnh.
-     + "bò xay" / "bo xay" / "vai xay" / "thịt bò xay" / "xay": BẮT BUỘC trả về tên là: "bò xay".
-      + PHÂN TÍCH NÉT CHỮ MÓN "BÊ" -> "BÊ BA CHỈ" (CỰC KỲ QUAN TRỌNG):
-        * Nét chữ viết tay: Chữ "b" có nét khuyết trên vươn rất cao lên tận mép trên của dòng, thân thẳng đứng, bụng dưới tròn có nét thắt loop nhỏ; chữ "e" viết liền mạch hình bầu dục nhỏ nằm sát bên phải nét thắt, phía trên đầu chữ "e" có nét phẩy hoặc dấu mũ nhỏ (nhìn giống "bê", "be", "bè", "bé", "bc", "b.").
-        * Số cân bên cạnh: Ví dụ "12,2" hoặc "12.2" (số 1 nét móc sổ thẳng, số 2 uốn tròn đầu có nét thắt ở chân, dấu phẩy giữa hai số 2) -> quantity: 12.2.
-        * QUY TẮC BẮT BUỘC: Khi ở cột Tên hàng hóa ghi "bê", "Bê", "be", "bè", "bé", "thịt bê", "bê ba chỉ":
-          => BẮT BUỘC chuẩn hóa và trả về tên món thịt (name) là: "Bê ba chỉ", số lượng (quantity) là số cân bên cạnh (ví dụ 12.2).
-      + "chí", "chín", "thịt chín": BẮT BUỘC trả về tên là: "Thịt chín".
-     + ĐẶC BIỆT PHÂN BIỆT RÕ THỊT LẠM VÀ LẠM GẦU:
-       * Nếu ghi là "lạm", "Lạm", "nạm", "Nạm", "Nam": BẮT BUỘC trả về tên là "Thịt lạm" hoặc "Nam".
-       * Nếu ghi là "lạm gầu", "Lạm gầu", "lạm gàu", "Lạm + gầu", "nạm gầu": BẮT BUỘC trả về đúng tên là "Lạm gầu".
-   - Các món thịt khác: "Xô", "Dẻ", "Lạc", "U", "Tim"... chuẩn hóa theo danh mục món thịt ở trên.
-
-2. QUY TẮC CỐT LÕI: HÓA ĐƠN ĐƠN NỢ NHANH - CÁC CON SỐ HÀNG TRĂM KHÔNG CÓ DẤU PHẨY LÀ TIỀN, CÓ ĐƯỜNG GẠCH CHÂN TỔNG TIỀN (CỰC KỲ QUAN TRỌNG):
-   - ĐẶC ĐIỂM NHẬN DIỆN DẠNG HÓA ĐƠN ĐƠN NỢ NHANH:
-     + Ở cột bên cạnh tên các món thịt (kể cả người viết viết vào cột in sẵn chữ "Số lượng", "Đơn giá", hay "Thành tiền"):
-     + Các con số được viết là CÁC SỐ NGUYÊN HÀNG TRĂM (ví dụ: "959", "836", "341", "150", "200", "500", "100"...).
-     + BẮT BUỘC LƯU Ý: CÁC CON SỐ NÀY HOÀN TOÀN KHÔNG CÓ DẤU PHẨY (,) HAY DẤU CHẤM (.) THẬP PHÂN!
-     + Phía dưới các con số có MỘT ĐƯỜNG GẠCH CHÂN / GẠCH NGANG (────────).
-     + Phía dưới đường gạch chân là MỘT CON SỐ LỚN HƠN (ví dụ: "2136"), chính là TỔNG CỘNG CỦA CÁC CON SỐ PHÍA TRÊN CỘNG LẠI (959 + 836 + 341 = 2136).
-   - NGUYÊN TẮC BẮT BUỘC PHẢI HIỂU VÀ BÓC TÁCH:
-     1) ĐÂY LÀ TIỀN (THÀNH TIỀN ĐƠN VỊ NGHÌN ĐỒNG), HOÀN TOÀN KHÔNG PHẢI LÀ SỐ CÂN (KHÔNG PHẢI KG / SỐ LƯỢNG)!
-        * Không có miếng thịt nào nặng 959kg hay 836kg!
-        * Người viết KHÔNG BAO GIỜ viết "959" để chỉ 9.59kg mà không có dấu phẩy!
-        * CẤM nhận diện 959 là 9.59kg, CẤM nhận diện 836 là 8.36kg, CẤM nhận diện 341 là 3.41kg!
-        * CẤM biến số hàng trăm không có dấu phẩy thành số cân thập phân!
-     2) ĐÂY LÀ DẠNG ĐƠN NỢ NHANH, CHỈ CẦN QUÉT SỐ TIỀN:
-        * Bóc tách từng món thịt với số tiền của món đó:
-          - Dòng 1: name: "Sườn", quantity: null, price: 959000, amount: 959000 (959 * 1000).
-          - Dòng 2: name: "thịt la vai", quantity: null, price: 836000, amount: 836000 (836 * 1000).
-          - Dòng 3: name: "Tái", quantity: null, price: 341000, amount: 341000 (341 * 1000).
-        * Tổng tiền của hóa đơn: Bằng tổng các dòng = 2136000 (2.136.000 VNĐ, đúng bằng con số 2136 ở dưới đường gạch chân).
-     3) BẢO TOÀN SỐ TIỀN AMOUNT:
-        * Con số người bán ghi là số tiền chốt của giao dịch nợ nhanh, BẮT BUỘC bảo toàn chính xác amount (959000, 836000, 341000, tổng 2136000), TUYỆT ĐỐI KHÔNG được ghi đè bằng giá riêng hay tự tính lại!
-   - HÓA ĐƠN CHỈ CÓ CÁC CON SỐ TIỀN CỘNG LẠI (HOÀN TOÀN KHÔNG VIẾT TÊN MÓN THỊT, VÍ DỤ: 756, 1118, 390 -> TỔNG 2264):
-     + ĐÂY LÀ DẠNG HÓA ĐƠN NHẬP NHANH (TIỀN HÀNG).
-     + TUYỆT ĐỐI KHÔNG gán tên là "Thịt lẻ" với số cân "-1" hay số âm! Dấu gạch ngang "-" trước con số là nét gạch đầu dòng, TUYỆT ĐỐI KHÔNG PHẢI số cân!
-     + Trả về:
-       "is_quick_debt": true,
-       "sub_amounts": [756000, 1118000, 390000],
-       "items": [
-         { "name": "Tiền hàng", "quantity": null, "price": 2264000, "amount": 2264000 }
-       ]
-   - CÁC TRƯỜNG HỢP KHÁC:
-     * Trường hợp hóa đơn có số tiền ở cột "Thành tiền" của từng món: lấy amount = số tiền ở cột Thành tiền * 1000.
-     * Trường hợp hóa đơn chỉ có duy nhất 1 con số tổng cộng ở đáy (ví dụ "1146" hay "3814"): trả về 1 dòng "Thịt lẻ" với price = amount = tổng tiền * 1000, quantity = 1.
-     * Trường hợp hóa đơn ghi rõ số kg thập phân (ví dụ "5,2" hoặc "1,95") và đơn giá thông thường: tính amount = Math.round(quantity * price).
-
-3. TÊN KHÁCH HÀNG & NGÀY THÁNG:
-   - Tên khách hàng: Thường nằm ở dòng "Tên khách hàng:" (ví dụ: "A Thang", "Yến Mễ Trì", "Lam nghi"...). Hãy so khớp với danh sách khách hàng quen thuộc ở trên. Nếu không rõ, trả về null.
-   - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN BIỆT CHỮ VIẾT TAY "phở Tưởng" VÀ "phở Tiến":
-     + Chữ viết tay "phở Tưởng" trên tích kê của cửa hàng rất thường xuyên bị AI nhìn lướt qua đọc nhầm thành "Phở Tiến".
-     + BẮT BUỘC quan sát 4 đặc trưng thị giác then chốt sau để nhận diện chính xác "phở Tưởng":
-       1) KÝ TỰ KẾT THÚC LÀ CHỮ "g" (CÓ ĐUÔI SỔ THÒNG SÂU XUỐNG DƯỚI DÒNG KẺ): Chữ cái cuối cùng có vòng tròn khép kín ở trên và một nét đuôi sổ cong thòng sâu xuống dưới dòng kẻ chấm rồi móc lượn sang phải. Đây chính là chữ "g" của "Tưởng" (T-ư-ơ-n-g). Tuyệt đối KHÔNG PHẢI chữ "n" (chữ "n" của "Tiến" kết thúc nằm hoàn toàn trên dòng kẻ, không có đuôi thòng xuống dưới).
-       2) CỤM CHỮ DÀI HƠN HẲN (CỤM 5 KÝ TỰ T-ư-ơ-n-g): Sau chữ T hoa là chuỗi nhịp sóng uốn lượn liên tiếp của cụm "ươn" (nét nhô lên hạ xuống của "ư-ơ", nét cầu của "n", rồi mới đến vòng tròn của "g"). Chuỗi chữ này dài hơn hẳn chữ "Tiến" (chỉ có 3 chữ cái ngắn i-ê-n).
-       3) DẤU PHỤ PHÍA TRÊN LÀ DẤU HỎI UỐN LƯỢN VÀ MÓC RÂU, KHÔNG PHẢI MŨ "ê" VÀ DẤU SẮC: Phía trên thân chữ là nét móc mềm mại của dấu hỏi "?" và móc râu của "ư/ơ". Hoàn toàn KHÔNG CÓ dấu mũ nhọn "^" của chữ "ê" và KHÔNG CÓ nét gạch chéo dứt khoát "/" của dấu sắc.
-       4) NÉT CHỮ T HOA UỐN LƯỢN NỐI NÉT: Chữ "T" viết hoa thảo lượn sóng ngang ở trên rồi sổ xuống nối liền sang cụm "ươn", nét uốn ngang trên đầu này KHÔNG PHẢI dấu sắc.
-     => BẤT CỨ KHI NÀO thấy chữ viết tay ghi "phở Tưởng", "Phở Tưởng", "Tưởng", "chị Luyến", "Luyến", "Phởtưởng", hoặc có nét đuôi chữ "g" thòng sâu như trên:
-      => BẮT BUỘC nhận diện và trả về customer_name là: "Phở tưởng(chị Luyến)" (vì khách hàng chính thức trong hệ thống quán là "Phở tưởng(chị Luyến)").
-      => TUYỆT ĐỐI KHÔNG trả về "Phở Tưởng" hay "Phởtưởng" trống trơn, và TUYỆT ĐỐI CẤM đọc thành "Phở Tiến".
-   - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CÔ THẢO (THẦY)":
-     + Nếu tên khách hàng ghi là "Thầy", "thầy", "Cô Thảo", "cô thảo", "Thảo", "cô Thảo thầy": BẮT BUỘC trả về customer_name là "Cô thảo(thầy)".
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ NHẬN DIỆN KHÁCH "Bún huế văn khê":
-      + Quan sát nét chữ viết tay ở dòng Tên khách hàng / dưới tiêu đề "HÓA ĐƠN BÁN HÀNG":
-        1) Từ "bun" (hoặc "bún"): Chữ "b" có nét sổ thẳng đứng vươn rất cao vượt lên sát chữ in "HÓA ĐƠN" phía trên, sau đó vòng nét bụng tròn ở chân dòng rồi nối liền sang cụm "un" uốn lượn sóng mềm mại.
-        2) Từ "Hue" (hoặc "Huế"): Chữ "H" nét sổ cao đứng, gạch ngang nối sang chữ "u" rồi nối tiếp chữ "e" đuôi mở cong tròn, có dấu sắc hoặc phụ nhẹ trên đầu.
-        3) Từ "Van" (hoặc "Văn"): Chữ "V" hoa sổ nhọn đáy rồi hất vươn lên, nối tiếp nét "an" (hoặc "ăn") viết thảo lượn sóng.
-        4) Từ "Khe" (hoặc "Khê"): Chữ "K" nét sổ cao đứng, hai nét xiên chụm nối liền sang chữ "h" và "e" (hoặc "ê"), nằm sát lấn vào chữ in "ĐT:".
-      + QUY TẮC QUAN TRỌNG: Bất kể trên tích kê người viết ghi đầy đủ "bun Hue Van Khe" hay CHỈ VIẾT TẮT LÀ "bún huế" (hoặc "bun Hue", "Bún Huế", "bún bò huế"):
-      => BẮT BUỘC nhận diện và trả về customer_name là: "Bún huế văn khê" (hoặc so khớp với khách Bún Huế Văn Khê trong danh bạ), TUYỆT ĐỐI KHÔNG để sót hoặc nhầm sang khách khác.
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "BẾP 3 MIỀN KIM LIÊN" (3MIEN / 3 MIỀN):
-      + Quan sát nét chữ viết tay ở dòng Tên khách hàng / dưới tiêu đề in đỏ "HÓA ĐƠN BÁN HÀNG":
-        1) Chữ số "3" viết tay rõ nét (hoặc viết liền "3Mien", "3mien", "3 mien", "3 Miền", "3 miền", "3m", "3M").
-        2) Chữ "Mien" (hoặc "Miền", "mien"): Chữ "M" in hoa hoặc viết hoa to, theo sau là nét "ien" (hoặc "iền", "ền").
-      + QUY TẮC BẮT BUỘC: BẤT KỂ KHI NÀO thấy chữ viết tay ở dòng Tên khách hàng ghi là "3Mien", "3mien", "3 mien", "3 Miền", "3 miền", "3m", "3M", "bếp 3 miền", "ba miền", "bep 3 mien", "kim liên", "kim lien", "bếp ba miền", "3 miền kim liên":
-      => BẮT BUỘC nhận diện và trả về customer_name là: "Bếp 3 miền kim liên" (để hệ thống khớp chính xác vào khách "Bếp 3 miền kim liên" trong danh bạ), TUYỆT ĐỐI CẤM trả về "3mien" hay khách khác.
-    - QUY TẮC ĐẶC BIỆT CHO CÁC BẾP (B1, B2, B3, B4):
-      + Chữ viết tắt "b1", "B1", "B 1", "bếp 1", "bep 1": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 1".
-      + Chữ viết tắt "b2", "B2", "B 2", "bếp 2", "bep 2": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 2".
-      + Chữ viết tắt "b3", "B3", "B 3", "bếp 3", "bep 3": BẮT BUỘC trả về customer_name là: "Bếp hàng xóm 3".
-      + Chữ viết tắt "b4", "B4", "B 4", "bếp 4", "bep 4", "vườn xanh", "nhà hàng vườn xanh": BẮT BUỘC trả về customer_name là: "Nhà hàng vườn xanh".
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HUYỀN ĐÔ NGHĨA" (CHỈ QUAN TÂM CON SỐ CUỐI CÙNG Ở ĐÁY):
-      + Tên khách hàng: Khi ở dòng Tên khách hàng chỉ ghi chữ "Huyền" (hoặc "Huyen", "chị Huyền", "huyền đô nghĩa", "Huyền Đô Ngĩa"):
-        BẮT BUỘC nhận diện customer_name là: "Huyền Đô Nghĩa" (hoặc so khớp với khách hàng có chữ "Huyền" và "Đô Nghĩa" trong danh bạ).
-      + Quy tắc bóc tách số tiền: Hóa đơn của khách này không viết theo quy tắc số cân / đơn giá thông thường, CHỈ QUAN TÂM CON SỐ CUỐI CÙNG Ở ĐÁY HÓA ĐƠN.
-        HÃY TÌM CON SỐ CUỐI CÙNG NẰM Ở ĐÁY HÓA ĐƠN (thường nằm dưới cùng nhất, dưới nét gạch ngang khóa sổ hoặc chỗ chữ "Người nhận hàng", ví dụ số viết tay rất to như "3814"):
-        * Con số cuối cùng này chính là TỔNG SỐ TIỀN CẦN NHẬP NHANH của toàn bộ hóa đơn (đơn vị nghìn đồng, nhân với 1000). Ví dụ: "3814" -> 3814000 (3 triệu 814 nghìn đồng).
-        * Trả về items gồm 1 dòng bóc tách nhanh duy nhất:
-          {
-            "name": "Thịt lẻ",
-            "quantity": 1,
-            "price": 3814000,
-            "amount": 3814000
-          }
-          (price và amount chính là con số cuối cùng đó nhân 1000, quantity để 1).
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "CHỊ THÚY NGA" (CHINGA / CHỊ NGA):
-      + Quan sát nét chữ viết tay ở dòng Tên khách hàng (hoặc chữ ký, ghi chú tên khách):
-        Người viết thường viết liền nét: "chinga", "Chinga", "chi nga", "Chị Nga", "nga", "Nga", "thuy nga", "Thúy Nga", "chị Thúy Nga".
-      + BẮT BUỘC: Khi ở dòng Tên khách hàng ghi "chinga", "Chinga", "chi nga", "Chị Nga", "Nga", "nga", "thuy nga", "Thúy Nga", "chị Thúy Nga":
-      => BẮT BUỘC nhận diện và trả về customer_name là: "Chị Thúy Nga" (để hệ thống khớp chính xác vào khách "Chị Thúy Nga" trong danh bạ). TUYỆT ĐỐI KHÔNG để sót hoặc nhầm sang khách khác!
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "THĂN BÌNH ĐÀ" / "ANH NGHĨA":
-      + Nếu trên hóa đơn ghi "anh nghĩa", "anh ngĩa", "nghĩa", "ngĩa", "bình đà", "thăn bình đà":
-      + BẮT BUỘC nhận diện customer_name là: "Thăn bình đà(anh Nghĩa)" (hoặc "Thăn bình đà").
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CUỐN AN KHÁNH":
-      + Nếu trên hóa đơn ghi "An Khang", "an khang", "ankhang", "An khánh", "an khanh", "ankhanh", "Cuốn an khang", "quán An Khang":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Cuốn an khánh".
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "BÀ LƯU":
-      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:" (nằm trên dòng kẻ chấm ngay dưới chữ in đỏ "HÓA ĐƠN BÁN"):
-        1) Chữ thứ 1: Chữ "b" có nét sổ thẳng đứng vươn CỰC KỲ CAO đâm thẳng lên qua chữ in "Đ" của "HÓA ĐƠN", bụng dưới chữ "b" bo tròn rồi nối liền mạch không nhấc bút sang chữ "a" thảo tròn nhỏ -> tạo thành chữ "ba" (Bà).
-        2) Chữ thứ 2: Chữ "l" có nét sổ thẳng vươn rất cao lên chạm sát chân chữ in "N" của "HÓA ĐƠN" (chiều cao ngang ngửa chữ "b"). Theo sau chữ "l" là 2 nét uốn cong lòng máng liên tiếp tạo thành vần "uu" / "ưu", đỉnh trên bên phải có nét móc cong nhỏ tạo thành chữ "luu" / "lưu" (hoặc "lựu").
-        3) Các trường hợp AI / OCR thường bị nhìn nhầm: Do nét chữ thảo phóng khoáng, AI rất dễ đọc nhầm chữ này thành "ba linh", "ba liu", "ba lui", "ba lieu", "ba lu", "ba lựu", "ba lúc", "ba luc", "ba lù".
-      + BẮT BUỘC: Khi chữ viết tay ở dòng Tên khách hàng nhìn giống "ba luu", "bà lưu", "ba liu", "ba linh", "ba lui", "ba lieu", "ba lu", "ba lựu", "ba lúc", "Lưu", "Lựu", "ba-luu", "ba lu'u":
-      => BẮT BUỘC nhận diện và trả về customer_name là: "Bà lưu" (để hệ thống khớp chính xác vào khách "Bà lưu" trong danh bạ).
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "NGUYỄN KHUYẾN TRƯỜNG HOÀNG":
-      + Quan sát nét chữ viết tay ở khu vực Tên khách hàng (dưới tiêu đề in đỏ "HÓA ĐƠN BÁN HÀNG"):
-        1) Dòng trên ghi chữ "Nguyễn Khuyến" (chữ "N" hoa nét thảo, "Guyển", rồi "Khuyến" - chữ "K" hoa vươn cao, "huyến" có dấu sắc).
-        2) Dòng dưới (ngay dưới dòng 1) ghi chữ "trường Hoàng" (hoặc viết tắt/thảo "trg Hoàng", "Hoang", "Hoàng" với chữ "H" in hoa to, nét "oang" đuôi "g" thòng xuống).
-      + QUY TẮC BẮT BUỘC: Bất kể khi nào đọc được chữ "Nguyễn" đi kèm chữ "Hoàng" (hoặc "Nguyễn . Hoàng", "nguyễn hoàng", "nguyễn khuyến", "khuyến hoàng", "nguyễn khuyến hoàng", "trường hoàng", "nguyễn trường hoàng"):
-      => BẮT BUỘC nhận diện và trả về customer_name là: "Nguyễn khuyến trường hoàng" (để hệ thống khớp chính xác vào khách "Nguyễn khuyến trường hoàng" trong danh bạ).
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - KHÁCH "SÀNH LẨU CS1" (CHỈ CÓ NGUYỄN KHUYếN, KHÔNG CÓ TRƯỜNG HOÀNG):
-       + Khi ở dòng Tên khách hàng chỉ đọc được chữ "Nguyễn Khuyến" (hoặc "N.Khuyến", "Ng Khuyến", "nguyễn khuyến", "N Khuyen", "nguyen khuyen") NHƯNG TUYỆT ĐỐI KHÔNG có thêm chữ "Hoàng", "Trường Hoàng", "trg Hoàng", "Trường", "Hoang" ở bất kỳ đâu trên hóa đơn:
-       + Ý NGHĨA: "Nguyễn Khuyến" là tên đường phố, không phải tên người. Khách hàng ở trên đường Nguyễn Khuyến là "Sành lẩu CS1".
-       + QUY TẮC BẮT BUỘC:
-       => BẮT BUỘC nhận diện và trả về customer_name là: "Sành lẩu CS1" (để hệ thống khớp chính xác vào khách "Sành lẩu CS1" trong danh bạ).
-       + LƯỦ Ý PHÂN BIỆT QUAN TRỌNG: "Nguyễn Khuyến" + "Trường Hoàng" (có cả hai) -> "Nguyễn khuyến trường hoàng". Chỉ "Nguyễn Khuyến" đơn độc (không có Hoàng/Trường) -> "Sành lẩu CS1".
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "52 TRẦN THÁI TÔNG":
-      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:":
-        Người viết ghi số "52" kèm chữ thảo "Tran Thai Tong" (chữ T hoa nét lượn, đuôi g dài) hoặc người viết CHỈ GHI TẮT CON SỐ "52" (hoặc "52 tran", "52 thai tong"):
-      + BẤT KỂ KHI NÀO quét được số "52" ở dòng Tên khách hàng (hoặc ghi tắt "52"):
-      + BẮT BUỘC nhận diện và trả về customer_name là: "52  trần thái tông".
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "MINH TRANG":
-      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:":
-        1) Chữ thứ 1: Chữ "M" hoa nét sổ vươn rất cao sát chữ in "HÓA ĐƠN", các nét nhọn vươn cao rồi nối liền sang nét cong chữ "h" (viết tắt hoặc nhìn như "Mih" / "Minh").
-        2) Chữ thứ 2: Chữ "t" có nét gạch ngang nhẹ, các nét lượn sóng và nét đuôi sổ thòng sâu xuống dưới dòng kẻ chấm (nhìn lướt qua rất dễ nhầm thành "tuy", "trag", "tray" hoặc "trang").
-      + QUY TẮC BẮT BUỘC: Thường chỉ cần đọc được chữ "minh" (hoặc "mih", "Mih", "Mih tuy", "Minh tuy", "Minh trang"):
-      => BẮT BUỘC nhận diện và trả về customer_name là: "Minh trang" (để so khớp với khách Minh trang trong danh bạ).
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "TRUNG KÍNH":
-      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:":
-        1) Chữ thứ 1: Chữ "T" viết hoa thư pháp nét lượn sóng uốn cong, nối sang nét cong và đuôi sổ thòng rất sâu xuống dưới dòng kẻ chấm (nhìn lướt qua rất dễ đọc nhầm thành "Tuy", "Tug", "Tung", "Tay", "Túy", "Truy"). Thực chất đây là chữ "Trung" (hoặc viết thảo "Trg", "Tung").
-        2) Chữ thứ 2: Chữ "k" có nét sổ vươn cực cao lên tận chân dòng in "HÓA ĐƠN BÁN HÀNG" phía trên, theo sau là nét móc ngoáy viết tắt (nhìn lướt qua rất dễ đọc nhầm thành "kh", "khs", "ks", "k's", "kb", "kl", "hh"). Thực chất đây là chữ "Kính" (hoặc viết tắt "kh" = Kính).
-      + QUY TẮC BẮT BUỘC: Khi chữ viết tay ở dòng Tên khách hàng nhìn giống "Tuy kh", "Tuy khs", "Tuy ks", "Tug kh", "Tung kh", "Truy kh", "Trung kh", "Trung kinh", "trung kính", "T-kh":
-      => BẮT BUỘC nhận diện và trả về customer_name là: "Trung kính" (để hệ thống khớp chính xác vào khách "Bếp trung kính (zalo loantt)" hoặc "Trungkinh").
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "THÁI HÀ":
-      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:":
-        1) Chữ thứ 1: Chữ "T" viết hoa thảo lượn sóng ngang trên đầu rồi uốn lượn xuống nối liền sang chữ "h" (nhìn lướt qua rất dễ bị đọc nhầm thành "Hk", "Hkú", "Hkui", "Hki", "Hkai", "Hai", "Hải", "Thai"). Phía trên chữ "a/i" có nét dấu sắc "/" dứt khoát -> chữ "Thái" (hoặc "Thai").
-        2) Chữ thứ 2: Chữ "H" viết hoa hai nét đứng song song có nét gạch ngang mềm mại nối giữa, chữ "a" tròn nhỏ có dấu huyền "\" phía trên -> chữ "Hà" (hoặc "Ha").
-      + QUY TẮC BẮT BUỘC: Khi chữ viết tay ở dòng Tên khách hàng nhìn giống "Thái Hà", "Thai Ha", "thai ha", "thái hà", "Hkú Hà", "Hkú Ha", "Hki Ha", "Hkui Ha", "Hkai Ha", "Hai Ha", "Hải Hà", "Thki Ha":
-      => BẮT BUỘC nhận diện và trả về customer_name là: "Thái hà" (để so khớp chính xác với khách hàng "Thái hà" trong danh bạ).
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "HÀ TRÌ" (PHÂN BIỆT VỚI "CHỊ HẠNH SÂN BÓNG HÀ TRÌ" VÀ "CỒ HẢI"):
-      + Khi trên tích kê / hóa đơn ghi chữ "Hà Trì", "Hà trì", "cô Hà Trì", "cô hà trì", "Hà tri", "ha tri", "cô Trì":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Hà Trì". TUYỆT ĐỐI KHÔNG nhầm sang "Chị hạnh sân bóng hà trì" (trừ khi có ghi rõ chữ "Hạnh" hoặc "chị Hạnh") và TUYỆT ĐỐI KHÔNG nhầm sang "Cồ Hải".
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI CHO KHÁCH "CHỊ HẠNH SÂN BÓNG HÀ TRÌ":
-      + Khi ở dòng "Tên khách hàng:" trên tích kê / hóa đơn viết chữ "Hạnh", "hạnh", "HẠNH", "chị Hạnh", "chị hạnh", "Hạnh sân bóng", "chị Hạnh sân bóng", "Hạnh sân bóng Hà Trì":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Chị hạnh sân bóng hà trì" (vì trong danh mục khách hàng của quán KHÔNG CÓ khách nào tên chỉ là "Hạnh", mà chỉ có khách duy nhất là "Chị hạnh sân bóng hà trì").
-      + TUYỆT ĐỐI KHÔNG để customer_name là "Hạnh" trống trơn, và TUYỆT ĐỐI KHÔNG nhầm sang "Hà Trì" hay khách khác!
-    - QUY TẮC ĐẶC BIỆT CHO KHÁCH "CỒ HẢI" / "CỔ HẢI":
-      + Khi trên tích kê / hóa đơn ghi chữ "Cồ Hải", "cồ hải", "Cổ Hải", "cổ hải", "Cồ hải", "quán Cồ Hải":
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Cồ hải" (hoặc "Cồ Hải"). TUYỆT ĐỐI KHÔNG nhầm sang "Hà Trì"!
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN TÍCH NÉT CHỮ KHÁCH "GIẢNG VÕ" / "GIANG VÕ":
-      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:" (dưới tiêu đề in đỏ "HÓA ĐƠN BÁN HÀNG"):
-        1) Chữ thứ 1: Chữ "G" viết hoa nét cong to rộng phóng khoáng, thân nối liền vần "i-a-n", và chữ "g" cuối có nét móc đuôi sổ thòng rất sâu xuống dưới dòng kẻ chấm -> tạo thành chữ "Giang" (hoặc "Giảng").
-        2) Chữ thứ 2: Chữ "V" viết hoa/thảo nét sổ cong xuống rồi uốn lượn móc hất lên bên phải nối liền mạch sang chữ "o" (hoặc "õ" có nét ngã nhẹ trên đầu) -> tạo thành chữ "Võ" (hoặc "võ").
-        3) NGUYÊN NHÂN AI HAY NHÌN NHẦM: Do chữ "V" viết thảo nối liền mạch sang chữ "o", nét sổ cong trái và nét móc phải của chữ "V" khi dính liền vào chữ "o" rất dễ khiến AI OCR bị ảo giác nhìn nhầm thành chữ "Đ", "đ", "D" -> đọc sai thành "Giang Đỏ", "Giang đỏ", "Giang Đô", "Giang đô", "Giang Dỏ", "Giang dỏ", "Giang đo", "Giang do".
-      + QUY TẮC BẮT BUỘC: Khi chữ viết tay ở dòng Tên khách hàng nhìn giống "Giang Võ", "Giang võ", "Giảng võ", "Giang Đỏ", "Giang đỏ", "Giang Đô", "Giang đô", "Giang Dỏ", "Giang dỏ", "Giang do", "Giang đo":
-      => BẮT BUỘC nhận diện và trả về customer_name là: "Giảng võ" (để hệ thống tự động chọn chính xác khách hàng "Giảng võ" trong danh bạ).
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHÂN BIỆT SỐ "794 LÁNG HẠ" VỚI CHỮ "CUỐN LÁNG HẠ":
-      + Quan sát nét chữ viết tay ở dòng "Tên khách hàng:" (dưới tiêu đề in đỏ "HÓA ĐƠN BÁN HÀNG"):
-        1) KÝ TỰ BẮT ĐẦU LÀ 3 CON SỐ "794" (KHÔNG PHẢI CHỮ VIẾT "CUỐN"):
-           - Số "7": Nét ngang trên đầu hơi lượn nhẹ, nét sổ chéo xuống dưới.
-           - Số "9": Vòng tròn khép kín ở trên, thân cong sổ xuống dưới.
-           - Số "4": Nét sổ xiên gập ngang và nét sổ thẳng dọc cắt ngang qua.
-        2) CỤM CHỮ TIẾP THEO LÀ "lang ha" (hoặc "láng hạ", "láng"):
-           - Chữ "l" có nét khuyết vươn cao, chữ "a-n-g" với đuôi chữ "g" thòng sâu xuống dưới dòng kẻ, theo sau là chữ "h-a" (hoặc "hạ").
-        3) NGUYÊN NHÂN AI THƯỜNG BỊ ẢO GIÁC NHÌN NHẦM THÀNH "Cuốn láng hạ":
-           - Khi 3 con số "794" viết liền tay, nét lượn số 7 giống nét cong chữ "C", số 9 tròn và số 4 gập ngang giống vần "u-ố-n".
-           - Đồng thời do trong danh bạ cửa hàng có khách "Cuốn láng hạ", AI bị tâm lý "ép từ điển" nhìn thấy "lang ha" liền tự động đoán sai thành "Cuốn láng hạ".
-      + QUY TẮC BẮT BUỘC: Khi ở dòng Tên khách hàng nhìn thấy 3 con số "794" (hoặc "794 lang ha", "794 láng hạ", "794 đường láng", "794 lang"):
-      => BẮT BUỘC nhận diện và trả về customer_name là: "794 láng hạ" (hoặc so khớp với "the industree(794 đường láng)").
-      => TUYỆT ĐỐI CẤM NHẬN DIỆN THÀNH "Cuốn láng hạ"!
-      => CHỈ KHI NÀO chữ đầu tiên viết tay rõ ràng bằng chữ cái "Cuốn", "Cuon", "Cươn" (hoàn toàn không có chữ số 794) thì mới là khách "Cuốn láng hạ".
-    - QUY TẮC ĐẶC BIỆT CỐT LÕI - PHIẾU NHẬP HÀNG TỪ "LÒ MỔ MINH THUẤN" / "LÒ MỔ MINH THUẦN" (NHÀ CUNG CẤP):
-      + Khi trên phiếu in tiêu đề đỏ/chữ in: "LÒ MỔ MINH THUẤN", "LÒ MỔ MINH THUẦN", "Lò mổ Minh Thuần", "Lò mổ Minh Thuấn", "Minh Thuần", "Minh thuần", hoặc có địa chỉ "Sáo Hạ, Quang Lãng, PX, HN" / SĐT "0989 900 409":
-      + Ý NGHĨA: Đây là phiếu nhập thịt từ nhà cung cấp (lò mổ) "Minh thuần".
-      + BẮT BUỘC nhận diện và trả về customer_name là: "Minh thuần" (để hệ thống tự động nhận diện đây là nhà cung cấp và áp dụng bảng giá riêng của Minh thuần).
-      + Quy tắc viết tắt tên thịt trên phiếu lò mổ Minh Thuần:
-        * Chữ "B" hoặc "b": Bắp bò
-        * Chữ "sx", "sn", "sườn", "suon": Sườn
-    - Ngày hóa đơn: Đọc ở dòng góc dưới "Ngày [ngày] tháng [tháng] năm 20[năm]" (ví dụ: "16/09/2026").
-    - Bỏ qua các nét gạch chéo, nét cong sổ dài khóa hóa đơn, không nhận nhầm thành chữ số.
-4. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN TRẢ HÀNG (CỰC KỲ QUAN TRỌNG):
-   - Khi trên tờ hóa đơn / tích kê có chữ viết tay: "trả", "trả lại", "trả hàng", "gửi về", "trả về", "gửi lại", "hàng trả", "thu hồi", "quay đầu" (hoặc có dấu trừ "-" trước số tiền hoặc số cân):
-   - BẮT BUỘC nhận diện đây là ĐƠN TRẢ HÀNG (khách gửi trả hàng để giảm trừ nợ, KHÔNG phải đơn mua mới):
-     + BẮT BUỘC đặt "is_return": true (đơn bán bình thường là false).
-     + BẮT BUỘC đặt "is_import": false.
-     + BẮT BUỘC đặt "note": "[Trả lại hàng]".
-     + Vẫn bóc tách chính xác customer_name và danh sách các món thịt (name, quantity, price, amount).
-     + TUYỆT ĐỐI CẤM đưa các chữ "trả", "trả hàng", "gửi về", "trả về", "trả lại", "hàng trả" vào tên khách hàng hay tên món thịt!
-      + ĐẶC BIỆT LƯU Ý CHO KHÁCH "CHỊ TUYẾT": Nếu trên giấy ghi khách Chị Tuyết gửi lại / trả hàng mà không ghi rõ tên thịt (chỉ ghi số cân), BẮT BUỘC MẶC ĐỊNH tên món thịt (name) là: "Thịt chín" (hoặc "Chín").
-
-4.1. QUY TẮC ĐẶC BIỆT XÁC ĐỊNH ĐƠN NHẬP HÀNG / PHIẾU NHẬP LÒ MỔ (CỰC KỲ QUAN TRỌNG):
-   - ĐẶC BIỆT LƯU Ý PHÂN BIỆT ĐỐI TÁC:
-     + NẾU ĐỐI TÁC LÀ KHÁCH HÀNG (người mua thịt quen thuộc trong danh bạ khách hàng):
-       * Khi trên phiếu ghi "nhập", "nhập hàng", "nhập thịt": BẢN CHẤT LÀ KHÁCH HÀNG TRẢ HÀNG (trừ nợ)!
-       * BẮT BUỘC đặt "is_return": true, "is_import": false, "note": "NHẬP HÀNG".
-     + CHỈ KHI TRÊN PHIẾU LÀ NHÀ CUNG CẤP / LÒ MỔ (in chữ Lò mổ, phiếu nhập kho nhà cung cấp):
-       * BẮT BUỘC đặt "is_import": true, "is_return": false, "note": "Nhập hàng".
-       * Bóc tách tên nhà cung cấp vào customer_name.
-
-Chỉ trả về JSON theo đúng cấu trúc:
-{
-  "is_valid_invoice": true,
-  "customer_name": "Tên khách hàng hoặc tên nhà cung cấp hoặc null",
-  "invoice_date": "DD/MM/YYYY hoặc null",
-  "is_return": false,
-  "is_import": false,
-  "note": "Ghi chú nếu có (nếu là nhập hàng thì là 'Nhập hàng', nếu là đơn trả thì là '[Trả lại hàng]')",
-  "items": [
-    {
-      "name": "Xg Bò / Tái (Bò) / Bắp Bò / Gầu Bò / Sườn...",
-      "quantity": 11.4,
-      "price": 250000,
-      "amount": 2850000
-    }
-  ]
-}
-(NẾU ẢNH LÀ GIẤY NHÁP / MẶT SAU / KHÔNG CÓ BỐ CỤC HÓA ĐƠN BÁN HÀNG: đặt "is_valid_invoice": false, "items": [], "customer_name": null)`;
+4. ĐƠN TRẢ HÀNG & PHIẾU NHẬP LÒ MỔ:
+- Trả hàng ("trả", "trả lại", "gửi về", "hàng trả", dấu trừ "-"): "is_return": true, "is_import": false, "note": "[Trả lại hàng]". (Khách Chị Tuyết trả hàng không ghi tên thịt => auto món "Thịt chín").
+- Nhập hàng:
+  + Khách hàng quen ghi "nhập/nhập thịt": bản chất là khách trả hàng => "is_return": true, "is_import": false, "note": "NHẬP HÀNG".
+  + Nhà cung cấp / Lò mổ: "is_import": true, "is_return": false, "note": "Nhập hàng", bóc tách tên nhà cung cấp vào customer_name.`;
     }
 
-    // 5. Gửi sang Gemini Vision để trích xuất dữ liệu hóa đơn
+    // 5. Gửi sang Gemini Vision theo chuẩn System Instruction & User Prompt tách biệt
     const geminiResult = await callGeminiWithRetry({
       apiKey: process.env.GEMINI_API_KEY,
+      systemInstruction,
       contents: [
         {
           parts: [
-            { text: promptText },
+            { text: userPrompt },
             {
               inlineData: {
                 mimeType: filePayload.mimeType,
@@ -1225,13 +808,17 @@ Chỉ trả về JSON theo đúng cấu trúc:
         }
       }
 
-      // Ưu tiên khớp khách Cô thảo(thầy) nếu AI nhận diện là thầy hoặc cô thảo
+      // Ưu tiên khớp khách Cô thảo(thầy) nếu AI nhận diện là thầy, cô thảo, hoặc bị đọc nhầm thành cô hảo / hảo
       if (
         cleanDetectedNoSpace === 'thay' ||
         cleanDetectedNoSpace === 'cothao' ||
         cleanDetectedNoSpace === 'thao' ||
+        cleanDetectedNoSpace === 'cohao' ||
+        cleanDetectedNoSpace === 'hao' ||
         cleanDetected.includes('thay') ||
-        cleanDetected.includes('thao')
+        cleanDetected.includes('thao') ||
+        cleanDetected.includes('co hao') ||
+        cleanDetected === 'hao'
       ) {
         const coThaoCust = customers.find((c) => {
           const cClean = removeDiacritics(c.name.toLowerCase());
@@ -1499,17 +1086,33 @@ Chỉ trả về JSON theo đúng cấu trúc:
 
       if (!matchedCustomerId) {
         // Phân biệt rõ khách "văn khê" và "Bún huế van khe":
-        // 1) Nếu có chữ "bun hue", "bunhue", "bun bo hue", hoặc có cả "bun" và "van khe" -> Khách "Bún huế van khe"
+        // 1) Nếu có chữ "bun hue", "bunhue", "bun bo hue", hoặc có cả "bun" và ("van khe" / "van hle") -> Khách "Bún huế van khe"
         const hasBunHue = cleanDetected.includes('bun hue') || cleanDetected.includes('bun bo hue') ||
-          cleanDetectedNoSpace.includes('bunhue') || (cleanDetected.includes('bun') && cleanDetected.includes('van khe'));
+          cleanDetectedNoSpace.includes('bunhue') || (cleanDetected.includes('bun') && (cleanDetected.includes('van khe') || cleanDetected.includes('van hle')));
 
-        // 2) Nếu CHỈ CÓ "van khe" hoặc "vankhe" (hoàn toàn KHÔNG có chữ "bun" hay "hue") -> Khách "văn khê"
-        const isOnlyVanKhe = (cleanDetected.includes('van khe') || cleanDetectedNoSpace.includes('vankhe')) && !hasBunHue && !cleanDetected.includes('bun') && !cleanDetected.includes('hue');
+        // 2) Nếu là "van khe", hoặc bị đọc nhầm chữ viết tay thành "van hle", "van hie", "van khz", "hle" (hoàn toàn KHÔNG có chữ "bun" hay "hue") -> Khách "văn khê"
+        const isOnlyVanKhe = (
+          cleanDetected.includes('van khe') ||
+          cleanDetectedNoSpace.includes('vankhe') ||
+          cleanDetected.includes('van hle') ||
+          cleanDetectedNoSpace.includes('vanhle') ||
+          cleanDetected.includes('van hie') ||
+          cleanDetectedNoSpace.includes('vanhie') ||
+          cleanDetected.includes('van khz') ||
+          cleanDetectedNoSpace.includes('vankhz') ||
+          cleanDetected.includes('van kh2') ||
+          cleanDetectedNoSpace.includes('vankh2') ||
+          cleanDetected === 'hle' ||
+          cleanDetectedNoSpace === 'hle'
+        ) && !hasBunHue && !cleanDetected.includes('bun') && !cleanDetected.includes('hue');
 
         if (isOnlyVanKhe) {
           const vanKheCust = customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase());
             return cClean === 'van khe' || (cClean.includes('van khe') && !cClean.includes('bun') && !cClean.includes('hue'));
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('khe') && !cClean.includes('bun') && !cClean.includes('hue');
           });
           if (vanKheCust) {
             matchedCustomerId = vanKheCust.id;

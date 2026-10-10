@@ -32,7 +32,9 @@ const callGeminiWithRetry = async ({
         };
 
         if (systemInstruction) {
-          payload.systemInstruction = systemInstruction;
+          payload.systemInstruction = typeof systemInstruction === 'string'
+            ? { parts: [{ text: systemInstruction }] }
+            : systemInstruction;
         }
 
         const response = await fetch(url, {

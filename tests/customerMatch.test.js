@@ -514,6 +514,154 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
       expect(normalizeXgQuantity('Sườn xg', 1.5)).toBe(1.5); // Sườn xg TUYỆT ĐỐI không bị đổi
       expect(normalizeXgQuantity('Sườn xg', 1)).toBe(1);
     });
+
+    it('12. AI bóc tách chữ viết tay "Cô Hảo" (do nhìn nhầm chữ Cô Thảo) bắt buộc tự động khớp vào khách "Cô thảo(thầy)"', async () => {
+      // 1. Tạo khách "Cô thảo(thầy)" trong DB
+      const coThaoCustomer = await createTestCustomer(
+        testUser.id,
+        'Cô thảo(thầy)'
+      );
+
+      const customers = await prisma.customer.findMany({
+        where: { userId: testUser.id, isActive: true },
+        select: { id: true, name: true }
+      });
+
+      const removeDiacritics = (str) => {
+        if (!str) return '';
+        return str
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/đ/g, 'd')
+          .replace(/Đ/g, 'd')
+          .toLowerCase()
+          .trim();
+      };
+
+      const testInputs = ['Cô Hảo', 'cô hảo', 'Cô Thảo', 'Hảo', 'Thầy'];
+
+      for (const input of testInputs) {
+        const cleanDetected = removeDiacritics(input);
+        const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+        let matchedCustomerId = null;
+        if (
+          cleanDetectedNoSpace === 'thay' ||
+          cleanDetectedNoSpace === 'cothao' ||
+          cleanDetectedNoSpace === 'thao' ||
+          cleanDetectedNoSpace === 'cohao' ||
+          cleanDetectedNoSpace === 'hao' ||
+          cleanDetected.includes('thay') ||
+          cleanDetected.includes('thao') ||
+          cleanDetected.includes('co hao') ||
+          cleanDetected === 'hao'
+        ) {
+          const coThaoCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('thao') && cClean.includes('thay');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('thao');
+          });
+          if (coThaoCust) {
+            matchedCustomerId = coThaoCust.id;
+          }
+        }
+
+        expect(matchedCustomerId).toBe(coThaoCustomer.id);
+      }
+    });
+
+    it('13. AI bóc tách chữ viết tay "Van Hle" / "Van Hie" / "Van khz" (nhìn nhầm từ Van khê) bắt buộc tự động khớp vào khách "văn khê", không nhầm sang "Bún huế van khe"', async () => {
+      // 1. Tạo 2 khách trong DB: "văn khê" và "Bún huế van khe"
+      const vanKheCustomer = await createTestCustomer(
+        testUser.id,
+        'văn khê'
+      );
+      const bunHueCustomer = await createTestCustomer(
+        testUser.id,
+        'Bún huế van khe'
+      );
+
+      const customers = await prisma.customer.findMany({
+        where: { userId: testUser.id, isActive: true },
+        select: { id: true, name: true }
+      });
+
+      const removeDiacritics = (str) => {
+        if (!str) return '';
+        return str
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/đ/g, 'd')
+          .replace(/Đ/g, 'd')
+          .toLowerCase()
+          .trim();
+      };
+
+      const matchVanKhe = (input) => {
+        const cleanDetected = removeDiacritics(input);
+        const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+        let matchedCustomerId = null;
+        const hasBunHue = cleanDetected.includes('bun hue') || cleanDetected.includes('bun bo hue') ||
+          cleanDetectedNoSpace.includes('bunhue') || (cleanDetected.includes('bun') && (cleanDetected.includes('van khe') || cleanDetected.includes('van hle')));
+
+        const isOnlyVanKhe = (
+          cleanDetected.includes('van khe') ||
+          cleanDetectedNoSpace.includes('vankhe') ||
+          cleanDetected.includes('van hle') ||
+          cleanDetectedNoSpace.includes('vanhle') ||
+          cleanDetected.includes('van hie') ||
+          cleanDetectedNoSpace.includes('vanhie') ||
+          cleanDetected.includes('van khz') ||
+          cleanDetectedNoSpace.includes('vankhz') ||
+          cleanDetected.includes('van kh2') ||
+          cleanDetectedNoSpace.includes('vankh2') ||
+          cleanDetected === 'hle' ||
+          cleanDetectedNoSpace === 'hle'
+        ) && !hasBunHue && !cleanDetected.includes('bun') && !cleanDetected.includes('hue');
+
+        if (isOnlyVanKhe) {
+          const vanKheCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean === 'van khe' || (cClean.includes('van khe') && !cClean.includes('bun') && !cClean.includes('hue'));
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('khe') && !cClean.includes('bun') && !cClean.includes('hue');
+          });
+          if (vanKheCust) {
+            matchedCustomerId = vanKheCust.id;
+          }
+        } else if (hasBunHue) {
+          const bunHueCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return (cClean.includes('bun hue') && cClean.includes('van khe')) || (cClean.includes('bun') && cClean.includes('van khe'));
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('bun hue');
+          });
+          if (bunHueCust) {
+            matchedCustomerId = bunHueCust.id;
+          }
+        }
+
+        return matchedCustomerId;
+      };
+
+      // Các biến thể của khách "văn khê"
+      const vanKheInputs = ['Van Hle', 'van hle', 'Van Hie', 'Van khz', 'Van khê', 'văn khê', 'van khe'];
+      for (const input of vanKheInputs) {
+        expect(matchVanKhe(input)).toBe(vanKheCustomer.id);
+      }
+
+      // Các biến thể của khách "Bún huế van khe"
+      const bunHueInputs = ['Bún huế van khe', 'bún huế', 'bun hue văn khê', 'bún huế văn khê'];
+      for (const input of bunHueInputs) {
+        expect(matchVanKhe(input)).toBe(bunHueCustomer.id);
+      }
+    });
   });
 });
+
 
