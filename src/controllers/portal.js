@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError, UnauthorizedError } = require('../utils/errors');
 const { emitWorkspaceEvent } = require('../utils/socket');
+const { syncGroupCustomPricesToNewCustomers } = require('../services/groupPriceSyncService');
 
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET || 'default_access_secret';
 const PORTAL_SESSION_SECRET = process.env.JWT_PORTAL_SECRET || process.env.JWT_ACCESS_SECRET || 'meat_manager_portal_secret_key_2026';
@@ -71,6 +72,11 @@ const getPublicPortalInfo = async (req, res, next) => {
           select: { id: true, name: true, phone: true }
         },
         customers: {
+          where: {
+            customer: {
+              isActive: true,
+            },
+          },
           include: {
             customer: {
               select: { id: true, name: true, phone: true, address: true, note: true }
@@ -284,6 +290,11 @@ const getPublicPortalData = async (req, res, next) => {
       where: { token },
       include: {
         customers: {
+          where: {
+            customer: {
+              isActive: true,
+            },
+          },
           include: { customer: true }
         },
         supplier: true
@@ -977,6 +988,11 @@ const getPortalLinks = async (req, res, next) => {
       where: { userId },
       include: {
         customers: {
+          where: {
+            customer: {
+              isActive: true,
+            },
+          },
           include: {
             customer: { select: { id: true, name: true, phone: true } }
           }
@@ -1114,6 +1130,8 @@ const updatePortalLink = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy link cần sửa.');
     }
 
+    let syncPriceResult = null;
+
     const updated = await prisma.$transaction(async (tx) => {
       const link = await tx.portalLink.update({
         where: { id },
@@ -1127,6 +1145,43 @@ const updatePortalLink = async (req, res, next) => {
       });
 
       if (customerIds && Array.isArray(customerIds)) {
+        // Lấy danh sách thành viên hiện tại của nhóm trước khi cập nhật
+        const existingMembers = await tx.portalLinkCustomer.findMany({
+          where: { portalLinkId: id },
+          select: { customerId: true }
+        });
+        const existingCustomerIds = existingMembers.map(m => m.customerId);
+
+        // Phát hiện các nhà hàng mới được thêm vào nhóm
+        const newCustomerIds = customerIds.filter(cId => !existingCustomerIds.includes(cId));
+
+        // Kiểm tra thêm các nhà hàng đã có trong nhóm nhưng chưa có bản ghi giá riêng nào
+        const existingWithoutPrice = [];
+        for (const cId of customerIds) {
+          if (!newCustomerIds.includes(cId)) {
+            const count = await tx.customerProductPrice.count({
+              where: { customerId: cId }
+            });
+            if (count === 0) {
+              existingWithoutPrice.push(cId);
+            }
+          }
+        }
+
+        const targetIdsToSync = [...newCustomerIds, ...existingWithoutPrice];
+        const sourceIds = customerIds.filter(cId => !targetIdsToSync.includes(cId));
+
+        // Tự động thiết lập bộ giá riêng của nhóm cho các nhà hàng cần áp dụng
+        if (targetIdsToSync.length > 0 && sourceIds.length > 0) {
+          syncPriceResult = await syncGroupCustomPricesToNewCustomers({
+            userId,
+            groupName: name || existing.name,
+            sourceCustomerIds: sourceIds,
+            targetCustomerIds: targetIdsToSync,
+            tx,
+          });
+        }
+
         await tx.portalLinkCustomer.deleteMany({ where: { portalLinkId: id } });
         if (customerIds.length > 0) {
           await tx.portalLinkCustomer.createMany({
@@ -1141,10 +1196,15 @@ const updatePortalLink = async (req, res, next) => {
       return link;
     });
 
+    const successMessage = syncPriceResult?.syncedProductCount > 0
+      ? `Cập nhật nhóm thành công. Đã tự động thiết lập bộ giá riêng (${syncPriceResult.syncedProductCount} loại thịt) cho ${syncPriceResult.syncedCustomerCount} nhà hàng mới!`
+      : 'Cập nhật link thành công.';
+
     res.status(200).json({
       success: true,
-      message: 'Cập nhật link thành công.',
-      data: updated
+      message: successMessage,
+      data: updated,
+      syncPriceResult: syncPriceResult || null,
     });
   } catch (err) {
     next(err);

@@ -27,6 +27,9 @@ router.post('/batch-customer-prices', productController.batchUpdateCustomerProdu
 // Phân tích giá phổ biến nhất của từng sản phẩm theo nhóm cửa hàng
 router.post('/group-price-analysis', productController.analyzeGroupPrices);
 
+// Áp dụng bộ giá riêng của nhóm cho các nhà hàng mới được thêm vào nhóm
+router.post('/apply-group-prices', productController.applyGroupPrices);
+
 // Tạo sản phẩm mới
 router.post('/', productController.createProduct);
 

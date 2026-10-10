@@ -3,6 +3,7 @@ const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
 const { emitWorkspaceEvent } = require('../utils/socket');
+const { syncGroupCustomPricesToNewCustomers } = require('../services/groupPriceSyncService');
 
 // Helper gửi socket event thông báo giao dịch / nợ khách hàng thay đổi
 const notifyCustomerUpdate = (userId, action, payload = {}) => {
@@ -91,11 +92,51 @@ const getProducts = async (req, res, next) => {
 
     // Nếu có customerId, lấy giá bán riêng của khách hàng này để ghi đè lên giá chung mặc định
     if (customerId) {
-      const customPrices = await prisma.customerProductPrice.findMany({
+      let customPrices = await prisma.customerProductPrice.findMany({
         where: {
           customerId,
         },
       });
+
+      // Nếu khách hàng chưa có bản ghi giá riêng nào, tự động kiểm tra nhóm để đồng bộ bộ giá riêng của nhóm
+      if (customPrices.length === 0) {
+        try {
+          const groupMembership = await prisma.portalLinkCustomer.findFirst({
+            where: { customerId },
+            include: {
+              portalLink: {
+                include: {
+                  customers: true,
+                },
+              },
+            },
+          });
+
+          if (groupMembership && groupMembership.portalLink) {
+            const group = groupMembership.portalLink;
+            const otherMemberIds = (group.customers || [])
+              .map((c) => c.customerId)
+              .filter((cId) => cId !== customerId);
+
+            if (otherMemberIds.length > 0) {
+              const syncResult = await syncGroupCustomPricesToNewCustomers({
+                userId,
+                groupName: group.name,
+                sourceCustomerIds: otherMemberIds,
+                targetCustomerIds: [customerId],
+              });
+
+              if (syncResult && syncResult.syncedProductCount > 0) {
+                customPrices = await prisma.customerProductPrice.findMany({
+                  where: { customerId },
+                });
+              }
+            }
+          }
+        } catch (syncErr) {
+          console.error('[GET_PRODUCTS] Lỗi khi tự động đồng bộ giá nhóm cho khách hàng:', syncErr);
+        }
+      }
 
       const priceMap = new Map(
         customPrices.map((cp) => [cp.productId, { price: cp.price, costPrice: cp.costPrice, changeReason: cp.changeReason }])
@@ -1149,6 +1190,29 @@ const analyzeGroupPrices = async (req, res, next) => {
   }
 };
 
+// 9. Áp dụng bộ giá riêng của nhóm cho các nhà hàng mới được thêm vào nhóm
+const applyGroupPrices = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { groupName, sourceCustomerIds, targetCustomerIds } = req.body;
+
+    const result = await syncGroupCustomPricesToNewCustomers({
+      userId,
+      groupName,
+      sourceCustomerIds,
+      targetCustomerIds,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: result.message,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getProducts,
   createProduct,
@@ -1159,6 +1223,7 @@ module.exports = {
   batchUpdateProductPrices,
   batchUpdateCustomerProductPrices,
   analyzeGroupPrices,
+  applyGroupPrices,
 };
 
 

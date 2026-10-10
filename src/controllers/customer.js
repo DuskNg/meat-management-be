@@ -515,6 +515,16 @@ const deleteCustomer = async (req, res, next) => {
       },
     });
 
+    // Tự động gỡ bỏ khách hàng khỏi tất cả các nhóm chuỗi Zalo Portal (PortalLinkCustomer)
+    await prisma.portalLinkCustomer.deleteMany({
+      where: { customerId: id },
+    });
+
+    // Tự động gỡ bỏ khỏi cấu hình nhắc nợ định kỳ (PeriodicReminderConfig)
+    await prisma.periodicReminderConfig.deleteMany({
+      where: { customerId: id },
+    });
+
     // Ghi log hoạt động
     await logActivity(
       userId,
