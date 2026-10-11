@@ -1,7 +1,10 @@
 // meat-management-be/src/controllers/employee.js
 const prisma = require('../utils/db');
+const jwt = require('jsonwebtoken');
 const { BadRequestError, NotFoundError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
+
+const PORTAL_SESSION_SECRET = process.env.JWT_PORTAL_SECRET || process.env.JWT_ACCESS_SECRET || 'meat_manager_portal_secret_key_2026';
 
 // Helper lấy tổng số ngày của một tháng bất kỳ
 const getDaysInMonth = (year, month) => {
@@ -719,6 +722,56 @@ const getEmployeeHistory = async (req, res, next) => {
   }
 };
 
+// 11. Tạo đường dẫn tra cứu Lương, Chế độ và Ngày nghỉ gửi qua Zalo cho nhân viên
+const getEmployeeShareLink = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.effectiveUserId;
+
+    const employee = await prisma.employee.findFirst({
+      where: { id, userId, isActive: true },
+      include: {
+        user: {
+          select: { id: true, name: true, phone: true }
+        }
+      }
+    });
+
+    if (!employee) {
+      throw new NotFoundError('Không tìm thấy nhân viên.');
+    }
+
+    // Tạo token mã hóa chứa thông tin nhân viên
+    const token = jwt.sign(
+      {
+        employeeId: employee.id,
+        userId: employee.userId,
+        type: 'EMPLOYEE_SALARY',
+      },
+      PORTAL_SESSION_SECRET,
+      { expiresIn: '365d' }
+    );
+
+    const cleanPhone = (employee.phone || '').replace(/[^0-9]/g, '');
+    const suggestedPin = cleanPhone.length >= 4 ? cleanPhone.slice(-4) : null;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        token,
+        employeeId: employee.id,
+        name: employee.name,
+        phone: employee.phone,
+        role: employee.role,
+        suggestedPin,
+        merchantName: employee.user?.name || 'Cửa hàng',
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getEmployees,
   createEmployee,
@@ -730,4 +783,5 @@ module.exports = {
   calculateSalary,
   paySalary,
   getEmployeeHistory,
+  getEmployeeShareLink,
 };

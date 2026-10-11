@@ -31,6 +31,13 @@ router.post('/sync-invoice/:token/:invoiceId', portalController.syncInvoiceViaPo
 // Chủ buôn công bố số liệu trực tiếp ngay trên portal
 router.post('/publish/:token', portalController.publishByToken);
 
+// ─── CỔNG TRA CỨU PHIẾU LƯƠNG & CHẤM CÔNG NHÂN VIÊN QUA ZALO ───
+// Lấy thông tin cơ bản & kiểm tra yêu cầu mã PIN
+router.get('/employee-salary/info/:token', portalController.getEmployeeSalaryPortalInfo);
+
+// Lấy toàn bộ số liệu lương, chấm công, tạm ứng theo tháng
+router.get('/employee-salary/data/:token', portalController.getEmployeeSalaryPortalData);
+
 // ─── 2. CÁC TUYẾN ĐƯỜNG QUẢN LÝ DÀNH CHO CHỦ BUÔN TRÊN APP ───
 // Lấy danh sách link ghim Zalo
 router.get('/manage/links', authenticateToken, resolveWorkspace, portalController.getPortalLinks);

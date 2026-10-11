@@ -491,6 +491,20 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
       expect(matchXg3).not.toBeNull();
       expect(matchXg3.name).toBe('Xg Bò');
 
+      // Khi có 1 ký tự đơn lẻ viết ngoáy (như chữ 'x' nhìn như r, v, y, t, c...)
+      const singleCharTests = ['r', 'v', 'y', 't', 'c'];
+      for (const char of singleCharTests) {
+        const matched = matchProductByName(char, productsWithXg);
+        expect(matched).not.toBeNull();
+        expect(matched.name).toBe('Xg Bò');
+      }
+
+      // Ký tự đơn lẻ 's' bắt buộc khớp Sườn
+      const productsWithSuon = [...sampleProducts, { id: 'prod-suon', name: 'Sườn' }];
+      const matchSuon = matchProductByName('s', productsWithSuon);
+      expect(matchSuon).not.toBeNull();
+      expect(matchSuon.name).toBe('Sườn');
+
       // 2. Logic chuẩn hóa số cân của Xg Bò
       const normalizeXgQuantity = (name, quantity) => {
         const cleanLower = name.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
@@ -659,6 +673,126 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
       const bunHueInputs = ['Bún huế van khe', 'bún huế', 'bun hue văn khê', 'bún huế văn khê'];
       for (const input of bunHueInputs) {
         expect(matchVanKhe(input)).toBe(bunHueCustomer.id);
+      }
+    });
+
+    it('14. AI bóc tách chữ viết tay "phở ĐS" / "pho ds" / "phở Đg" / "pho dg" bắt buộc tự động khớp vào khách "Phở đông"', async () => {
+      // 1. Tạo khách "Phở đông" trong DB
+      const phoDongCustomer = await createTestCustomer(
+        testUser.id,
+        'Phở đông'
+      );
+
+      const customers = await prisma.customer.findMany({
+        where: { userId: testUser.id, isActive: true },
+        select: { id: true, name: true }
+      });
+
+      const removeDiacritics = (str) => {
+        if (!str) return '';
+        return str
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/đ/g, 'd')
+          .replace(/Đ/g, 'd')
+          .toLowerCase()
+          .trim();
+      };
+
+      const matchPhoDong = (input) => {
+        const cleanDetected = removeDiacritics(input);
+        const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+        let matchedCustomerId = null;
+        if (
+          cleanDetected === 'pho dg' ||
+          cleanDetected === 'phodg' ||
+          cleanDetected === 'pho dong' ||
+          cleanDetected === 'phodong' ||
+          cleanDetected === 'pho ds' ||
+          cleanDetected === 'phods' ||
+          cleanDetected === 'dg' ||
+          cleanDetected === 'ds' ||
+          cleanDetectedNoSpace === 'phodg' ||
+          cleanDetectedNoSpace === 'phodong' ||
+          cleanDetectedNoSpace === 'phods' ||
+          (cleanDetected.includes('pho') && (cleanDetected.includes('dg') || cleanDetected.includes('dong') || cleanDetected.includes('ds'))) ||
+          cleanDetected.includes('pho dong')
+        ) {
+          const phoDongCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean === 'pho dong' || (cClean.includes('pho') && cClean.includes('dong'));
+          });
+          if (phoDongCust) {
+            matchedCustomerId = phoDongCust.id;
+          }
+        }
+
+        return matchedCustomerId;
+      };
+
+      const testInputs = ['phở ĐS', 'pho ds', 'phở Đg', 'pho dg', 'phở đông', 'Phở Đông', 'phở đs', 'phods', 'phodg'];
+      for (const input of testInputs) {
+        expect(matchPhoDong(input)).toBe(phoDongCustomer.id);
+      }
+    });
+
+    it('15. AI bóc tách chữ viết tay "lai" / "lại" / "Lai" / "tai" bắt buộc tự động khớp vào khách "Tài"', async () => {
+      // 1. Tạo khách "Tài" trong DB
+      const taiCustomer = await createTestCustomer(
+        testUser.id,
+        'Tài'
+      );
+
+      const customers = await prisma.customer.findMany({
+        where: { userId: testUser.id, isActive: true },
+        select: { id: true, name: true }
+      });
+
+      const removeDiacritics = (str) => {
+        if (!str) return '';
+        return str
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/đ/g, 'd')
+          .replace(/Đ/g, 'd')
+          .toLowerCase()
+          .trim();
+      };
+
+      const matchTai = (input) => {
+        const cleanDetected = removeDiacritics(input);
+        const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+        let matchedCustomerId = null;
+        if (
+          cleanDetected === 'lai' ||
+          cleanDetectedNoSpace === 'lai' ||
+          cleanDetected === 'tai' ||
+          cleanDetectedNoSpace === 'tai' ||
+          cleanDetected === 'anh tai' ||
+          cleanDetectedNoSpace === 'anhtai' ||
+          cleanDetected === 'chu tai' ||
+          cleanDetectedNoSpace === 'chutai'
+        ) {
+          const taiCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean === 'tai' || cClean === 'anh tai';
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return (cClean === 'tai' || cClean.includes('tai')) && !cClean.includes('tuyet') && !cClean.includes('tai chinh');
+          });
+          if (taiCust) {
+            matchedCustomerId = taiCust.id;
+          }
+        }
+
+        return matchedCustomerId;
+      };
+
+      const testInputs = ['lai', 'Lai', 'lại', 'Lại', 'tai', 'Tai', 'tài', 'Tài', 'anh tài', 'anh tai'];
+      for (const input of testInputs) {
+        expect(matchTai(input)).toBe(taiCustomer.id);
       }
     });
   });

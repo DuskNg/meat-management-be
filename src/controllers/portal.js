@@ -2115,6 +2115,241 @@ const deleteAdminDeliveryRequest = async (req, res, next) => {
   }
 };
 
+// Helper lấy số ngày trong tháng
+const getDaysInMonthForSalary = (year, month) => {
+  return new Date(year, month, 0).getDate();
+};
+
+// Helper parse monthKey "MM/YYYY"
+const parseMonthKeyForSalary = (monthKey) => {
+  if (!monthKey || typeof monthKey !== 'string') return null;
+  const parts = monthKey.split('/');
+  if (parts.length !== 2) return null;
+  const month = parseInt(parts[0], 10);
+  const year = parseInt(parts[1], 10);
+  if (isNaN(month) || isNaN(year) || month < 1 || month > 12) return null;
+  return { month, year };
+};
+
+// [GET] /api/v1/portal/employee-salary/info/:token
+// Lấy thông tin cơ bản để xác thực PIN tra cứu lương nhân viên
+const getEmployeeSalaryPortalInfo = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    let decoded;
+    try {
+      decoded = jwt.verify(token, PORTAL_SESSION_SECRET);
+    } catch (e) {
+      throw new NotFoundError('Đường dẫn tra cứu không hợp lệ hoặc đã hết hạn.');
+    }
+
+    if (decoded.type !== 'EMPLOYEE_SALARY' || !decoded.employeeId) {
+      throw new BadRequestError('Loại đường dẫn tra cứu không hợp lệ.');
+    }
+
+    const employee = await prisma.employee.findUnique({
+      where: { id: decoded.employeeId },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+      },
+    });
+
+    if (!employee || !employee.isActive) {
+      throw new NotFoundError('Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
+    }
+
+    const cleanPhone = (employee.phone || '').replace(/[^0-9]/g, '');
+    const hasPin = cleanPhone.length >= 4;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        employeeName: employee.name,
+        role: employee.role || 'Nhân viên',
+        merchantName: employee.user?.name || 'Cửa hàng',
+        hasPin,
+        pinHint: hasPin ? `Nhập 4 số cuối số điện thoại (...${cleanPhone.slice(-4)})` : null,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [GET] /api/v1/portal/employee-salary/data/:token
+// Lấy chi tiết lương, các đợt tạm ứng, chấm công và ngày nghỉ theo tháng
+const getEmployeeSalaryPortalData = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const { monthKey, pin } = req.query;
+    const headerPin = req.headers['x-portal-pin'];
+    const clientPin = (headerPin || pin || '').toString().trim();
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, PORTAL_SESSION_SECRET);
+    } catch (e) {
+      throw new NotFoundError('Đường dẫn tra cứu không hợp lệ hoặc đã hết hạn.');
+    }
+
+    if (decoded.type !== 'EMPLOYEE_SALARY' || !decoded.employeeId) {
+      throw new BadRequestError('Loại đường dẫn tra cứu không hợp lệ.');
+    }
+
+    const employee = await prisma.employee.findUnique({
+      where: { id: decoded.employeeId },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+      },
+    });
+
+    if (!employee || !employee.isActive) {
+      throw new NotFoundError('Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
+    }
+
+    const cleanPhone = (employee.phone || '').replace(/[^0-9]/g, '');
+    if (cleanPhone.length >= 4) {
+      const correctPin = cleanPhone.slice(-4);
+      if (clientPin !== correctPin) {
+        throw new ForbiddenError('Mã PIN không chính xác. Vui lòng nhập 4 số cuối số điện thoại của bạn.');
+      }
+    }
+
+    // Xác định tháng xem
+    let targetMonthKey = monthKey;
+    if (!targetMonthKey) {
+      const now = new Date();
+      targetMonthKey = `${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
+    }
+
+    const parsed = parseMonthKeyForSalary(targetMonthKey);
+    if (!parsed) {
+      throw new BadRequestError('Định dạng tháng không hợp lệ (MM/YYYY).');
+    }
+
+    const { month, year } = parsed;
+    const totalDaysInMonth = getDaysInMonthForSalary(year, month);
+    const startOfMonth = new Date(year, month - 1, 1);
+    const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+
+    // 1. Chấm công trong tháng
+    const attendances = await prisma.attendance.findMany({
+      where: {
+        employeeId: employee.id,
+        date: { gte: startOfMonth, lte: endOfMonth },
+      },
+      orderBy: { date: 'asc' },
+    });
+
+    let workingDays = totalDaysInMonth;
+    let fullDaysCount = 0;
+    let halfDaysCount = 0;
+    let absentDaysCount = 0;
+
+    attendances.forEach((att) => {
+      if (att.status === 'ABSENT') {
+        workingDays -= 1.0;
+        absentDaysCount += 1;
+      } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
+        workingDays -= 0.5;
+        halfDaysCount += 1;
+      } else if (att.status === 'PRESENT') {
+        fullDaysCount += 1;
+      }
+    });
+
+    // 2. Tạm ứng trong tháng
+    const advances = await prisma.salaryAdvance.findMany({
+      where: {
+        employeeId: employee.id,
+        date: { gte: startOfMonth, lte: endOfMonth },
+      },
+      orderBy: { date: 'asc' },
+    });
+    const totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
+
+    // 3. Chốt thanh toán lương (nếu chủ đã chốt)
+    const payment = await prisma.salaryPayment.findFirst({
+      where: {
+        employeeId: employee.id,
+        monthKey: targetMonthKey,
+      },
+    });
+
+    const baseSalary = parseFloat(employee.baseSalary);
+    const dailySalary = Math.round(baseSalary / totalDaysInMonth);
+    const calculatedSalary = Math.round(dailySalary * workingDays);
+    const bonus = payment ? parseFloat(payment.bonus) : 0;
+    const deductions = payment ? parseFloat(payment.deductions) : 0;
+    const finalAmount = payment
+      ? parseFloat(payment.finalAmount)
+      : Math.max(0, calculatedSalary - totalAdvances);
+
+    // Danh sách ngày nghỉ / nửa buổi đối soát
+    const leaves = attendances
+      .filter((att) => att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'))
+      .map((att) => ({
+        id: att.id,
+        date: att.date.toISOString().split('T')[0],
+        status: att.status,
+        shift: att.shift,
+        note: att.note || '',
+      }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        employee: {
+          id: employee.id,
+          name: employee.name,
+          role: employee.role || 'Nhân viên',
+          phone: employee.phone,
+        },
+        merchant: {
+          name: employee.user?.name || 'Cửa hàng',
+          phone: employee.user?.phone,
+        },
+        monthKey: targetMonthKey,
+        totalDaysInMonth,
+        workingDays,
+        stats: {
+          fullDaysCount,
+          halfDaysCount,
+          absentDaysCount,
+        },
+        salary: {
+          baseSalary,
+          dailySalary,
+          calculatedSalary,
+          totalAdvances,
+          bonus,
+          deductions,
+          finalAmount,
+          isPaid: !!payment,
+          paidAt: payment ? payment.paidAt : null,
+          paymentNote: payment ? payment.note : null,
+        },
+        advances: advances.map((adv) => ({
+          id: adv.id,
+          amount: parseFloat(adv.amount),
+          date: adv.date.toISOString().split('T')[0],
+          note: adv.note || '',
+        })),
+        leaves,
+        attendances: attendances.map((att) => ({
+          id: att.id,
+          date: att.date.toISOString().split('T')[0],
+          status: att.status,
+          shift: att.shift,
+          note: att.note || '',
+        })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   // Public
   getPublicPortalInfo,
@@ -2127,6 +2362,8 @@ module.exports = {
   submitDeliveryRequest,
   getPortalDeliveryRequests,
   cancelDeliveryRequest,
+  getEmployeeSalaryPortalInfo,
+  getEmployeeSalaryPortalData,
   // Private Manage
   getPortalLinks,
   createPortalLink,

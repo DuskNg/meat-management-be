@@ -144,7 +144,9 @@ const matchProductByName = (cleanItemName, products, customerPriceMap = new Map(
   }
 
   // 7. Từ khóa "Xg Bò" / "x" / "xg" / "xương bò" vs "sườn xg"
-  if (cleanLower === 'x' || cleanLower === 'xg' || cleanLower === 'xg bo' || cleanLower === 'xuong' || cleanLower === 'xuong bo') {
+  // ĐẶC BIỆT: Nếu tên món chỉ có 1 ký tự duy nhất (như chữ 'x' viết ngoáy thành r, v, y, t, c...) => BẮT BUỘC là "Xg Bò" (trừ chữ 's' là Sườn)
+  const isSingleCharXg = cleanLower.length === 1 && cleanLower !== 's';
+  if (isSingleCharXg || cleanLower === 'x' || cleanLower === 'xg' || cleanLower === 'xg bo' || cleanLower === 'xuong' || cleanLower === 'xuong bo') {
     const xgBoProd = products.find((p) => {
       const pClean = removeDiacritics(p.name.toLowerCase());
       return (pClean.includes('xg bo') || pClean === 'xg' || pClean === 'xuong bo' || pClean === 'xuong') && !pClean.includes('suon');
@@ -424,7 +426,8 @@ I. XÁC ĐỊNH TÊN KHÁCH HÀNG (customer_name) TỪ GIỌNG NÓI:
 - "Trung Kính" / "Bếp Trung Kính" => "Trung kính".
 - "Thái Hà" => "Thái hà".
 - "Anh Thắng phố cổ" => "Anh thắng phố cổ".
-- "Phở Đông" => "Phở đông".
+- "Phở Đông" / "phở Đg" / "phở ĐS" / "pho dg" / "pho ds" => "Phở đông".
+- "Tài" / "lai" / "lại" / "tai" => "Tài".
 - "Gia Hưng CS2" => "Gia Hưng cs2".
 - "Giảng Võ" / "Giang Võ" => "Giảng võ".
 - "794" / "794 Láng Hạ" / "The Industree" => "794 láng hạ".
@@ -454,8 +457,7 @@ II. BÓC TÁCH MÓN THỊT (items):
 - "bò xay" / "vai xay" / "xay" => "bò xay".
 - "thăn" / "thịt thăn" => "Thăn bò".
 - "tái" / "thịt tái" => "Tái (bò)".
-- "bắp giây" / "bắp dây" => "Bắp giây"; "bắp" / "thịt bắp" => "Bắp bò".
-- "xg" / "xương" / "x" => "Xg Bò". Xương bò luôn chẵn 5, 10, 15 kg (1 hoặc 1.0 => 10kg; 1.5 => 15kg; 5 => 5kg).
+- "xg" / "xương" / "x" => "Xg Bò". Xương bò luôn bán số lượng lớn (>= 5kg) và LUÔN LÀ SỐ NGUYÊN (5, 10, 12, 15, 17, 20...). KHÔNG BAO GIỜ có số lẻ dưới 5kg (1.5kg, 1.7kg, 1.2kg...); nếu viết 17, 15, 12, 10 mà có nét gạch/móc giống 1.7, 1.5, 1.2 thì BẮT BUỘC ĐỌC LÀ SỐ NGUYÊN 17, 15, 12, 10 (đối chiếu thành tiền: ví dụ 425k / 25k = 17kg).
 
 III. ĐỌC SỐ CÂN (quantity) VÀ MẶT CÂN ĐIỆN TỬ:
 - 3 chữ số liên tiếp X Y Z => hiểu là X.YZ kg (ví dụ: "tái 1 9 5" => món "Tái", quantity: 1.95; "4 8 4" => 4.84; "3 7 0" => 3.7).
@@ -491,8 +493,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
   + "Trắng" / "quả trắng" => "quả trắng".
   + "Quạt" => "quạt".
   + "Thăn" / "thăn bò" => "Thăn bò".
-  + "diềm" / "diềm thăn" / "diềm bò" / "dt" => "Diềm bò" (nếu có chữ "thái" => "Diềm bò thái"). TUYỆT ĐỐI CẤM trả về "Thăn bò".
-  + "xg" / "x" / "xương" => "Xg Bò". Xương bò luôn chẵn 5, 10, 15 kg (viết giống 1 hoặc 1.0 => auto 10kg; 1.5 => auto 15kg; 5 => 5kg).
+  + "xg" / "x" / "xương" / bất kỳ dòng nào cột Tên hàng hóa CHỈ CÓ 1 KÝ TỰ DUY NHẤT (chữ "x" viết ngoáy/thảo nhìn giống r, v, y, t, c hoặc 1 nét móc/tick đơn lẻ, trừ chữ "s" là Sườn) => BẮT BUỘC ĐÓ LÀ "Xg Bò". XƯƠNG BÒ LUÔN BÁN SỐ LƯỢNG LỚN (>= 5kg) VÀ LUÔN LÀ SỐ NGUYÊN (5, 10, 12, 15, 17, 20...). KHÔNG BAO GIỜ BÁN LẺ DƯỚI 5KG (không có 1.5kg, 1.7kg, 1.2kg...); Nếu chữ viết tay 17, 15, 12, 10 có nét móc/gạch giống 1.7, 1.5, 1.2 thì BẮT BUỘC ĐỌC LÀ SỐ NGUYÊN 17, 15, 12, 10 (bắt buộc đối chiếu với cột THÀNH TIỀN: ví dụ thành tiền 425k / đơn giá 25k = 17kg, tuyệt đối không đọc 1.7).
   + "Tai" / "Tái" => "Tái (bò)".
   + "bắp giây" / "bắp dây" => "Bắp giây".
   + "Lá" / "lá vai" / "thịt la" => "Lá vai".
@@ -533,8 +534,13 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 - "Hạnh" / "chị Hạnh sân bóng" => "Chị hạnh sân bóng hà trì".
 - "Cồ Hải" / "Cổ Hải" => "Cồ hải".
 - "Giang Võ" / "Giang Đỏ" / "Giảng Võ" => "Giảng võ".
+- "phở Đg" / "phở ĐS" / "phở Đông" / "pho dg" / "pho ds" (chữ viết tắt "phở Đg" hay bị đọc nhầm thành "phở ĐS") => "Phở đông".
+- "Tài" / "lai" / "lại" / "tai" / "tài" (chữ viết tay "Tài" chữ T hoa viết thảo hay bị nhìn nhầm thành chữ "l" => "lai") => "Tài".
 - Có 3 chữ số "794" (794 lang ha / 794 láng hạ) => "794 láng hạ" (TUYỆT ĐỐI CẤM nhận diện thành "Cuốn láng hạ").
 - Tiêu đề "LÒ MỔ MINH THUẤN" / "LÒ MỔ MINH THUẦN" => Nhà cung cấp "Minh thuần" (viết tắt B: Bắp bò, sx/sn: Sườn).
+- ĐẶC BIỆT CHÚ Ý CHỮ KÝ Ở CHÂN TRANG / ĐÁY HÓA ĐƠN:
+  + Quan sát kỹ khu vực đáy hóa đơn (cuối trang): Thường có chữ ký người nhận / người giao hàng kèm tên viết tay bên dưới chữ ký.
+  + Nếu phần đầu hóa đơn không ghi tên khách hoặc bị mờ, BẮT BUỘC trích xuất tên khách hàng từ chữ ký ở đáy trang để đối chiếu với danh bạ khách hàng quen.
 - Ngày hóa đơn: Đọc định dạng DD/MM/YYYY. Bỏ qua nét gạch chéo khóa sổ.
 
 4. ĐƠN TRẢ HÀNG & PHIẾU NHẬP LÒ MỔ:
@@ -618,7 +624,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 
     // Nhận diện đơn NHẬP HÀNG (chủ buôn nhập thịt / mua thịt từ nhà cung cấp)
     const importRegex = /(?:nhập hàng|nhap hang|nhập thịt|nhap thit|mua hàng|mua hang|mua thịt|mua thit|nhập vào|nhap vao|mua vào|mua vao|nhập về|nhap ve|mua về|mua ve|lấy vào|lay vao|nhập kho|nhap kho|nhập lò|nhap lo|mua lò|mua lo|lấy thịt về|lay thit ve|lấy hàng về|lay hang ve|nhập lô|nhap lo|\bnhập\b|\bnhap\b|\bmua thịt\b|\bmua hàng\b|\bmua vào\b|\bmua về\b|\bmua\b)/i;
-    const isImportOrder = isValidInvoice && Boolean(
+    let isImportOrder = isValidInvoice && Boolean(
       parsedJson.is_import === true ||
       (parsedJson.note && importRegex.test(parsedJson.note)) ||
       (submission.note && importRegex.test(submission.note)) ||
@@ -627,7 +633,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 
     // Nhận diện đơn trả hàng (khi khách đọc hoặc viết: gửi về, trả hàng, trả về, trả lại, gửi lại, hàng trả, thu hồi, quay đầu, đổi trả, hoàn hàng...)
     const returnRegex = /(trả hàng|gửi về|trả về|trả lại|gửi lại|hàng trả|thu hồi|bắn về|quay đầu|đổi trả|hoàn hàng|tra hang|gui ve|tra ve|tra lai|gui lai|hang tra|quay dau|doi tra|hoan hang)/i;
-    const isReturnOrder = !isImportOrder && isValidInvoice && Boolean(
+    let isReturnOrder = !isImportOrder && isValidInvoice && Boolean(
       parsedJson.is_return === true ||
       (parsedJson.note && returnRegex.test(parsedJson.note)) ||
       (submission.note && returnRegex.test(submission.note)) ||
@@ -994,16 +1000,20 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
       }
 
       if (!matchedCustomerId) {
-        // Khớp ưu tiên khách "Phở đông" nếu AI nhận diện là phở đg, phở đông, pho dg, pho dong...
+        // Khớp ưu tiên khách "Phở đông" nếu AI nhận diện là phở đg, phở đông, phở đs, pho dg, pho dong, pho ds...
         if (
           cleanDetected === 'pho dg' ||
           cleanDetected === 'phodg' ||
           cleanDetected === 'pho dong' ||
           cleanDetected === 'phodong' ||
+          cleanDetected === 'pho ds' ||
+          cleanDetected === 'phods' ||
           cleanDetected === 'dg' ||
+          cleanDetected === 'ds' ||
           cleanDetectedNoSpace === 'phodg' ||
           cleanDetectedNoSpace === 'phodong' ||
-          (cleanDetected.includes('pho') && (cleanDetected.includes('dg') || cleanDetected.includes('dong'))) ||
+          cleanDetectedNoSpace === 'phods' ||
+          (cleanDetected.includes('pho') && (cleanDetected.includes('dg') || cleanDetected.includes('dong') || cleanDetected.includes('ds'))) ||
           cleanDetected.includes('pho dong')
         ) {
           const phoDongCust = customers.find((c) => {
@@ -1012,6 +1022,31 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
           });
           if (phoDongCust) {
             matchedCustomerId = phoDongCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "Tài" (kể cả khi nét chữ viết tay chữ T thảo bị AI đọc nhầm thành chữ "l" -> lai, lại, tai...)
+        if (
+          cleanDetected === 'lai' ||
+          cleanDetectedNoSpace === 'lai' ||
+          cleanDetected === 'tai' ||
+          cleanDetectedNoSpace === 'tai' ||
+          cleanDetected === 'anh tai' ||
+          cleanDetectedNoSpace === 'anhtai' ||
+          cleanDetected === 'chu tai' ||
+          cleanDetectedNoSpace === 'chutai'
+        ) {
+          const taiCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean === 'tai' || cClean === 'anh tai';
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return (cClean === 'tai' || cClean.includes('tai')) && !cClean.includes('tuyet') && !cClean.includes('tai chinh');
+          });
+          if (taiCust) {
+            matchedCustomerId = taiCust.id;
           }
         }
       }
@@ -1653,6 +1688,11 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
       'xg bo': 'Xg Bò',
       'xuong': 'Xg Bò',
       'xuong bo': 'Xg Bò',
+      'r': 'Xg Bò',
+      'v': 'Xg Bò',
+      'y': 'Xg Bò',
+      't': 'Xg Bò',
+      'c': 'Xg Bò',
       'tai': 'Tái (Bò)',
       'tai bo': 'Tái (Bò)',
       'bap': 'Bắp Bò',
@@ -1914,6 +1954,15 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
         SPECIAL_MEAT_MAP[removeDiacritics(rawLower)] ||
         (cleanedRaw ? (cleanedRaw.charAt(0).toUpperCase() + cleanedRaw.slice(1)) : rawOriginal || 'Thịt lẻ').trim();
 
+      // Nếu tên món chỉ gồm 1 ký tự duy nhất (như chữ 'x' viết ngoáy thành r, v, y, t, c...) thì auto là "Xg Bò" (trừ 's' là "Sườn")
+      if (cleanLower.length === 1) {
+        if (cleanLower === 's') {
+          normalizedName = 'Sườn';
+        } else {
+          normalizedName = 'Xg Bò';
+        }
+      }
+
       // Xử lý khối lượng cho từng dòng:
       // normalizeWeightQuantity chỉ áp dụng cho VIDEO khi người nói đọc các chữ số cân điện tử liền nhau
       let qty = isVideo
@@ -1921,22 +1970,6 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
         : (item.quantity != null ? parseFloat(String(item.quantity).replace(',', '.')) : null);
       if (qty != null && (isNaN(qty) || qty <= 0)) {
         qty = null;
-      }
-
-      // QUY TẮC BẢO VỆ ĐẶC BIỆT CHO XG BÒ (XƯƠNG BÒ):
-      // Xg bò không bao giờ là 1 và 1.5 kg, auto là 5, 10, 15 kg
-      // Chỉ áp dụng cho đúng món Xg Bò, TUYỆT ĐỐI loại trừ "Sườn xg" (sườn bán lẻ 1 - 1.5kg là bình thường)
-      const isSuonXg = cleanLower.includes('suon') || normalizedName === 'Sườn xg';
-      const isXgBo = !isSuonXg && Boolean(
-        normalizedName === 'Xg Bò' ||
-        ['x', 'xg', 'xg bo', 'xuong', 'xuong bo'].includes(cleanLower)
-      );
-      if (isXgBo && qty != null) {
-        if (qty === 1 || qty === 1.0) {
-          qty = 10;
-        } else if (qty === 1.5) {
-          qty = 15;
-        }
       }
 
       // QUY TẮC ĐẶC THÙ CHO KHÁCH CHỊ TUYẾT:
@@ -1967,6 +2000,49 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 
       // So khớp với danh mục sản phẩm của chủ buôn bằng thuật toán so khớp chính xác matchProductByName
       const matchedProd = matchProductByName(cleanItemName, products, customerPriceMap);
+      const customPriceVal = matchedProd ? customerPriceMap.get(matchedProd.id) : null;
+
+      // QUY TẮC BẢO VỆ ĐẶC BIỆT CHO XG BÒ (XƯƠNG BÒ):
+      // Xương bò luôn bán số lượng lớn (>= 5kg) và LUÔN LÀ SỐ NGUYÊN (ví dụ: 5, 10, 12, 15, 17, 20...).
+      // Không bao giờ bán lẻ dưới 5kg (không có 1.5kg, 1.7kg, 1.2kg).
+      // Nét viết tay số 17, 15, 12, 10 thường có nét móc/gạch khiến AI nhận nhầm thành 1.7, 1.5, 1.2...
+      const isSuonXg = cleanLower.includes('suon') || normalizedName === 'Sườn xg';
+      const isXgBo = !isSuonXg && Boolean(
+        normalizedName === 'Xg Bò' ||
+        ['x', 'xg', 'xg bo', 'xuong', 'xuong bo'].includes(cleanLower) ||
+        (cleanLower.length === 1 && cleanLower !== 's')
+      );
+      if (isXgBo && qty != null) {
+        // 1. Kiểm tra đối chiếu với Thành tiền nếu hóa đơn có ghi cột Thành tiền (amount)
+        let rawAmtForXg = item.amount != null ? parseFloat(item.amount) : null;
+        if (rawAmtForXg != null && rawAmtForXg > 0 && rawAmtForXg < 10000) {
+          rawAmtForXg = Math.round(rawAmtForXg * 1000); // 425 -> 425000
+        }
+        const effectiveUnitPrice = customPriceVal || (matchedProd?.defaultPrice ? parseFloat(matchedProd.defaultPrice) : null) || (item.price != null ? parseFloat(item.price) : null);
+
+        let resolvedByAmount = false;
+        if (rawAmtForXg != null && rawAmtForXg > 0 && effectiveUnitPrice != null && effectiveUnitPrice > 0) {
+          const calcQty = rawAmtForXg / effectiveUnitPrice;
+          // Nếu thành tiền chia đơn giá ra số nguyên (hoặc xấp xỉ số nguyên) và >= 5kg (ví dụ 425.000 / 25.000 = 17)
+          if (calcQty >= 5 && Math.abs(calcQty - Math.round(calcQty)) < 0.15) {
+            qty = Math.round(calcQty);
+            resolvedByAmount = true;
+          }
+        }
+
+        if (!resolvedByAmount) {
+          // 2. Nếu AI đọc nhầm các số hàng chục (10 - 49) thành số thập phân có dấu chấm/phẩy:
+          if (qty < 5) {
+            if (qty >= 1 && qty < 5) {
+              qty = Math.round(qty * 10); // 1.7 -> 17, 1.5 -> 15, 1.2 -> 12, 1 -> 10, 2 -> 20...
+            }
+          }
+          // Xương bò luôn là số nguyên (integer)
+          if (qty != null) {
+            qty = Math.round(qty);
+          }
+        }
+      }
 
       let price = item.price != null ? parseFloat(item.price) : null;
       let amount = item.amount != null ? parseFloat(item.amount) : null;
@@ -1990,7 +2066,6 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
       }
 
       // Ưu tiên giá riêng của khách hàng cao nhất (bảo toàn theo nguyên tắc Custom Price Integrity)
-      const customPriceVal = matchedProd ? customerPriceMap.get(matchedProd.id) : null;
       const isQuickDebtItem = !normalizedName || normalizedName === 'Tiền hàng' || normalizedName === 'Thịt lẻ';
 
       if (customPriceVal != null && (!isQuickDebtItem || (qty != null && qty > 0))) {
