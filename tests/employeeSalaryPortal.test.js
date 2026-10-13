@@ -152,4 +152,101 @@ describe('Luồng Nghiệp Vụ: Tra Cứu Lương & Chấm Công Nhân Viên Qu
     // Lương thực lĩnh lớn hơn 0 và được tính toán chính xác
     expect(data.salary.finalAmount).toBeGreaterThan(0);
   });
+
+  it('5. Thêm mới nhân viên mới qua API POST /api/v1/employees thành công', async () => {
+    const res = await request(app)
+      .post('/api/v1/employees')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        name: 'Quang Test Mới',
+        phone: '0912345678',
+        role: 'Giao hàng',
+        address: '123 Đường Test',
+        baseSalary: 13000000,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.name).toBe('Quang Test Mới');
+    expect(Number(res.body.data.baseSalary)).toBe(13000000);
+
+    // Dọn dẹp bản ghi test
+    await prisma.employee.delete({ where: { id: res.body.data.id } });
+  });
+
+  it('6. Ghi nhận nhân viên xin nghỉ qua API POST /api/v1/employees/leave và tự động trừ buổi lương', async () => {
+    // Ghi nhận nghỉ 1 buổi ngày 20/10/2026 cho testEmployee (lương 10.000.000đ, tháng 10 có 31 ngày => 1 ngày ~ 322.581đ)
+    const leaveRes = await request(app)
+      .post('/api/v1/employees/leave')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        employeeId: testEmployee.id,
+        date: '2026-10-20',
+        shift: 'FULL',
+        note: 'Bận việc gia đình',
+      });
+
+    expect(leaveRes.status).toBe(200);
+    expect(leaveRes.body.success).toBe(true);
+    expect(leaveRes.body.data.status).toBe('ABSENT');
+
+    // Kiểm tra danh sách nhân viên GET /api/v1/employees?monthKey=10/2026
+    const empRes = await request(app)
+      .get('/api/v1/employees?monthKey=10/2026')
+      .set('Authorization', `Bearer ${testToken}`);
+
+    expect(empRes.status).toBe(200);
+    const targetEmp = empRes.body.data.find((e) => e.id === testEmployee.id);
+    expect(targetEmp).toBeDefined();
+    // Trước đó có 1 ngày ABSENT (1 công) + 1 ngày HALF (0.5 công), cộng thêm ngày 20/10 (1 công) => Tổng 2.5 ngày nghỉ
+    expect(targetEmp.leaveDays).toBe(2.5);
+    expect(targetEmp.leaveDeduction).toBeGreaterThan(0);
+    expect(Number(targetEmp.remainingSalary)).toBeLessThan(Number(targetEmp.baseSalary));
+
+    // Xóa ngày nghỉ vừa tạo để dọn dẹp
+    const delRes = await request(app)
+      .delete(`/api/v1/employees/leave/${leaveRes.body.data.id}`)
+      .set('Authorization', `Bearer ${testToken}`);
+
+    expect(delRes.status).toBe(200);
+    expect(delRes.body.success).toBe(true);
+  });
+
+  it('7. Chủ buôn lấy link cổng nhân sự chung, nhân viên vào cổng chung tra cứu bảng lương bảo mật bằng mã PIN', async () => {
+    // Chủ buôn lấy link chung
+    const linkRes = await request(app)
+      .get('/api/v1/employees/general-share-link')
+      .set('Authorization', `Bearer ${testToken}`);
+
+    expect(linkRes.status).toBe(200);
+    expect(linkRes.body.success).toBe(true);
+    expect(linkRes.body.data.token).toBeDefined();
+
+    const generalToken = linkRes.body.data.token;
+
+    // Nhân viên mở link chung lấy danh sách
+    const infoRes = await request(app)
+      .get(`/api/v1/portal/staff/info/${generalToken}`);
+
+    expect(infoRes.status).toBe(200);
+    expect(infoRes.body.data.isGeneral).toBe(true);
+    expect(infoRes.body.data.employees.length).toBeGreaterThan(0);
+    expect(infoRes.body.data.employees.some((e) => e.id === testEmployee.id)).toBe(true);
+
+    // Nhân viên nhập sai PIN -> Bị chặn 403
+    const wrongPinRes = await request(app)
+      .get(`/api/v1/portal/staff/salary/${generalToken}?employeeId=${testEmployee.id}&monthKey=10/2026&pin=9999`);
+
+    expect(wrongPinRes.status).toBe(403);
+    expect(wrongPinRes.body.success).toBe(false);
+
+    // Nhân viên nhập đúng PIN (4 số cuối SĐT 6655) -> Mở bảng lương thành công
+    const correctPinRes = await request(app)
+      .get(`/api/v1/portal/staff/salary/${generalToken}?employeeId=${testEmployee.id}&monthKey=10/2026&pin=6655`);
+
+    expect(correctPinRes.status).toBe(200);
+    expect(correctPinRes.body.success).toBe(true);
+    expect(correctPinRes.body.data.employee.name).toBe('NV_NguyenVanTest');
+    expect(correctPinRes.body.data.salary.finalAmount).toBeGreaterThan(0);
+  });
 });

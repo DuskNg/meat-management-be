@@ -38,6 +38,10 @@ router.get('/employee-salary/info/:token', portalController.getEmployeeSalaryPor
 // Lấy toàn bộ số liệu lương, chấm công, tạm ứng theo tháng
 router.get('/employee-salary/data/:token', portalController.getEmployeeSalaryPortalData);
 
+// ─── CỔNG THÔNG TIN NHÂN SỰ CHUNG & NỘI QUY CỬA HÀNG ───
+router.get('/staff/info/:token', portalController.getStaffPortalInfo);
+router.get('/staff/salary/:token', portalController.getStaffPortalSalaryData);
+
 // ─── 2. CÁC TUYẾN ĐƯỜNG QUẢN LÝ DÀNH CHO CHỦ BUÔN TRÊN APP ───
 // Lấy danh sách link ghim Zalo
 router.get('/manage/links', authenticateToken, resolveWorkspace, portalController.getPortalLinks);

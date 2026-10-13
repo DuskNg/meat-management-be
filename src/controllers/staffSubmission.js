@@ -396,30 +396,12 @@ const getStaffSubmissions = async (req, res, next) => {
     }
 
     if (date) {
-      const d = new Date(date);
-      const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0);
-      const endOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
-
-      const now = new Date();
-      const isViewingToday = (
-        d.getFullYear() === now.getFullYear() &&
-        d.getMonth() === now.getMonth() &&
-        d.getDate() === now.getDate()
-      );
-
-      // Nếu đang xem giao diện ngày hiện tại: Hiển thị chung tất cả hóa đơn ngày hôm nay,
-      // ĐỒNG THỜI tự động gom tất cả hóa đơn chưa duyệt (kể cả trước đó mang ngày khác) vào chung 1 giao diện
-      if (isViewingToday && status !== 'APPROVED') {
-        where.OR = [
-          { date: { gte: startOfDay, lte: endOfDay } },
-          { status: { not: 'APPROVED' } },
-        ];
-      } else {
-        where.date = {
-          gte: startOfDay,
-          lte: endOfDay,
-        };
-      }
+      // Chuẩn hóa ngày lọc theo chuẩn múi giờ Việt Nam (UTC+7), đơn ngày nào chỉ hiển thị chính xác ngày đó
+      const { startOfDay, endOfDay } = parseDayRangeVN(date);
+      where.date = {
+        gte: startOfDay,
+        lte: endOfDay,
+      };
     } else if (fromDate && toDate) {
       where.date = {
         gte: new Date(fromDate),

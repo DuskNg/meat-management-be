@@ -2350,6 +2350,255 @@ const getEmployeeSalaryPortalData = async (req, res, next) => {
   }
 };
 
+// [GET] /api/v1/portal/staff/info/:token
+// Lấy thông tin cổng nhân sự chung hoặc riêng (danh sách nhân viên để chọn tra cứu & tên cửa hàng)
+const getStaffPortalInfo = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    let decoded;
+    try {
+      decoded = jwt.verify(token, PORTAL_SESSION_SECRET);
+    } catch (e) {
+      throw new NotFoundError('Đường dẫn tra cứu không hợp lệ hoặc đã hết hạn.');
+    }
+
+    if (decoded.type === 'STAFF_PORTAL') {
+      const user = await prisma.user.findUnique({
+        where: { id: decoded.userId },
+        select: { id: true, name: true, phone: true },
+      });
+
+      if (!user) {
+        throw new NotFoundError('Không tìm thấy thông tin cửa hàng.');
+      }
+
+      const employees = await prisma.employee.findMany({
+        where: { userId: decoded.userId, isActive: true },
+        select: { id: true, name: true, role: true, phone: true },
+        orderBy: { name: 'asc' },
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          isGeneral: true,
+          merchantName: user.name || 'Cửa hàng',
+          employees: employees.map((e) => {
+            const cleanPhone = (e.phone || '').replace(/[^0-9]/g, '');
+            return {
+              id: e.id,
+              name: e.name,
+              role: e.role || 'Nhân viên',
+              hasPin: cleanPhone.length >= 4,
+            };
+          }),
+        },
+      });
+    } else if (decoded.type === 'EMPLOYEE_SALARY') {
+      // Tương thích ngược với link cũ của 1 nhân viên
+      const employee = await prisma.employee.findUnique({
+        where: { id: decoded.employeeId },
+        include: { user: { select: { id: true, name: true, phone: true } } },
+      });
+
+      if (!employee || !employee.isActive) {
+        throw new NotFoundError('Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
+      }
+
+      const cleanPhone = (employee.phone || '').replace(/[^0-9]/g, '');
+      const hasPin = cleanPhone.length >= 4;
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          isGeneral: false,
+          employeeId: employee.id,
+          employeeName: employee.name,
+          role: employee.role || 'Nhân viên',
+          merchantName: employee.user?.name || 'Cửa hàng',
+          hasPin,
+          pinHint: hasPin ? `Nhập 4 số cuối số điện thoại (...${cleanPhone.slice(-4)})` : null,
+        },
+      });
+    }
+
+    throw new BadRequestError('Loại đường dẫn tra cứu không hợp lệ.');
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [GET] /api/v1/portal/staff/salary/:token
+// Tra cứu bảng lương của nhân viên (có xác thực PIN cá nhân)
+const getStaffPortalSalaryData = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const { employeeId, monthKey, pin } = req.query;
+    const headerPin = req.headers['x-portal-pin'];
+    const clientPin = (headerPin || pin || '').toString().trim();
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, PORTAL_SESSION_SECRET);
+    } catch (e) {
+      throw new NotFoundError('Đường dẫn tra cứu không hợp lệ hoặc đã hết hạn.');
+    }
+
+    let targetEmployeeId = employeeId;
+    if (decoded.type === 'EMPLOYEE_SALARY') {
+      targetEmployeeId = decoded.employeeId;
+    } else if (decoded.type !== 'STAFF_PORTAL') {
+      throw new BadRequestError('Loại đường dẫn tra cứu không hợp lệ.');
+    }
+
+    if (!targetEmployeeId) {
+      throw new BadRequestError('Vui lòng chọn nhân viên cần tra cứu.');
+    }
+
+    const employee = await prisma.employee.findUnique({
+      where: { id: targetEmployeeId },
+      include: {
+        user: { select: { id: true, name: true, phone: true } },
+      },
+    });
+
+    if (!employee || !employee.isActive) {
+      throw new NotFoundError('Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
+    }
+
+    // Nếu token chung, kiểm tra nhân viên phải thuộc cửa hàng của token
+    if (decoded.type === 'STAFF_PORTAL' && employee.userId !== decoded.userId) {
+      throw new ForbiddenError('Nhân viên không thuộc cửa hàng này.');
+    }
+
+    // Xác thực PIN (4 số cuối SĐT)
+    const cleanPhone = (employee.phone || '').replace(/[^0-9]/g, '');
+    if (cleanPhone.length >= 4) {
+      const correctPin = cleanPhone.slice(-4);
+      if (clientPin !== correctPin) {
+        throw new ForbiddenError('Mã PIN không chính xác. Vui lòng nhập 4 số cuối số điện thoại của bạn.');
+      }
+    }
+
+    // Xác định tháng xem
+    let targetMonthKey = monthKey;
+    if (!targetMonthKey) {
+      const now = new Date();
+      targetMonthKey = `${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
+    }
+
+    const parsed = parseMonthKeyForSalary(targetMonthKey);
+    if (!parsed) {
+      throw new BadRequestError('Định dạng tháng không hợp lệ (MM/YYYY).');
+    }
+
+    const { month, year } = parsed;
+    const totalDaysInMonth = getDaysInMonthForSalary(year, month);
+    const startOfMonth = new Date(year, month - 1, 1);
+    const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+
+    // 1. Ngày nghỉ trong tháng
+    const attendances = await prisma.attendance.findMany({
+      where: {
+        employeeId: employee.id,
+        date: { gte: startOfMonth, lte: endOfMonth },
+      },
+      orderBy: { date: 'asc' },
+    });
+
+    let leaveDays = 0;
+    attendances.forEach((att) => {
+      if (att.status === 'ABSENT') {
+        leaveDays += (att.shift === 'HALF' ? 0.5 : 1.0);
+      } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
+        leaveDays += 0.5;
+      }
+    });
+
+    // 2. Lương 1 ngày và tổng lương sau khi trừ ngày nghỉ
+    const baseSalary = parseFloat(employee.baseSalary);
+    const dailySalary = Math.round(baseSalary / totalDaysInMonth);
+    const leaveDeduction = Math.round(leaveDays * dailySalary);
+    const calculatedSalary = Math.max(0, baseSalary - leaveDeduction);
+
+    // 3. Tạm ứng trong tháng
+    const advances = await prisma.salaryAdvance.findMany({
+      where: {
+        employeeId: employee.id,
+        date: { gte: startOfMonth, lte: endOfMonth },
+      },
+      orderBy: { date: 'asc' },
+    });
+    const totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
+
+    // 4. Lương thực lĩnh
+    const finalAmount = Math.max(0, calculatedSalary - totalAdvances);
+
+    // 5. Kiểm tra chốt lương
+    const payment = await prisma.salaryPayment.findFirst({
+      where: {
+        employeeId: employee.id,
+        monthKey: targetMonthKey,
+      },
+    });
+
+    const leaves = attendances
+      .filter((att) => att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'))
+      .map((att) => ({
+        id: att.id,
+        date: att.date.toISOString().split('T')[0],
+        status: att.status,
+        shift: att.shift,
+        note: att.note || '',
+      }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        employee: {
+          id: employee.id,
+          name: employee.name,
+          phone: employee.phone,
+          role: employee.role,
+        },
+        merchantName: employee.user?.name || 'Cửa hàng',
+        monthKey: targetMonthKey,
+        totalDaysInMonth,
+        workingDays: totalDaysInMonth - leaveDays,
+        stats: {
+          leaveDays,
+          leaveDeduction,
+          totalAdvances,
+        },
+        salary: {
+          baseSalary,
+          dailySalary,
+          calculatedSalary,
+          totalAdvances,
+          finalAmount,
+        },
+        payment: payment
+          ? {
+              isPaid: true,
+              paidAt: payment.paidAt,
+              finalAmount: parseFloat(payment.finalAmount),
+              note: payment.note,
+            }
+          : { isPaid: false },
+        advances: advances.map((adv) => ({
+          id: adv.id,
+          date: adv.date.toISOString().split('T')[0],
+          amount: parseFloat(adv.amount),
+          note: adv.note || '',
+        })),
+        leaves,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   // Public
   getPublicPortalInfo,
@@ -2364,6 +2613,8 @@ module.exports = {
   cancelDeliveryRequest,
   getEmployeeSalaryPortalInfo,
   getEmployeeSalaryPortalData,
+  getStaffPortalInfo,
+  getStaffPortalSalaryData,
   // Private Manage
   getPortalLinks,
   createPortalLink,

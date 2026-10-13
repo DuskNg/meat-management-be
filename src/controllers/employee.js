@@ -58,9 +58,29 @@ const calculateCarryOver = async (employeeId, baseSalary, targetMonthKey) => {
       }
     });
     const totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
+
+    // Tính trừ tiền ngày nghỉ của tháng
+    const attendances = await prisma.attendance.findMany({
+      where: {
+        employeeId,
+        date: { gte: start, lte: end },
+        OR: [
+          { status: 'ABSENT' },
+          { status: 'PRESENT', shift: 'HALF' }
+        ]
+      }
+    });
+    const daysInM = getDaysInMonth(item.year, item.month);
+    let lDays = 0;
+    attendances.forEach(att => {
+      if (att.status === 'ABSENT') lDays += (att.shift === 'HALF' ? 0.5 : 1.0);
+      else if (att.status === 'PRESENT' && att.shift === 'HALF') lDays += 0.5;
+    });
+    const lDeduction = Math.round(lDays * (baseSalary / daysInM));
+    const effectiveSalary = Math.max(0, baseSalary - lDeduction);
     
-    // Số dư còn lại của tháng = Lương cơ bản - Tiền tạm ứng tháng đó + Khoản âm mang sang từ trước
-    const remaining = baseSalary - totalAdvances + carryOver;
+    // Số dư còn lại của tháng = Lương thực tế sau trừ nghỉ - Tiền tạm ứng + Khoản âm mang sang từ trước
+    const remaining = effectiveSalary - totalAdvances + carryOver;
     if (remaining < 0) {
       carryOver = remaining; // Nếu âm (ứng quá tay) thì tiếp tục chuyển khoản nợ này sang tháng sau
     } else {
@@ -70,7 +90,7 @@ const calculateCarryOver = async (employeeId, baseSalary, targetMonthKey) => {
   return carryOver;
 };
 
-// 1. Lấy toàn bộ danh sách nhân viên (hỗ trợ tính toán tạm ứng và trạng thái trả lương theo tháng)
+// 1. Lấy toàn bộ danh sách nhân viên (hỗ trợ tính toán tạm ứng, ngày nghỉ và trạng thái trả lương theo tháng)
 const getEmployees = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
@@ -107,6 +127,18 @@ const getEmployees = async (req, res, next) => {
             }
           } : undefined,
         },
+        attendances: {
+          where: startOfMonth ? {
+            date: {
+              gte: startOfMonth,
+              lte: endOfMonth,
+            },
+            OR: [
+              { status: 'ABSENT' },
+              { status: 'PRESENT', shift: 'HALF' }
+            ]
+          } : undefined,
+        },
         payments: {
           where: {
             monthKey: targetMonthKey,
@@ -118,20 +150,43 @@ const getEmployees = async (req, res, next) => {
       },
     });
 
+    const totalDaysInMonth = dateParsed ? getDaysInMonth(dateParsed.year, dateParsed.month) : 30;
+
     const result = await Promise.all(employees.map(async (emp) => {
       const totalAdvances = emp.advances ? emp.advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0) : 0;
       const isPaid = emp.payments ? emp.payments.length > 0 : false;
       const paidAt = isPaid ? emp.payments[0].paidAt : null;
 
       const baseSalary = parseFloat(emp.baseSalary);
-      const carryOver = await calculateCarryOver(emp.id, baseSalary, targetMonthKey);
+      const dailySalary = Math.round(baseSalary / totalDaysInMonth);
 
-      // Loại bỏ trường advances và payments để payload gọn nhẹ
-      const { advances, payments, ...rest } = emp;
+      // Tính tổng số ngày nghỉ và số tiền bị khấu trừ
+      let leaveDays = 0;
+      if (emp.attendances) {
+        emp.attendances.forEach((att) => {
+          if (att.status === 'ABSENT') {
+            leaveDays += (att.shift === 'HALF' ? 0.5 : 1.0);
+          } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
+            leaveDays += 0.5;
+          }
+        });
+      }
+      const leaveDeduction = Math.round(leaveDays * (baseSalary / totalDaysInMonth));
+      const calculatedSalary = Math.max(0, baseSalary - leaveDeduction);
+      const carryOver = await calculateCarryOver(emp.id, baseSalary, targetMonthKey);
+      const remainingSalary = calculatedSalary - totalAdvances + carryOver;
+
+      // Loại bỏ trường advances, attendances và payments để payload gọn nhẹ
+      const { advances, attendances, payments, ...rest } = emp;
 
       return {
         ...rest,
         totalAdvances,
+        leaveDays,
+        leaveDeduction,
+        dailySalary,
+        calculatedSalary,
+        remainingSalary,
         carryOver,
         isPaid,
         paidAt,
@@ -772,6 +827,153 @@ const getEmployeeShareLink = async (req, res, next) => {
   }
 };
 
+// 12. Ghi nhận nhân viên xin nghỉ và tự động trừ buổi lương
+const recordLeave = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { employeeId, date, shift = 'FULL', note } = req.body;
+
+    if (!employeeId || !date) {
+      throw new BadRequestError('employeeId và date là bắt buộc.');
+    }
+
+    const emp = await prisma.employee.findFirst({
+      where: { id: employeeId, userId, isActive: true },
+    });
+
+    if (!emp) {
+      throw new NotFoundError('Không tìm thấy nhân viên.');
+    }
+
+    const targetDate = new Date(date);
+    targetDate.setHours(0, 0, 0, 0);
+
+    const existing = await prisma.attendance.findFirst({
+      where: {
+        employeeId,
+        date: {
+          gte: new Date(targetDate.getTime()),
+          lte: new Date(targetDate.getTime() + 24 * 60 * 60 * 1000 - 1),
+        },
+      },
+    });
+
+    let leaveRecord;
+    const shiftVal = shift === 'HALF' ? 'HALF' : 'FULL';
+
+    if (existing) {
+      leaveRecord = await prisma.attendance.update({
+        where: { id: existing.id },
+        data: {
+          status: 'ABSENT',
+          shift: shiftVal,
+          note: note ? note.trim() : null,
+        },
+      });
+    } else {
+      leaveRecord = await prisma.attendance.create({
+        data: {
+          employeeId,
+          date: targetDate,
+          status: 'ABSENT',
+          shift: shiftVal,
+          note: note ? note.trim() : null,
+        },
+      });
+    }
+
+    const dateStr = targetDate.toISOString().split('T')[0];
+    await logActivity(
+      userId,
+      'RECORD_EMPLOYEE_LEAVE',
+      `Ghi nhận xin nghỉ: Nhân viên ${emp.name}, ngày ${dateStr}, ca ${shiftVal === 'HALF' ? 'Nửa ngày (0.5 buổi)' : 'Cả ngày (1 buổi)'}${note ? ` - Lý do: ${note}` : ''}`
+    );
+
+    res.status(200).json({
+      success: true,
+      data: leaveRecord,
+      message: 'Ghi nhận xin nghỉ thành công.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 13. Xóa bản ghi xin nghỉ
+const deleteLeave = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { id } = req.params;
+
+    const leave = await prisma.attendance.findUnique({
+      where: { id },
+      include: { employee: true },
+    });
+
+    if (!leave || leave.employee.userId !== userId) {
+      throw new NotFoundError('Không tìm thấy bản ghi nghỉ phép hoặc bạn không có quyền xóa.');
+    }
+
+    await prisma.attendance.delete({
+      where: { id },
+    });
+
+    await logActivity(
+      userId,
+      'DELETE_EMPLOYEE_LEAVE',
+      `Xóa bản ghi xin nghỉ của nhân viên ${leave.employee.name} ngày ${leave.date.toISOString().split('T')[0]}`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Đã xóa bản ghi nghỉ phép thành công.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 14. Tạo đường dẫn chung cho toàn bộ nhân sự (tra cứu lương cá nhân & xem nội quy quy định cửa hàng)
+const getGeneralEmployeeShareLink = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, phone: true },
+    });
+
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy thông tin cửa hàng.');
+    }
+
+    const totalEmployees = await prisma.employee.count({
+      where: { userId, isActive: true },
+    });
+
+    // Tạo token chung cho cửa hàng/chủ buôn
+    const token = jwt.sign(
+      {
+        userId,
+        type: 'STAFF_PORTAL',
+      },
+      PORTAL_SESSION_SECRET,
+      { expiresIn: '365d' }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        token,
+        merchantName: user.name || 'Cửa hàng',
+        totalEmployees,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getEmployees,
   createEmployee,
@@ -779,9 +981,12 @@ module.exports = {
   deleteEmployee,
   getAttendances,
   saveAttendance,
+  recordLeave,
+  deleteLeave,
   createSalaryAdvance,
   calculateSalary,
   paySalary,
   getEmployeeHistory,
   getEmployeeShareLink,
+  getGeneralEmployeeShareLink,
 };

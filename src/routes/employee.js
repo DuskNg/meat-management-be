@@ -15,9 +15,11 @@ router.post('/', employeeController.createEmployee);
 router.put('/:id', employeeController.updateEmployee);
 router.delete('/:id', employeeController.deleteEmployee);
 
-// API Chấm công
+// API Chấm công & Xin nghỉ
 router.get('/attendance', employeeController.getAttendances);
 router.post('/attendance', employeeController.saveAttendance);
+router.post('/leave', employeeController.recordLeave);
+router.delete('/leave/:id', employeeController.deleteLeave);
 
 // API Tạm ứng lương
 router.post('/advances', employeeController.createSalaryAdvance);
@@ -30,6 +32,7 @@ router.post('/salary/pay', employeeController.paySalary);
 router.get('/:id/history', employeeController.getEmployeeHistory);
 
 // Đường dẫn chia sẻ Zalo tra cứu lương, chấm công
+router.get('/general-share-link', employeeController.getGeneralEmployeeShareLink);
 router.get('/:id/share-link', employeeController.getEmployeeShareLink);
 
 module.exports = router;

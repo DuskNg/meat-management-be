@@ -518,6 +518,9 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 - "Cô Thảo" / "Cô Hảo" / "Thảo" / "Hảo" / "Thầy" (nét chữ viết tay "Cô Thảo" hay bị nhìn nhầm thành "Cô Hảo") => "Cô thảo(thầy)".
 - "Van khê" / "Văn Khê" / "Van Hle" / "Van Hie" / "Van khz" / "Van khe" (chữ viết tay "Van khê" hay bị nhìn nhầm thành "Van Hle" / "Van Hie") => "văn khê" (nếu có chữ "Bún Huế" đi kèm mới là "Bún huế văn khê", còn ghi riêng lẻ "Van khê" / "Văn Khê" / "Van Hle" => "văn khê").
 - "3Mien" / "3 Miền" / "Kim Liên" => "Bếp 3 miền kim liên".
+- "ABh" / "Abh" / "ABH" / "ABình" / "Abình" / "A Bình" / "a bình" / "A bình" / "Anh bình" (chữ viết tay tên khách hàng "A Bình" hoặc "ABình", nét chữ "ình" viết thảo nhanh giống chữ "h" hoặc "ih" nên dễ nhìn nhầm thành "ABh" hoặc "ABH") => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "Anh bình".
+- "H.C.U." / "H.C.U" / "HCU" / "H.Q.V." / "H.Q.V" / "HQV" / "H.C.V." / "H.C.V" / "HCV" / "H.U.V" / "hong hanh hqv" / "Hồng Hạnh HQV" (chữ viết tắt tên khách hàng "Hồng Hạnh HQV" / "H.Q.V.", nét chữ viết tay chữ Q uốn cong giống chữ C hoặc chữ U, chữ V nhọn đáy giống U nên AI hay đọc nhầm thành "H.C.U." hoặc "H.C.V.") => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "Hồng hạnh hqv".
+- "Chị Huy Ga" / "Chi Huy Ga" / "Chị Huy Gà" / "Chi Huy Gà" / "Huy Ga" / "Huy Gà" / "C Huy Ga" / "C Huy Gà" / "Chị Thủy Gà" / "Chi Thuy Ga" / "C Thủy Gà" / "C Thuy Ga" / "Thủy Gà" / "Thuy Ga" / "Thủy Lê" / "Thuy Le" (chữ viết tay tên khách hàng "Chị Thủy Gà" hoặc "C Thủy Gà", nét chữ Th viết hoa hoặc nét T nối h-u-y hay bị AI đọc nhầm thành chữ H-u-y => "Huy Ga" / "Chị Huy Ga" / "C Huy Ga") => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "Thuỷ gà(thủy lê zalo nhóm bò)".
 - Chữ viết tắt "b1" => "Bếp hàng xóm 1"; "b2" => "Bếp hàng xóm 2"; "b3" => "Bếp hàng xóm 3"; "b4" => "Nhà hàng vườn xanh".
 - "Huyền" / "Huyền Đô Nghĩa" => "Huyền Đô Nghĩa" (chỉ quan tâm con số tổng cuối cùng ở đáy => dòng "Thịt lẻ", quantity: 1).
 - "chinga" / "Chị Nga" / "Thúy Nga" => "Chị Thúy Nga".
@@ -796,6 +799,130 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
           });
           if (cuonAnKhanhCust) {
             matchedCustomerId = cuonAnKhanhCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Ưu tiên khớp khách "Anh bình" nếu AI nhận diện là "ABh", "Abh", "ABH", "a binh", "abinh", "a.binh", "ab", "anh binh"...
+        const isDetectedAnhBinh = (
+          cleanDetectedNoSpace === 'abh' ||
+          cleanDetectedNoSpace === 'ab' ||
+          cleanDetectedNoSpace === 'abinh' ||
+          cleanDetectedNoSpace === 'anhbinh' ||
+          cleanDetected === 'abh' ||
+          cleanDetected === 'ab' ||
+          cleanDetected === 'a binh' ||
+          cleanDetected === 'a.binh' ||
+          cleanDetected === 'anh binh' ||
+          cleanDetected.startsWith('a binh') ||
+          cleanDetected.startsWith('anh binh') ||
+          cleanDetectedNoSpace.startsWith('abinh') ||
+          cleanDetectedNoSpace.startsWith('anhbinh')
+        ) && !cleanDetected.includes('da') && !cleanDetected.includes('nghia') && !cleanDetected.includes('bao');
+
+        if (isDetectedAnhBinh) {
+          const anhBinhCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return (cClean === 'anh binh' || cClean === 'a binh') && !cClean.includes('da') && !cClean.includes('nghia') && !cClean.includes('bao');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('binh') && (cClean.includes('anh') || cClean.startsWith('a ')) && !cClean.includes('da') && !cClean.includes('nghia') && !cClean.includes('bao');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('binh') && !cClean.includes('da') && !cClean.includes('bao') && !cClean.includes('nghia');
+          }) || null;
+
+          if (anhBinhCust) {
+            matchedCustomerId = anhBinhCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Ưu tiên khớp khách "Hồng hạnh hqv" nếu AI nhận diện là "H.C.U.", "HCU", "H.Q.V.", "HQV", "H.C.V.", "HCV", "H.U.V.", "hong hanh hqv"...
+        const isDetectedHongHanhHQV = (
+          cleanDetectedNoSpace === 'hcu' ||
+          cleanDetectedNoSpace === 'hqv' ||
+          cleanDetectedNoSpace === 'hcv' ||
+          cleanDetectedNoSpace === 'huv' ||
+          cleanDetectedNoSpace === 'honghanhhqv' ||
+          cleanDetectedNoSpace === 'hanhhqv' ||
+          cleanDetected === 'h.c.u.' ||
+          cleanDetected === 'h.c.u' ||
+          cleanDetected === 'h.q.v.' ||
+          cleanDetected === 'h.q.v' ||
+          cleanDetected === 'h.c.v.' ||
+          cleanDetected === 'h.c.v' ||
+          cleanDetected === 'h.u.v.' ||
+          cleanDetected === 'h.u.v' ||
+          cleanDetected === 'hcu' ||
+          cleanDetected === 'hqv' ||
+          cleanDetected === 'hcv' ||
+          cleanDetected === 'huv' ||
+          cleanDetected.includes('hqv') ||
+          cleanDetected.includes('h.q.v') ||
+          cleanDetected.includes('h.c.u') ||
+          cleanDetected.includes('h.c.v') ||
+          cleanDetectedNoSpace.includes('hqv') ||
+          cleanDetectedNoSpace.includes('hcu') ||
+          cleanDetectedNoSpace.includes('hcv') ||
+          (cleanDetected.includes('hong hanh') && (cleanDetected.includes('hqv') || cleanDetected.includes('hcu') || cleanDetected.includes('hcv')))
+        );
+
+        if (isDetectedHongHanhHQV) {
+          const hongHanhCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('hong hanh') && cClean.includes('hqv');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('hong hanh');
+          }) || null;
+
+          if (hongHanhCust) {
+            matchedCustomerId = hongHanhCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Ưu tiên khớp khách "Thuỷ gà(thủy lê zalo nhóm bò)" nếu AI nhận diện là "Chị Huy Ga", "Huy Ga", "Chi Huy Ga", "C Huy Ga", "Chị Thủy Gà", "Thuỷ Gà", "Thuy Ga", "Thuy Le"...
+        const isDetectedThuyGa = (
+          cleanDetectedNoSpace === 'chihuyga' ||
+          cleanDetectedNoSpace === 'chuyga' ||
+          cleanDetectedNoSpace === 'huyga' ||
+          cleanDetectedNoSpace === 'chithuyga' ||
+          cleanDetectedNoSpace === 'cthuyga' ||
+          cleanDetectedNoSpace === 'thuyga' ||
+          cleanDetectedNoSpace === 'thuyle' ||
+          cleanDetectedNoSpace === 'thuygazalo' ||
+          cleanDetectedNoSpace === 'thuylezalo' ||
+          cleanDetected === 'chi huy ga' ||
+          cleanDetected === 'c huy ga' ||
+          cleanDetected === 'huy ga' ||
+          cleanDetected === 'chi thuy ga' ||
+          cleanDetected === 'c thuy ga' ||
+          cleanDetected === 'thuy ga' ||
+          cleanDetected === 'thuy le' ||
+          (cleanDetected.includes('huy') && cleanDetected.includes('ga')) ||
+          (cleanDetected.includes('thuy') && cleanDetected.includes('ga')) ||
+          (cleanDetected.includes('thuy') && cleanDetected.includes('le')) ||
+          cleanDetectedNoSpace.includes('huyga') ||
+          cleanDetectedNoSpace.includes('thuyga') ||
+          cleanDetectedNoSpace.includes('thuyle')
+        );
+
+        if (isDetectedThuyGa) {
+          const thuyGaCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return (cClean.includes('thuy') && cClean.includes('ga')) || (cClean.includes('thuy') && cClean.includes('le'));
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('ga') && (cClean.includes('thuy') || cClean.includes('huy'));
+          }) || null;
+
+          if (thuyGaCust) {
+            matchedCustomerId = thuyGaCust.id;
           }
         }
       }
