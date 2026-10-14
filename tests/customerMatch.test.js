@@ -1029,6 +1029,100 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
         expect(matchThuyGa(input)).toBe(thuyGaCustomer.id);
       }
     });
+
+    it('16. AI bóc tách chữ viết tay "Akb" / "AK b" / "A kb" / "a bình" / "a.binh" / "anh binh" bắt buộc tự động khớp vào khách "Anh bình" (và KHÔNG nhầm sang "Thăn bình đà")', async () => {
+      // 1. Tạo khách "Anh bình" và "Thăn bình đà" trong DB
+      const anhBinhCustomer = await createTestCustomer(
+        testUser.id,
+        '[TEST]_Anh bình',
+        '0999888771',
+        1000000
+      );
+      const thanBinhDaCustomer = await createTestCustomer(
+        testUser.id,
+        '[TEST]_Thăn bình đà(anh Nghĩa)',
+        '0999888772',
+        2000000
+      );
+
+      const customers = [
+        anhBinhCustomer,
+        thanBinhDaCustomer,
+        { id: 'cust_khac_1', name: '[TEST]_Bình' },
+      ];
+
+      const removeDiacritics = (str) => {
+        if (!str) return '';
+        return str
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/đ/g, 'd')
+          .replace(/Đ/g, 'd')
+          .toLowerCase()
+          .trim();
+      };
+
+      const matchAnhBinh = (input) => {
+        const cleanDetected = removeDiacritics(input);
+        const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+        let matchedCustomerId = null;
+        const isDetectedAnhBinh = (
+          cleanDetected === 'akb' ||
+          cleanDetected === 'ak b' ||
+          cleanDetected === 'a kb' ||
+          cleanDetected === 'a binh' ||
+          cleanDetected === 'anh binh' ||
+          cleanDetected === 'a.binh' ||
+          cleanDetected === 'ak binh' ||
+          cleanDetected === 'anh b' ||
+          cleanDetected === 'a b' ||
+          cleanDetectedNoSpace === 'akb' ||
+          cleanDetectedNoSpace === 'anhbinh' ||
+          cleanDetectedNoSpace === 'abinh' ||
+          cleanDetectedNoSpace === 'akbinh' ||
+          cleanDetected.includes('akb') ||
+          (cleanDetected.includes('binh') && (cleanDetected.includes('anh') || cleanDetected.startsWith('a ') || cleanDetected.startsWith('a.')) && !cleanDetected.includes('binh da') && !cleanDetected.includes('da'))
+        );
+
+        if (isDetectedAnhBinh) {
+          const anhBinhCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return (cClean === 'anh binh' || cClean === 'a binh' || (cClean.includes('binh') && (cClean.includes('anh') || cClean.startsWith('a ')))) && !cClean.includes('binh da') && !cClean.includes('da');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean.includes('binh') && !cClean.includes('binh da') && !cClean.includes('da');
+          });
+          if (anhBinhCust) {
+            matchedCustomerId = anhBinhCust.id;
+          }
+        }
+
+        return matchedCustomerId;
+      };
+
+      const testInputs = [
+        'Akb',
+        'akb',
+        'AK b',
+        'Ak b',
+        'A kb',
+        'a bình',
+        'a binh',
+        'a.binh',
+        'Anh bình',
+        'Anh Bình',
+        'anh binh',
+        'ak binh',
+        'A b',
+        'Anh b',
+      ];
+
+      for (const input of testInputs) {
+        expect(matchAnhBinh(input)).toBe(anhBinhCustomer.id);
+        expect(matchAnhBinh(input)).not.toBe(thanBinhDaCustomer.id);
+      }
+    });
   });
 });
 

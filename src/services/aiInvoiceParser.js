@@ -427,6 +427,7 @@ I. XÁC ĐỊNH TÊN KHÁCH HÀNG (customer_name) TỪ GIỌNG NÓI:
 - "Thái Hà" => "Thái hà".
 - "Anh Thắng phố cổ" => "Anh thắng phố cổ".
 - "Phở Đông" / "phở Đg" / "phở ĐS" / "pho dg" / "pho ds" => "Phở đông".
+- "Anh Bình" / "Akb" / "AK b" / "A kb" / "ak b" / "a bình" / "a.binh" / "anh binh" / "a binh" / "ak binh" => "Anh bình" (chữ viết tắt của Anh Bình, KHÔNG nhầm sang "Thăn bình đà").
 - "Tài" / "lai" / "lại" / "tai" => "Tài".
 - "Gia Hưng CS2" => "Gia Hưng cs2".
 - "Giảng Võ" / "Giang Võ" => "Giảng võ".
@@ -538,6 +539,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 - "Cồ Hải" / "Cổ Hải" => "Cồ hải".
 - "Giang Võ" / "Giang Đỏ" / "Giảng Võ" => "Giảng võ".
 - "phở Đg" / "phở ĐS" / "phở Đông" / "pho dg" / "pho ds" (chữ viết tắt "phở Đg" hay bị đọc nhầm thành "phở ĐS") => "Phở đông".
+- "Akb" / "AK b" / "A kb" / "ak b" / "a bình" / "a.binh" / "Anh Bình" / "anh binh" / "a binh" / "ak binh" (chữ viết tay viết tắt "Akb" / "AK b") => "Anh bình".
 - "Tài" / "lai" / "lại" / "tai" / "tài" (chữ viết tay "Tài" chữ T hoa viết thảo hay bị nhìn nhầm thành chữ "l" => "lai") => "Tài".
 - Có 3 chữ số "794" (794 lang ha / 794 láng hạ) => "794 láng hạ" (TUYỆT ĐỐI CẤM nhận diện thành "Cuốn láng hạ").
 - Tiêu đề "LÒ MỔ MINH THUẤN" / "LÒ MỔ MINH THUẦN" => Nhà cung cấp "Minh thuần" (viết tắt B: Bắp bò, sx/sn: Sườn).
@@ -1149,6 +1151,40 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
           });
           if (phoDongCust) {
             matchedCustomerId = phoDongCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "Anh bình" nếu AI nhận diện là Akb, AK b, A kb, ak b, a bình, a binh, a.binh, anh binh, ak binh...
+        const isDetectedAnhBinh = (
+          cleanDetected === 'akb' ||
+          cleanDetected === 'ak b' ||
+          cleanDetected === 'a kb' ||
+          cleanDetected === 'a binh' ||
+          cleanDetected === 'anh binh' ||
+          cleanDetected === 'a.binh' ||
+          cleanDetected === 'ak binh' ||
+          cleanDetected === 'anh b' ||
+          cleanDetected === 'a b' ||
+          cleanDetectedNoSpace === 'akb' ||
+          cleanDetectedNoSpace === 'anhbinh' ||
+          cleanDetectedNoSpace === 'abinh' ||
+          cleanDetectedNoSpace === 'akbinh' ||
+          cleanDetected.includes('akb') ||
+          (cleanDetected.includes('binh') && (cleanDetected.includes('anh') || cleanDetected.startsWith('a ') || cleanDetected.startsWith('a.')) && !cleanDetected.includes('binh da') && !cleanDetected.includes('da'))
+        );
+
+        if (isDetectedAnhBinh) {
+          const anhBinhCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return (cClean === 'anh binh' || cClean === 'a binh' || (cClean.includes('binh') && (cClean.includes('anh') || cClean.startsWith('a ')))) && !cClean.includes('binh da') && !cClean.includes('da');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean.includes('binh') && !cClean.includes('binh da') && !cClean.includes('da');
+          });
+          if (anhBinhCust) {
+            matchedCustomerId = anhBinhCust.id;
           }
         }
       }
