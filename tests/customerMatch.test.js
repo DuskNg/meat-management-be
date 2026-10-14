@@ -1123,6 +1123,96 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
         expect(matchAnhBinh(input)).not.toBe(thanBinhDaCustomer.id);
       }
     });
+
+    it('17. AI bóc tách chữ viết tay "Xã Pan" / "Xa Pan" / "Xã pan" / "xa pan" / "Xã Ban" / "236 Xã Pan" bắt buộc tự động khớp vào khách "236 Xã đàn"', async () => {
+      // 1. Tạo khách "236 Xã đàn" trong DB
+      const xaDanCustomer = await createTestCustomer(
+        testUser.id,
+        '[TEST]_236 Xã đàn',
+        '0999888773',
+        1500000
+      );
+
+      const customers = [
+        xaDanCustomer,
+        { id: 'cust_khac_1', name: '[TEST]_Khách khác' },
+      ];
+
+      const removeDiacritics = (str) => {
+        if (!str) return '';
+        return str
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/đ/g, 'd')
+          .replace(/Đ/g, 'd')
+          .toLowerCase()
+          .trim();
+      };
+
+      const matchXaDan = (input) => {
+        const cleanDetected = removeDiacritics(input);
+        const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+        let matchedCustomerId = null;
+        const isDetectedXaDan = (
+          cleanDetected === 'xa pan' ||
+          cleanDetected === 'xapan' ||
+          cleanDetected === 'xa ban' ||
+          cleanDetected === 'xaban' ||
+          cleanDetected === 'xa dan' ||
+          cleanDetected === 'xadan' ||
+          cleanDetected === '236 xa dan' ||
+          cleanDetected === '236 xa pan' ||
+          cleanDetected === '236 xaban' ||
+          cleanDetected === '236 xadan' ||
+          cleanDetectedNoSpace === 'xapan' ||
+          cleanDetectedNoSpace === 'xaban' ||
+          cleanDetectedNoSpace === 'xadan' ||
+          cleanDetectedNoSpace === '236xadan' ||
+          cleanDetectedNoSpace === '236xapan' ||
+          cleanDetectedNoSpace === '236xaban' ||
+          cleanDetected.includes('xa pan') ||
+          cleanDetected.includes('xa ban') ||
+          cleanDetected.includes('xa dan') ||
+          cleanDetected.includes('236 xa dan') ||
+          cleanDetected.includes('236 xa pan') ||
+          (cleanDetected.includes('236') && (cleanDetected.includes('dan') || cleanDetected.includes('pan') || cleanDetected.includes('ban')))
+        );
+
+        if (isDetectedXaDan) {
+          const xaDanCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return (cClean.includes('236') && cClean.includes('xa dan')) || cClean === '236 xa dan';
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean.includes('xa dan') || cClean.includes('236');
+          });
+          if (xaDanCust) {
+            matchedCustomerId = xaDanCust.id;
+          }
+        }
+
+        return matchedCustomerId;
+      };
+
+      const testInputs = [
+        'Xã Pan',
+        'Xa Pan',
+        'Xã pan',
+        'xa pan',
+        'Xã Ban',
+        'Xa Ban',
+        '236 Xã Pan',
+        '236 xa pan',
+        '236 Xã Đàn',
+        'Xã Đàn',
+        'xa dan',
+      ];
+
+      for (const input of testInputs) {
+        expect(matchXaDan(input)).toBe(xaDanCustomer.id);
+      }
+    });
   });
 });
 

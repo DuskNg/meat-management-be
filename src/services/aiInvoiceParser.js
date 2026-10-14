@@ -428,6 +428,7 @@ I. XÁC ĐỊNH TÊN KHÁCH HÀNG (customer_name) TỪ GIỌNG NÓI:
 - "Anh Thắng phố cổ" => "Anh thắng phố cổ".
 - "Phở Đông" / "phở Đg" / "phở ĐS" / "pho dg" / "pho ds" => "Phở đông".
 - "Anh Bình" / "Akb" / "AK b" / "A kb" / "ak b" / "a bình" / "a.binh" / "anh binh" / "a binh" / "ak binh" => "Anh bình" (chữ viết tắt của Anh Bình, KHÔNG nhầm sang "Thăn bình đà").
+- "236 Xã Đàn" / "Xã Đàn" / "Xã Pan" / "Xa Pan" / "236 Xã Pan" => "236 xã đàn".
 - "Tài" / "lai" / "lại" / "tai" => "Tài".
 - "Gia Hưng CS2" => "Gia Hưng cs2".
 - "Giảng Võ" / "Giang Võ" => "Giảng võ".
@@ -540,6 +541,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 - "Giang Võ" / "Giang Đỏ" / "Giảng Võ" => "Giảng võ".
 - "phở Đg" / "phở ĐS" / "phở Đông" / "pho dg" / "pho ds" (chữ viết tắt "phở Đg" hay bị đọc nhầm thành "phở ĐS") => "Phở đông".
 - "Akb" / "AK b" / "A kb" / "ak b" / "a bình" / "a.binh" / "Anh Bình" / "anh binh" / "a binh" / "ak binh" (chữ viết tay viết tắt "Akb" / "AK b") => "Anh bình".
+- "Xã Pan" / "Xa Pan" / "Xã pan" / "xa pan" / "Xã Ban" / "Xa Ban" / "Xã Đàn" / "Xa Dan" / "236 Xã Đàn" / "236 Xã Pan" / "236 xa dan" / "236 xa pan" (chữ viết tay tên khách hàng "Xã Đàn" hoặc "236 Xã Đàn", chữ "Đàn" viết ngoáy/thảo nét chữ Đ và à-n hay bị AI nhìn nhầm thành chữ P-a-n => "Xã Pan" / "Xa Pan") => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "236 xã đàn".
 - "Tài" / "lai" / "lại" / "tai" / "tài" (chữ viết tay "Tài" chữ T hoa viết thảo hay bị nhìn nhầm thành chữ "l" => "lai") => "Tài".
 - Có 3 chữ số "794" (794 lang ha / 794 láng hạ) => "794 láng hạ" (TUYỆT ĐỐI CẤM nhận diện thành "Cuốn láng hạ").
 - Tiêu đề "LÒ MỔ MINH THUẤN" / "LÒ MỔ MINH THUẦN" => Nhà cung cấp "Minh thuần" (viết tắt B: Bắp bò, sx/sn: Sườn).
@@ -1185,6 +1187,47 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
           });
           if (anhBinhCust) {
             matchedCustomerId = anhBinhCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "236 Xã đàn" nếu AI nhận diện là Xã Pan, Xa Pan, Xã Ban, Xa Ban, 236 Xã Đàn, Xã Đàn, 236 xa dan, 236 xa pan...
+        const isDetectedXaDan = (
+          cleanDetected === 'xa pan' ||
+          cleanDetected === 'xapan' ||
+          cleanDetected === 'xa ban' ||
+          cleanDetected === 'xaban' ||
+          cleanDetected === 'xa dan' ||
+          cleanDetected === 'xadan' ||
+          cleanDetected === '236 xa dan' ||
+          cleanDetected === '236 xa pan' ||
+          cleanDetected === '236 xaban' ||
+          cleanDetected === '236 xadan' ||
+          cleanDetectedNoSpace === 'xapan' ||
+          cleanDetectedNoSpace === 'xaban' ||
+          cleanDetectedNoSpace === 'xadan' ||
+          cleanDetectedNoSpace === '236xadan' ||
+          cleanDetectedNoSpace === '236xapan' ||
+          cleanDetectedNoSpace === '236xaban' ||
+          cleanDetected.includes('xa pan') ||
+          cleanDetected.includes('xa ban') ||
+          cleanDetected.includes('xa dan') ||
+          cleanDetected.includes('236 xa dan') ||
+          cleanDetected.includes('236 xa pan') ||
+          (cleanDetected.includes('236') && (cleanDetected.includes('dan') || cleanDetected.includes('pan') || cleanDetected.includes('ban')))
+        );
+
+        if (isDetectedXaDan) {
+          const xaDanCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return (cClean.includes('236') && cClean.includes('xa dan')) || cClean === '236 xa dan';
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean.includes('xa dan') || cClean.includes('236');
+          });
+          if (xaDanCust) {
+            matchedCustomerId = xaDanCust.id;
           }
         }
       }
