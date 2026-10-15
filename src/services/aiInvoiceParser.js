@@ -434,6 +434,8 @@ I. XÁC ĐỊNH TÊN KHÁCH HÀNG (customer_name) TỪ GIỌNG NÓI:
 - "Giảng Võ" / "Giang Võ" => "Giảng võ".
 - "794" / "794 Láng Hạ" / "The Industree" => "794 láng hạ".
 - "Cuốn An Khánh" / "An Khang" => "Cuốn an khánh".
+- "Sành CS1" / "Sách CS1" / "Sành lẩu CS1" / "Sành 1" => "sành lẩu cs1".
+- "Sành CS2" / "Sách CS2" / "Sành lẩu CS2" / "Sành 2" => "sành lẩu cs2".
 - Nếu không nhắc tên khách: trả về customer_name = null.
 
 II. BÓC TÁCH MÓN THỊT (items):
@@ -531,6 +533,8 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 - "ba luu" / "bà lưu" / "ba liu" => "Bà lưu".
 - "Nguyễn Khuyến" đi kèm "Trường Hoàng" => "Nguyễn khuyến trường hoàng".
 - Chỉ có "Nguyễn Khuyến" đơn độc (KHÔNG có Hoàng/Trường) => "Sành lẩu CS1".
+- "Sành CS1" / "Sách CS1" / "Sanh CS1" / "Sach CS1" / "Sành CS 1" / "Sách CS 1" / "Sành 1" / "Sách 1" (chữ viết tay tên khách hàng "Sành CS1", nét chữ 'ành' viết móc thon/nhọn thường bị AI nhìn nhầm thành chữ 'ách' => "Sách CS1") => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "sành lẩu cs1".
+- "Sành CS2" / "Sách CS2" / "Sanh CS2" / "Sach CS2" / "Sành CS 2" / "Sách CS 2" / "Sành 2" / "Sách 2" => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "sành lẩu cs2".
 - Số "52" (hoặc "52 trần thái tông") => "52  trần thái tông".
 - "minh" / "mih" / "Minh trang" => "Minh trang".
 - "Tuy kh" / "Trung kh" / "Trung kính" => "Trung kính".
@@ -780,6 +784,58 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 
         if (bepTrungKinhCust) {
           matchedCustomerId = bepTrungKinhCust.id;
+        }
+      }
+
+if (!matchedCustomerId) {
+        // Ưu tiên khớp khách "sành lẩu cs1" nếu AI nhận diện là "Sách CS1", "Sach CS1", "Sành CS1", "Sanh CS1", "sach cs1", "sanh cs1"...
+        const isDetectedSanhLauCS1 =
+          cleanDetected.includes('sach cs1') ||
+          cleanDetected.includes('sanh cs1') ||
+          cleanDetected.includes('sach cs 1') ||
+          cleanDetected.includes('sanh cs 1') ||
+          cleanDetected.includes('sanh lau cs1') ||
+          cleanDetected.includes('sach lau cs1') ||
+          cleanDetectedNoSpace === 'sachcs1' ||
+          cleanDetectedNoSpace === 'sanhcs1' ||
+          cleanDetectedNoSpace === 'sach1' ||
+          cleanDetectedNoSpace === 'sanh1';
+
+        if (isDetectedSanhLauCS1) {
+          const sanhLauCS1Cust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('sanh lau cs1') || (cClean.includes('sanh') && cClean.includes('cs1'));
+          }) || null;
+
+          if (sanhLauCS1Cust) {
+            matchedCustomerId = sanhLauCS1Cust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Ưu tiên khớp khách "sành lẩu cs2" nếu AI nhận diện là "Sách CS2", "Sach CS2", "Sành CS2", "Sanh CS2", "sach cs2", "sanh cs2"...
+        const isDetectedSanhLauCS2 =
+          cleanDetected.includes('sach cs2') ||
+          cleanDetected.includes('sanh cs2') ||
+          cleanDetected.includes('sach cs 2') ||
+          cleanDetected.includes('sanh cs 2') ||
+          cleanDetected.includes('sanh lau cs2') ||
+          cleanDetected.includes('sach lau cs2') ||
+          cleanDetectedNoSpace === 'sachcs2' ||
+          cleanDetectedNoSpace === 'sanhcs2' ||
+          cleanDetectedNoSpace === 'sach2' ||
+          cleanDetectedNoSpace === 'sanh2';
+
+        if (isDetectedSanhLauCS2) {
+          const sanhLauCS2Cust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('sanh lau cs2') || (cClean.includes('sanh') && cClean.includes('cs2'));
+          }) || null;
+
+          if (sanhLauCS2Cust) {
+            matchedCustomerId = sanhLauCS2Cust.id;
+          }
         }
       }
 
@@ -1834,7 +1890,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
         const itemClean = removeDiacritics((item.name || '').toLowerCase().trim());
         const qtyVal = item.quantity != null ? parseFloat(String(item.quantity).replace(',', '.')) : null;
         const isLargeQty = qtyVal != null && qtyVal > 10;
-        const isNoMeatName = !itemClean || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', 'than', 'than bo', ''].includes(itemClean) || !item.name;
+        const isNoMeatName = !itemClean || ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', ''].includes(itemClean) || !item.name;
 
         // Khách chị Tuyết: số lượng lớn > 10kg HOẶC không đọc tên thịt -> auto là Thịt chín
         if (isLargeQty || isNoMeatName) {
@@ -2195,7 +2251,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
         normalizedName === 'Tiền hàng' ||
         normalizedName === '' ||
         !item.name ||
-        ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai', 'than', 'than bo', 'thit than'].includes(cleanLower)
+        ['thit', 'thit bo', 'thit le', 'mon le', 'thit thai'].includes(cleanLower)
       );
 
       if (isTuyetCustomer && (isLargeQtyForTuyet || isNoMeatNameForTuyet || isReturnOrder)) {
