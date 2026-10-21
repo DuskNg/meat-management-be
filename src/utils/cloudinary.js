@@ -142,16 +142,30 @@ const uploadToCloudinary = async (fileData, options = {}) => {
 const deleteFromCloudinary = async (publicId, options = {}) => {
   if (!publicId) return null;
 
-  // Nếu là file trên Cloudflare R2 (chứa domain r2.dev hoặc key R2)
+  const urlStr = String(publicId).trim();
   const r2Domain = (process.env.R2_PUBLIC_DOMAIN || '').replace(/\/+$/, '');
-  if (isR2Configured() && (publicId.includes('.r2.dev') || (r2Domain && publicId.includes(r2Domain)))) {
-    return await deleteFromR2(publicId);
+  const isR2File = urlStr.includes('.r2.dev') || 
+                   (r2Domain && urlStr.includes(r2Domain)) || 
+                   (isR2Configured() && !urlStr.includes('res.cloudinary.com'));
+
+  // Nếu là file trên Cloudflare R2 (hoặc hệ thống đã bật R2 và không phải là domain res.cloudinary.com)
+  if (isR2Configured() && isR2File) {
+    return await deleteFromR2(urlStr);
   }
 
   if (!isCloudinaryConfigured()) return null;
   try {
-    const resource_type = options.resource_type || (publicId.includes('/video/') || options.isVideo ? 'video' : 'image');
-    return await cloudinary.uploader.destroy(publicId, { resource_type });
+    let cleanPublicId = urlStr;
+    // Nếu là URL Cloudinary đầy đủ, trích xuất public_id
+    if (cleanPublicId.includes('res.cloudinary.com')) {
+      const parts = cleanPublicId.split('/upload/');
+      if (parts.length > 1) {
+        let afterUpload = parts[1].replace(/^v\d+\//, ''); // Bỏ version v12345/
+        cleanPublicId = afterUpload.substring(0, afterUpload.lastIndexOf('.')) || afterUpload;
+      }
+    }
+    const resource_type = options.resource_type || (urlStr.includes('/video/') || options.isVideo ? 'video' : 'image');
+    return await cloudinary.uploader.destroy(cleanPublicId, { resource_type });
   } catch (error) {
     console.error('[STORAGE] Lỗi xóa file:', error.message);
     return null;

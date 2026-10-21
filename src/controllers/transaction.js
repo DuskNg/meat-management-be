@@ -1345,6 +1345,33 @@ const syncCloudInvoice = async (req, res, next) => {
   }
 };
 
+/**
+ * Kích hoạt dọn dẹp ảnh và video của các đơn công nợ đã được thu nợ sau 15 ngày
+ */
+const cleanupPaidDebtMediaAction = async (req, res, next) => {
+  try {
+    const { cleanupPaidDebtMedia } = require('../schedulers/paidDebtMediaCleanupScheduler');
+    const daysThreshold = req.body.daysThreshold ? parseInt(req.body.daysThreshold, 10) : 15;
+    const dryRun = Boolean(req.body.dryRun);
+
+    const result = await cleanupPaidDebtMedia({
+      userId: req.user.id,
+      daysThreshold,
+      dryRun,
+    });
+
+    return res.json({
+      success: true,
+      message: dryRun
+        ? `Đã quét kiểm tra: Có ${result.totalTransactionsCleaned} đơn nợ đã thu nợ quá ${daysThreshold} ngày với ${result.totalMediaFilesDeleted} tệp media.`
+        : `Dọn dẹp thành công ${result.totalMediaFilesDeleted} tệp ảnh/video từ ${result.totalTransactionsCleaned} đơn nợ đã thu nợ quá ${daysThreshold} ngày. Số liệu công nợ được bảo toàn 100%.`,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createTransaction,
   getTransactions,
@@ -1356,4 +1383,5 @@ module.exports = {
   getInvoiceImages,
   checkDebtExistence,
   syncCloudInvoice,
+  cleanupPaidDebtMediaAction,
 };

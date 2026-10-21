@@ -40,5 +40,8 @@ router.post('/invoices/:id/sync-cloud', transactionController.syncCloudInvoice);
 // Kiểm tra từng cặp (khách hàng + ngày) có giao dịch công nợ nào không — để cảnh báo sót công nợ khi lưu ảnh
 router.post('/check-debt-existence', transactionController.checkDebtExistence);
 
+// Kích hoạt dọn dẹp ảnh và video của các đơn công nợ đã được thu nợ sau 15 ngày
+router.post('/cleanup-paid-media', transactionController.cleanupPaidDebtMediaAction);
+
 module.exports = router;
 

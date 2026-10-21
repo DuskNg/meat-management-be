@@ -326,6 +326,10 @@ if (process.env.NODE_ENV !== 'test') {
   const { initPortalAutoPublishScheduler } = require('./schedulers/portalAutoPublishScheduler');
   initPortalAutoPublishScheduler();
 
+  // Khởi chạy tiến trình tự động xóa ảnh và video đơn đã thu nợ sau 15 ngày lúc 02:00 sáng
+  const { initPaidDebtMediaCleanupScheduler } = require('./schedulers/paidDebtMediaCleanupScheduler');
+  initPaidDebtMediaCleanupScheduler();
+
   // Bắt đầu lắng nghe cổng mạng (Tải lại máy chủ khi lưu cấu hình và prompt mới)
   server.listen(PORT, () => {
     logger.info(`Máy chủ Express + Socket.IO đang chạy thành công tại cổng ${PORT}`);

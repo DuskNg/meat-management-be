@@ -177,12 +177,13 @@ const deleteFromR2 = async (objectKey) => {
     const client = getR2Client();
     const bucketName = process.env.R2_BUCKET_NAME || 'meat-management';
 
-    // Xử lý nếu objectKey truyền vào là URL đầy đủ
-    let cleanKey = objectKey;
-    const publicDomain = (process.env.R2_PUBLIC_DOMAIN || '').replace(/\/+$/, '');
-    if (cleanKey.startsWith(publicDomain)) {
-      cleanKey = cleanKey.replace(`${publicDomain}/`, '');
+    // Xử lý nếu objectKey truyền vào là URL đầy đủ (ví dụ: https://pub-xxx.r2.dev/meat_invoices/img_123.jpg)
+    let cleanKey = String(objectKey).trim();
+    if (cleanKey.startsWith('http://') || cleanKey.startsWith('https://')) {
+      cleanKey = cleanKey.replace(/^https?:\/\/[^\/]+\//, '');
     }
+    // Bỏ query string nếu có và loại bỏ dấu gạch chéo đầu chuỗi
+    cleanKey = cleanKey.split('?')[0].replace(/^\/+/, '');
 
     const command = new DeleteObjectCommand({
       Bucket: bucketName,
