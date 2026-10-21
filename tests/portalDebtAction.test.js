@@ -218,17 +218,19 @@ describe('Luồng Nghiệp Vụ: Thao Tác Chỉnh Sửa & Thu Công Nợ Trực
     expect(res.body.data.invoice).toBeDefined();
 
     const createdTxId = res.body.data.id;
-    const invoiceInDb = await prisma.transactionInvoice.findFirst({
-      where: { transactionId: createdTxId }
-    });
-    expect(invoiceInDb).toBeDefined();
-    expect(invoiceInDb.customerId).toBe(testCust.id);
-    expect(invoiceInDb.imageUrl).toMatch(/^\/uploads\/invoices\/inv_/);
-
-    // Dọn dẹp
-    await prisma.transactionInvoice.deleteMany({ where: { transactionId: createdTxId } });
-    await prisma.transactionItem.deleteMany({ where: { transactionId: createdTxId } });
-    await prisma.transaction.delete({ where: { id: createdTxId } });
+    try {
+      const invoiceInDb = await prisma.transactionInvoice.findFirst({
+        where: { transactionId: createdTxId }
+      });
+      expect(invoiceInDb).toBeDefined();
+      expect(invoiceInDb.customerId).toBe(testCust.id);
+      expect(invoiceInDb.imageUrl).toMatch(/^https?:\/\/|^\/uploads\/invoices\/inv_/);
+    } finally {
+      // Dọn dẹp đơn test 4c để không làm lệch số dư của test 5 tiếp theo
+      await prisma.transactionInvoice.deleteMany({ where: { transactionId: createdTxId } });
+      await prisma.transactionItem.deleteMany({ where: { transactionId: createdTxId } });
+      await prisma.transaction.delete({ where: { id: createdTxId } });
+    }
   });
 
   test('5. Thu công nợ từ Portal: Tạo payment thành công và trừ nợ', async () => {

@@ -18,11 +18,14 @@ if (cloudinaryUrl) {
   });
 }
 
+const { isR2Configured, uploadToR2, deleteFromR2 } = require('./r2');
+
 /**
- * Kiểm tra xem Cloudinary đã được cấu hình đầy đủ biến môi trường hay chưa
+ * Kiểm tra xem dịch vụ lưu trữ đám mây (Cloudflare R2 hoặc Cloudinary) đã được cấu hình hay chưa
  * @returns {boolean}
  */
 const isCloudinaryConfigured = () => {
+  if (isR2Configured()) return true;
   if (process.env.CLOUDINARY_URL) return true;
   return Boolean(
     process.env.CLOUDINARY_CLOUD_NAME &&
@@ -32,14 +35,19 @@ const isCloudinaryConfigured = () => {
 };
 
 /**
- * Tải ảnh hoặc video lên Cloudinary (Hỗ trợ upload_large phân đoạn cho video, retry 3 lần và chuẩn hóa .mp4)
+ * Tải ảnh hoặc video lên Đám mây (Tự động ưu tiên Cloudflare R2 miễn phí băng thông, fallback sang Cloudinary)
  * @param {string} fileData - Chuỗi data URI base64, URL hoặc đường dẫn file trên đĩa
  * @param {Object} [options] - Tùy chọn bổ sung (folder, public_id, resource_type, filePath, v.v.)
  * @returns {Promise<{ secure_url: string, public_id: string, resource_type: string }>}
  */
 const uploadToCloudinary = async (fileData, options = {}) => {
+  // Ưu tiên tải lên Cloudflare R2 nếu đã được cấu hình
+  if (isR2Configured()) {
+    return await uploadToR2(fileData, options);
+  }
+
   if (!isCloudinaryConfigured()) {
-    console.warn('[CLOUDINARY] Chưa cấu hình API Keys trong biến môi trường. Vui lòng cấu hình CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET.');
+    console.warn('[STORAGE] Chưa cấu hình dịch vụ đám mây (Cloudflare R2 hoặc Cloudinary).');
     return null;
   }
 
@@ -126,18 +134,26 @@ const uploadToCloudinary = async (fileData, options = {}) => {
 };
 
 /**
- * Xóa ảnh hoặc video trên Cloudinary theo publicId
+ * Xóa ảnh hoặc video trên Cloudflare R2 hoặc Cloudinary theo publicId/URL
  * @param {string} publicId
  * @param {Object} [options] - { resource_type: 'image' | 'video' }
  * @returns {Promise<any>}
  */
 const deleteFromCloudinary = async (publicId, options = {}) => {
-  if (!isCloudinaryConfigured() || !publicId) return null;
+  if (!publicId) return null;
+
+  // Nếu là file trên Cloudflare R2 (chứa domain r2.dev hoặc key R2)
+  const r2Domain = (process.env.R2_PUBLIC_DOMAIN || '').replace(/\/+$/, '');
+  if (isR2Configured() && (publicId.includes('.r2.dev') || (r2Domain && publicId.includes(r2Domain)))) {
+    return await deleteFromR2(publicId);
+  }
+
+  if (!isCloudinaryConfigured()) return null;
   try {
     const resource_type = options.resource_type || (publicId.includes('/video/') || options.isVideo ? 'video' : 'image');
     return await cloudinary.uploader.destroy(publicId, { resource_type });
   } catch (error) {
-    console.error('[CLOUDINARY] Lỗi xóa file trên Cloudinary:', error.message);
+    console.error('[STORAGE] Lỗi xóa file:', error.message);
     return null;
   }
 };
@@ -147,4 +163,8 @@ module.exports = {
   isCloudinaryConfigured,
   uploadToCloudinary,
   deleteFromCloudinary,
+  // Cloudflare R2 direct exports
+  isR2Configured,
+  uploadToR2,
+  deleteFromR2,
 };
