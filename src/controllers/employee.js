@@ -21,12 +21,63 @@ const parseMonthKey = (monthKey) => {
   return { month, year };
 };
 
+// Helper tính số ngày công hợp lệ trong tháng dựa vào ngày bắt đầu vào làm (startDate)
+const getEligibleDaysForEmployee = (startDate, year, month, totalDaysInMonth) => {
+  if (!startDate) {
+    return {
+      eligibleDays: totalDaysInMonth,
+      joinedMidMonth: false,
+      startDayInMonth: 1,
+      isBeforeJoined: false,
+    };
+  }
+
+  const startD = new Date(startDate);
+  const startY = startD.getFullYear();
+  const startM = startD.getMonth() + 1;
+  const startDay = startD.getDate();
+
+  if (startY > year || (startY === year && startM > month)) {
+    // Nhân viên chưa vào làm trong tháng này
+    return {
+      eligibleDays: 0,
+      joinedMidMonth: false,
+      startDayInMonth: totalDaysInMonth + 1,
+      isBeforeJoined: true,
+    };
+  }
+
+  if (startY === year && startM === month) {
+    // Nhân viên vào làm giữa tháng này
+    return {
+      eligibleDays: Math.max(0, totalDaysInMonth - startDay + 1),
+      joinedMidMonth: true,
+      startDayInMonth: startDay,
+      isBeforeJoined: false,
+    };
+  }
+
+  // Nhân viên đã vào làm từ trước tháng này
+  return {
+    eligibleDays: totalDaysInMonth,
+    joinedMidMonth: false,
+    startDayInMonth: 1,
+    isBeforeJoined: false,
+  };
+};
+
 // Helper tính toán nợ lương/tiền ứng thừa lũy kế được chuyển từ tháng trước sang tháng sau
-const calculateCarryOver = async (employeeId, baseSalary, targetMonthKey) => {
+const calculateCarryOver = async (employeeId, baseSalary, targetMonthKey, empStartDate = null) => {
   let carryOver = 0;
   const parsed = parseMonthKey(targetMonthKey);
   if (!parsed) return 0;
   const { month: m, year: y } = parsed;
+
+  let startYearMonth = null;
+  if (empStartDate) {
+    const sDate = new Date(empStartDate);
+    startYearMonth = sDate.getFullYear() * 12 + sDate.getMonth();
+  }
 
   const monthsList = [];
   // Truy vết ngược tối đa 12 tháng để tính toán nợ chuyển tiếp
@@ -45,6 +96,14 @@ const calculateCarryOver = async (employeeId, baseSalary, targetMonthKey) => {
   }
 
   for (const item of monthsList) {
+    // Bỏ qua các tháng trước khi nhân viên vào làm việc
+    if (startYearMonth !== null) {
+      const curYearMonth = item.year * 12 + (item.month - 1);
+      if (curYearMonth < startYearMonth) {
+        continue;
+      }
+    }
+
     const start = new Date(item.year, item.month - 1, 1);
     const end = new Date(item.year, item.month, 0, 23, 59, 59, 999);
     
@@ -152,6 +211,30 @@ const getEmployees = async (req, res, next) => {
 
     const totalDaysInMonth = dateParsed ? getDaysInMonth(dateParsed.year, dateParsed.month) : 30;
 
+    // Lấy thông tin ngày tháng hiện tại để tính lương luỹ kế đến ngày hiện tại
+    const now = new Date();
+    const nowYear = now.getFullYear();
+    const nowMonth = now.getMonth() + 1;
+    const nowDay = now.getDate();
+
+    const targetYear = dateParsed ? dateParsed.year : nowYear;
+    const targetMonth = dateParsed ? dateParsed.month : nowMonth;
+
+    const isCurrentMonth = (targetYear === nowYear && targetMonth === nowMonth);
+    const isPastMonth = (targetYear < nowYear || (targetYear === nowYear && targetMonth < nowMonth));
+    const isFutureMonth = (targetYear > nowYear || (targetYear === nowYear && targetMonth > nowMonth));
+
+    // Mốc ngày chốt tính đến hiện tại:
+    // - Tháng hiện tại: lấy ngày hôm nay (tối đa bằng số ngày trong tháng)
+    // - Tháng quá khứ: đã kết thúc trọn vẹn tháng, mốc là totalDaysInMonth
+    // - Tháng tương lai: chưa đến, mốc là 0
+    let currentDayCutoff = totalDaysInMonth;
+    if (isCurrentMonth) {
+      currentDayCutoff = Math.min(nowDay, totalDaysInMonth);
+    } else if (isFutureMonth) {
+      currentDayCutoff = 0;
+    }
+
     const result = await Promise.all(employees.map(async (emp) => {
       const totalAdvances = emp.advances ? emp.advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0) : 0;
       const isPaid = emp.payments ? emp.payments.length > 0 : false;
@@ -160,20 +243,68 @@ const getEmployees = async (req, res, next) => {
       const baseSalary = parseFloat(emp.baseSalary);
       const dailySalary = Math.round(baseSalary / totalDaysInMonth);
 
-      // Tính tổng số ngày nghỉ và số tiền bị khấu trừ
+      // Tính số ngày công hợp lệ dựa vào startDate
+      const { eligibleDays, joinedMidMonth, startDayInMonth, isBeforeJoined } = getEligibleDaysForEmployee(
+        emp.startDate,
+        targetYear,
+        targetMonth,
+        totalDaysInMonth
+      );
+
+      // Tính tổng số ngày nghỉ và số tiền bị khấu trừ (chỉ tính ngày nghỉ kể từ ngày bắt đầu làm)
       let leaveDays = 0;
-      if (emp.attendances) {
+      let currentLeaveDays = 0;
+      if (emp.attendances && eligibleDays > 0) {
         emp.attendances.forEach((att) => {
-          if (att.status === 'ABSENT') {
-            leaveDays += (att.shift === 'HALF' ? 0.5 : 1.0);
-          } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
-            leaveDays += 0.5;
+          const attD = new Date(att.date);
+          const attDay = attD.getDate();
+          if (attDay >= startDayInMonth) {
+            const count = (att.status === 'ABSENT' ? (att.shift === 'HALF' ? 0.5 : 1.0) : (att.status === 'PRESENT' && att.shift === 'HALF' ? 0.5 : 0));
+            leaveDays += count;
+            if (attDay <= currentDayCutoff) {
+              currentLeaveDays += count;
+            }
           }
         });
       }
+
+      const workingDays = Math.max(0, eligibleDays - leaveDays);
       const leaveDeduction = Math.round(leaveDays * (baseSalary / totalDaysInMonth));
-      const calculatedSalary = Math.max(0, baseSalary - leaveDeduction);
-      const carryOver = await calculateCarryOver(emp.id, baseSalary, targetMonthKey);
+
+      let calculatedSalary = 0;
+      if (eligibleDays > 0) {
+        if (joinedMidMonth) {
+          calculatedSalary = Math.max(0, Math.round((baseSalary / totalDaysInMonth) * workingDays));
+        } else {
+          calculatedSalary = Math.max(0, baseSalary - leaveDeduction);
+        }
+      }
+
+      // Tính số công và lương tính đến ngày hiện tại
+      let currentEligibleDays = 0;
+      if (!isFutureMonth && !isBeforeJoined && currentDayCutoff >= startDayInMonth) {
+        currentEligibleDays = Math.max(0, currentDayCutoff - startDayInMonth + 1);
+      }
+      const currentWorkingDays = Math.max(0, currentEligibleDays - currentLeaveDays);
+      let currentSalary = 0;
+      if (currentEligibleDays > 0) {
+        currentSalary = Math.max(0, Math.round((baseSalary / totalDaysInMonth) * currentWorkingDays));
+      }
+
+      // Tạm ứng tính đến ngày hiện tại
+      let currentAdvances = 0;
+      if (emp.advances) {
+        emp.advances.forEach((adv) => {
+          const advD = new Date(adv.date);
+          const advDay = advD.getDate();
+          if (advDay <= currentDayCutoff) {
+            currentAdvances += parseFloat(adv.amount);
+          }
+        });
+      }
+      const currentRemainingSalary = Math.max(0, currentSalary - currentAdvances);
+
+      const carryOver = await calculateCarryOver(emp.id, baseSalary, targetMonthKey, emp.startDate);
       const remainingSalary = calculatedSalary - totalAdvances + carryOver;
 
       // Loại bỏ trường advances, attendances và payments để payload gọn nhẹ
@@ -190,6 +321,22 @@ const getEmployees = async (req, res, next) => {
         carryOver,
         isPaid,
         paidAt,
+        totalDaysInMonth,
+        eligibleDays,
+        workingDays,
+        joinedMidMonth,
+        isBeforeJoined,
+        // Dữ liệu lũy kế tính đến ngày hiện tại
+        currentDayCutoff,
+        currentEligibleDays,
+        currentLeaveDays,
+        currentWorkingDays,
+        currentSalary,
+        currentAdvances,
+        currentRemainingSalary,
+        isCurrentMonth,
+        isPastMonth,
+        isFutureMonth,
       };
     }));
 
@@ -205,7 +352,7 @@ const getEmployees = async (req, res, next) => {
 // 2. Tạo mới nhân viên
 const createEmployee = async (req, res, next) => {
   try {
-    const { name, phone, address, role, baseSalary } = req.body;
+    const { name, phone, address, role, baseSalary, startDate } = req.body;
     const userId = req.effectiveUserId;
 
     if (!name || name.trim() === '') {
@@ -213,6 +360,14 @@ const createEmployee = async (req, res, next) => {
     }
     if (baseSalary === undefined || parseFloat(baseSalary) < 0) {
       throw new BadRequestError('Lương cơ bản không hợp lệ.');
+    }
+
+    let parsedStartDate = null;
+    if (startDate) {
+      const d = new Date(startDate);
+      if (!isNaN(d.getTime())) {
+        parsedStartDate = d;
+      }
     }
 
     const employee = await prisma.employee.create({
@@ -223,13 +378,14 @@ const createEmployee = async (req, res, next) => {
         address: address ? address.trim() : null,
         role: role ? role.trim() : null,
         baseSalary: parseFloat(baseSalary),
+        startDate: parsedStartDate,
       },
     });
 
     await logActivity(
       userId,
       'CREATE_EMPLOYEE',
-      `Thêm nhân viên mới: ${employee.name} (Chức vụ: ${employee.role || 'Không'}, Lương: ${employee.baseSalary.toLocaleString('vi-VN')}đ)`
+      `Thêm nhân viên mới: ${employee.name} (Chức vụ: ${employee.role || 'Không'}, Lương: ${employee.baseSalary.toLocaleString('vi-VN')}đ${parsedStartDate ? `, Vào làm: ${parsedStartDate.toISOString().split('T')[0]}` : ''})`
     );
 
     res.status(201).json({
@@ -245,7 +401,7 @@ const createEmployee = async (req, res, next) => {
 const updateEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, phone, address, role, baseSalary } = req.body;
+    const { name, phone, address, role, baseSalary, startDate } = req.body;
     const userId = req.effectiveUserId;
 
     const employee = await prisma.employee.findFirst({
@@ -256,6 +412,18 @@ const updateEmployee = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy nhân viên hoặc bạn không có quyền sửa.');
     }
 
+    let parsedStartDate = undefined;
+    if (startDate !== undefined) {
+      if (startDate) {
+        const d = new Date(startDate);
+        if (!isNaN(d.getTime())) {
+          parsedStartDate = d;
+        }
+      } else {
+        parsedStartDate = null;
+      }
+    }
+
     const updated = await prisma.employee.update({
       where: { id },
       data: {
@@ -264,6 +432,7 @@ const updateEmployee = async (req, res, next) => {
         address: address !== undefined ? (address ? address.trim() : null) : undefined,
         role: role !== undefined ? (role ? role.trim() : null) : undefined,
         baseSalary: baseSalary !== undefined ? parseFloat(baseSalary) : undefined,
+        startDate: parsedStartDate !== undefined ? parsedStartDate : undefined,
       },
     });
 
@@ -544,30 +713,40 @@ const calculateSalary = async (req, res, next) => {
     const result = [];
 
     for (const emp of employees) {
-      // 1. Tính số ngày công thực tế từ bảng chấm công trong tháng
-      const attendances = await prisma.attendance.findMany({
-        where: {
-          employeeId: emp.id,
-          date: {
-            gte: startOfMonth,
-            lte: endOfMonth,
-          },
-        },
-      });
+      // 1. Tính số ngày công hợp lệ dựa vào startDate
+      const { eligibleDays, joinedMidMonth, startDayInMonth } = getEligibleDaysForEmployee(
+        emp.startDate,
+        year,
+        month,
+        totalDaysInMonth
+      );
 
-      let workingDays = totalDaysInMonth; // Mặc định đi làm đủ cả tháng
+      let leaveDays = 0;
       attendances.forEach((att) => {
-        if (att.status === 'ABSENT') {
-          workingDays -= 1.0; // Nghỉ phép trừ 1 công
-        } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
-          workingDays -= 0.5; // Đi làm nửa ngày trừ 0.5 công
+        const attD = new Date(att.date);
+        const attDay = attD.getDate();
+        if (attDay >= startDayInMonth) {
+          if (att.status === 'ABSENT') {
+            leaveDays += (att.shift === 'HALF' ? 0.5 : 1.0);
+          } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
+            leaveDays += 0.5;
+          }
         }
       });
+
+      const workingDays = Math.max(0, eligibleDays - leaveDays);
 
       // 2. Tính lương 1 ngày và tổng lương thực tế đi làm
       const baseSalary = parseFloat(emp.baseSalary);
       const dailySalary = baseSalary / totalDaysInMonth;
-      const calculatedSalary = dailySalary * workingDays;
+      let calculatedSalary = 0;
+      if (eligibleDays > 0) {
+        if (joinedMidMonth) {
+          calculatedSalary = Math.round(dailySalary * workingDays);
+        } else {
+          calculatedSalary = Math.max(0, baseSalary - Math.round(leaveDays * dailySalary));
+        }
+      }
 
       // 3. Tính tổng tiền đã tạm ứng trong tháng
       const advances = await prisma.salaryAdvance.findMany({
@@ -593,7 +772,10 @@ const calculateSalary = async (req, res, next) => {
 
       // Lọc ra danh sách chi tiết các ngày nghỉ hoặc làm nửa ngày để đối soát dễ dàng
       const leaves = attendances
-        .filter((att) => att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'))
+        .filter((att) => {
+          const attD = new Date(att.date);
+          return attD.getDate() >= startDayInMonth && (att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'));
+        })
         .map((att) => ({
           id: att.id,
           date: att.date.toISOString().split('T')[0],
@@ -609,7 +791,9 @@ const calculateSalary = async (req, res, next) => {
         role: emp.role,
         baseSalary,
         totalDaysInMonth,
+        eligibleDays,
         workingDays,
+        joinedMidMonth,
         dailySalary: Math.round(dailySalary),
         calculatedSalary: Math.round(calculatedSalary),
         totalAdvances,
@@ -629,14 +813,14 @@ const calculateSalary = async (req, res, next) => {
   }
 };
 
-// 9. Chốt và thanh toán lương tháng
-const paySalary = async (req, res, next) => {
+// 8.5. Xem trước chi tiết tính lương theo khoảng ngày (preview salary by date range)
+const previewSalary = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { employeeId, monthKey, bonus, deductions, note } = req.body;
+    const { employeeId, fromDate, toDate, monthKey } = req.query;
 
-    if (!employeeId || !monthKey) {
-      throw new BadRequestError('employeeId và monthKey là bắt buộc.');
+    if (!employeeId || !fromDate || !toDate) {
+      throw new BadRequestError('employeeId, fromDate và toDate là bắt buộc.');
     }
 
     const employee = await prisma.employee.findFirst({
@@ -647,74 +831,362 @@ const paySalary = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy nhân viên.');
     }
 
-    // Kiểm tra xem tháng này đã trả lương chưa
-    const existingPayment = await prisma.salaryPayment.findFirst({
-      where: { employeeId, monthKey },
-    });
+    const startOfFromDate = new Date(fromDate);
+    startOfFromDate.setHours(0, 0, 0, 0);
 
-    if (existingPayment) {
-      throw new BadRequestError('Tháng này đã được thanh toán lương cho nhân viên.');
+    const endOfToDate = new Date(toDate);
+    endOfToDate.setHours(23, 59, 59, 999);
+
+    if (isNaN(startOfFromDate.getTime()) || isNaN(endOfToDate.getTime())) {
+      throw new BadRequestError('Định dạng ngày không hợp lệ.');
     }
 
-    const dateParsed = parseMonthKey(monthKey);
-    const { month, year } = dateParsed;
-    const totalDaysInMonth = getDaysInMonth(year, month);
-    const startOfMonth = new Date(year, month - 1, 1);
-    const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+    if (startOfFromDate > endOfToDate) {
+      throw new BadRequestError('Từ ngày phải nhỏ hơn hoặc bằng Đến ngày.');
+    }
 
-    // Tính toán lại các chỉ số giống calculateSalary
-    const attendances = await prisma.attendance.findMany({
-      where: {
-        employeeId,
-        date: { gte: startOfMonth, lte: endOfMonth },
-      },
-    });
-
-    let workingDays = totalDaysInMonth; // Mặc định đi làm đủ cả tháng
-    attendances.forEach((att) => {
-      if (att.status === 'ABSENT') {
-        workingDays -= 1.0; // Nghỉ phép trừ 1 công
-      } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
-        workingDays -= 0.5; // Đi làm nửa ngày trừ 0.5 công
-      }
-    });
+    // Xác định số ngày trong tháng của kỳ lương
+    const fromMonth = startOfFromDate.getMonth() + 1;
+    const fromYear = startOfFromDate.getFullYear();
+    const totalDaysInMonth = getDaysInMonth(fromYear, fromMonth);
+    const resolvedMonthKey = monthKey || `${fromMonth.toString().padStart(2, '0')}/${fromYear}`;
 
     const baseSalary = parseFloat(employee.baseSalary);
     const dailySalary = baseSalary / totalDaysInMonth;
-    const calculatedSalary = dailySalary * workingDays;
 
+    // Xác định ngày bắt đầu tính công thực tế dựa vào startDate
+    let effectiveStartDate = new Date(startOfFromDate.getTime());
+    let joinedMidPeriod = false;
+    if (employee.startDate) {
+      const empStart = new Date(employee.startDate);
+      empStart.setHours(0, 0, 0, 0);
+      if (empStart > startOfFromDate) {
+        effectiveStartDate = empStart;
+        joinedMidPeriod = true;
+      }
+    }
+
+    let eligibleDays = 0;
+    if (effectiveStartDate <= endOfToDate) {
+      const diffDays = Math.floor((endOfToDate.getTime() - effectiveStartDate.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+      eligibleDays = Math.max(0, diffDays);
+    }
+
+    // Chấm công và ngày nghỉ trong khoảng
+    const attendances = await prisma.attendance.findMany({
+      where: {
+        employeeId,
+        date: { gte: startOfFromDate, lte: endOfToDate },
+      },
+      orderBy: { date: 'asc' },
+    });
+
+    let leaveDays = 0;
+    const leavesList = [];
+    attendances.forEach((att) => {
+      const attD = new Date(att.date);
+      if (attD >= effectiveStartDate) {
+        if (att.status === 'ABSENT') {
+          const count = att.shift === 'HALF' ? 0.5 : 1.0;
+          leaveDays += count;
+          leavesList.push({
+            id: att.id,
+            date: att.date.toISOString().split('T')[0],
+            shift: att.shift,
+            note: att.note || '',
+          });
+        } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
+          leaveDays += 0.5;
+          leavesList.push({
+            id: att.id,
+            date: att.date.toISOString().split('T')[0],
+            shift: 'HALF',
+            note: att.note || '',
+          });
+        }
+      }
+    });
+
+    const workingDays = Math.max(0, eligibleDays - leaveDays);
+    const calculatedSalary = Math.round(dailySalary * workingDays);
+
+    // Tạm ứng trong khoảng ngày
     const advances = await prisma.salaryAdvance.findMany({
       where: {
         employeeId,
-        date: { gte: startOfMonth, lte: endOfMonth },
+        date: { gte: startOfFromDate, lte: endOfToDate },
       },
+      orderBy: { date: 'asc' },
     });
     const totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
 
+    // Kiểm tra các khoản lương đã thanh toán để cảnh báo trùng lặp khoảng ngày
+    const paidPayments = await prisma.salaryPayment.findMany({
+      where: {
+        employeeId,
+        status: 'PAID',
+      },
+    });
+
+    let overlappedPayment = null;
+    for (const p of paidPayments) {
+      if (p.fromDate && p.toDate) {
+        const pFrom = new Date(p.fromDate);
+        const pTo = new Date(p.toDate);
+        if (startOfFromDate <= pTo && endOfToDate >= pFrom) {
+          overlappedPayment = p;
+          break;
+        }
+      } else if (p.monthKey === resolvedMonthKey && !p.fromDate) {
+        overlappedPayment = p;
+        break;
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        employeeId,
+        employeeName: employee.name,
+        baseSalary,
+        dailySalary: Math.round(dailySalary),
+        totalDaysInMonth,
+        monthKey: resolvedMonthKey,
+        fromDate: startOfFromDate.toISOString().split('T')[0],
+        toDate: endOfToDate.toISOString().split('T')[0],
+        eligibleDays,
+        leaveDays,
+        workingDays,
+        joinedMidPeriod,
+        calculatedSalary,
+        totalAdvances,
+        advancesList: advances.map((a) => ({
+          id: a.id,
+          amount: parseFloat(a.amount),
+          date: a.date.toISOString().split('T')[0],
+          note: a.note || '',
+        })),
+        leavesList,
+        suggestedFinalAmount: Math.max(0, calculatedSalary - totalAdvances),
+        isOverlapped: !!overlappedPayment,
+        overlappedPeriod: overlappedPayment
+          ? (overlappedPayment.fromDate
+              ? `${new Date(overlappedPayment.fromDate).toLocaleDateString('vi-VN')} - ${new Date(overlappedPayment.toDate).toLocaleDateString('vi-VN')}`
+              : `Tháng ${overlappedPayment.monthKey}`)
+          : null,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 9. Chốt và thanh toán lương (theo tháng hoặc khoảng ngày)
+const paySalary = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { employeeId, monthKey, fromDate, toDate, bonus, deductions, note } = req.body;
+
+    if (!employeeId) {
+      throw new BadRequestError('employeeId là bắt buộc.');
+    }
+
+    const employee = await prisma.employee.findFirst({
+      where: { id: employeeId, userId, isActive: true },
+    });
+
+    if (!employee) {
+      throw new NotFoundError('Không tìm thấy nhân viên.');
+    }
+
+    const baseSalary = parseFloat(employee.baseSalary);
     const bonusVal = bonus ? parseFloat(bonus) : 0;
     const deductionsVal = deductions ? parseFloat(deductions) : 0;
+
+    let startOfPeriod, endOfPeriod, resolvedMonthKey, totalDaysInMonth, dailySalary, workingDays, calculatedSalary, totalAdvances;
+
+    if (fromDate && toDate) {
+      // ─── Chi trả lương theo khoảng ngày lựa chọn ───
+      startOfPeriod = new Date(fromDate);
+      startOfPeriod.setHours(0, 0, 0, 0);
+
+      endOfPeriod = new Date(toDate);
+      endOfPeriod.setHours(23, 59, 59, 999);
+
+      if (isNaN(startOfPeriod.getTime()) || isNaN(endOfPeriod.getTime())) {
+        throw new BadRequestError('Định dạng khoảng ngày không hợp lệ.');
+      }
+      if (startOfPeriod > endOfPeriod) {
+        throw new BadRequestError('Từ ngày phải nhỏ hơn hoặc bằng Đến ngày.');
+      }
+
+      const pMonth = startOfPeriod.getMonth() + 1;
+      const pYear = startOfPeriod.getFullYear();
+      totalDaysInMonth = getDaysInMonth(pYear, pMonth);
+      resolvedMonthKey = monthKey || `${pMonth.toString().padStart(2, '0')}/${pYear}`;
+      dailySalary = baseSalary / totalDaysInMonth;
+
+      // Kiểm tra trùng lặp với các đợt lương đã chi trả
+      const existingPayments = await prisma.salaryPayment.findMany({
+        where: { employeeId, status: 'PAID' },
+      });
+
+      for (const ep of existingPayments) {
+        if (ep.fromDate && ep.toDate) {
+          const epFrom = new Date(ep.fromDate);
+          const epTo = new Date(ep.toDate);
+          if (startOfPeriod <= epTo && endOfPeriod >= epFrom) {
+            const epFromStr = `${epFrom.getDate().toString().padStart(2, '0')}/${(epFrom.getMonth() + 1).toString().padStart(2, '0')}/${epFrom.getFullYear()}`;
+            const epToStr = `${epTo.getDate().toString().padStart(2, '0')}/${(epTo.getMonth() + 1).toString().padStart(2, '0')}/${epTo.getFullYear()}`;
+            throw new BadRequestError(`Khoảng ngày này bị trùng lặp với đợt lương đã chi trả trước đó (${epFromStr} - ${epToStr}).`);
+          }
+        }
+      }
+
+      let effectiveStartDate = new Date(startOfPeriod.getTime());
+      if (employee.startDate) {
+        const empStart = new Date(employee.startDate);
+        empStart.setHours(0, 0, 0, 0);
+        if (empStart > startOfPeriod) {
+          effectiveStartDate = empStart;
+        }
+      }
+
+      let eligibleDays = 0;
+      if (effectiveStartDate <= endOfPeriod) {
+        const diffDays = Math.floor((endOfPeriod.getTime() - effectiveStartDate.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+        eligibleDays = Math.max(0, diffDays);
+      }
+
+      const attendances = await prisma.attendance.findMany({
+        where: {
+          employeeId,
+          date: { gte: startOfPeriod, lte: endOfPeriod },
+        },
+      });
+
+      let leaveDays = 0;
+      attendances.forEach((att) => {
+        const attD = new Date(att.date);
+        if (attD >= effectiveStartDate) {
+          if (att.status === 'ABSENT') {
+            leaveDays += (att.shift === 'HALF' ? 0.5 : 1.0);
+          } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
+            leaveDays += 0.5;
+          }
+        }
+      });
+
+      workingDays = Math.max(0, eligibleDays - leaveDays);
+      calculatedSalary = Math.round(dailySalary * workingDays);
+
+      const advances = await prisma.salaryAdvance.findMany({
+        where: {
+          employeeId,
+          date: { gte: startOfPeriod, lte: endOfPeriod },
+        },
+      });
+      totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
+
+    } else {
+      // ─── Chi trả lương trọn vẹn cả tháng (Nguyên bản) ───
+      if (!monthKey) {
+        throw new BadRequestError('monthKey là bắt buộc khi không chọn khoảng ngày.');
+      }
+      resolvedMonthKey = monthKey;
+
+      const existingPayment = await prisma.salaryPayment.findFirst({
+        where: { employeeId, monthKey: resolvedMonthKey },
+      });
+      if (existingPayment) {
+        throw new BadRequestError('Tháng này đã được thanh toán lương cho nhân viên.');
+      }
+
+      const dateParsed = parseMonthKey(resolvedMonthKey);
+      if (!dateParsed) {
+        throw new BadRequestError('monthKey không hợp lệ.');
+      }
+      const { month, year } = dateParsed;
+      totalDaysInMonth = getDaysInMonth(year, month);
+      startOfPeriod = new Date(year, month - 1, 1);
+      endOfPeriod = new Date(year, month, 0, 23, 59, 59, 999);
+      dailySalary = baseSalary / totalDaysInMonth;
+
+      const attendances = await prisma.attendance.findMany({
+        where: {
+          employeeId,
+          date: { gte: startOfPeriod, lte: endOfPeriod },
+        },
+      });
+
+      const { eligibleDays, joinedMidMonth, startDayInMonth } = getEligibleDaysForEmployee(
+        employee.startDate,
+        year,
+        month,
+        totalDaysInMonth
+      );
+
+      let leaveDays = 0;
+      attendances.forEach((att) => {
+        const attD = new Date(att.date);
+        const attDay = attD.getDate();
+        if (attDay >= startDayInMonth) {
+          if (att.status === 'ABSENT') {
+            leaveDays += (att.shift === 'HALF' ? 0.5 : 1.0);
+          } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
+            leaveDays += 0.5;
+          }
+        }
+      });
+
+      workingDays = Math.max(0, eligibleDays - leaveDays);
+      if (eligibleDays > 0) {
+        if (joinedMidMonth) {
+          calculatedSalary = Math.round(dailySalary * workingDays);
+        } else {
+          calculatedSalary = Math.max(0, baseSalary - Math.round(leaveDays * dailySalary));
+        }
+      } else {
+        calculatedSalary = 0;
+      }
+
+      const advances = await prisma.salaryAdvance.findMany({
+        where: {
+          employeeId,
+          date: { gte: startOfPeriod, lte: endOfPeriod },
+        },
+      });
+      totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
+    }
+
     const finalAmount = Math.max(0, calculatedSalary - totalAdvances + bonusVal - deductionsVal);
 
     const payment = await prisma.salaryPayment.create({
       data: {
         employeeId,
-        monthKey,
+        monthKey: resolvedMonthKey,
         baseSalary,
         workingDays,
         advancesDeducted: totalAdvances,
         bonus: bonusVal,
         deductions: deductionsVal,
         finalAmount,
+        fromDate: startOfPeriod,
+        toDate: endOfPeriod,
         status: 'PAID',
         paidAt: new Date(),
         note: note ? note.trim() : null,
       },
     });
 
+    const periodDesc = (fromDate && toDate)
+      ? `${new Date(startOfPeriod).toLocaleDateString('vi-VN')} - ${new Date(endOfPeriod).toLocaleDateString('vi-VN')}`
+      : `tháng ${resolvedMonthKey}`;
+
     await logActivity(
       userId,
       'PAY_SALARY',
-      `Thanh toán chốt lương tháng ${monthKey} cho nhân viên ${employee.name}: Thực lĩnh ${finalAmount.toLocaleString('vi-VN')}đ`
+      `Thanh toán chốt lương (${periodDesc}) cho nhân viên ${employee.name}: Thực lĩnh ${finalAmount.toLocaleString('vi-VN')}đ`
     );
 
     res.status(201).json({
@@ -975,6 +1447,7 @@ const getGeneralEmployeeShareLink = async (req, res, next) => {
 };
 
 module.exports = {
+  getEligibleDaysForEmployee,
   getEmployees,
   createEmployee,
   updateEmployee,
@@ -985,6 +1458,7 @@ module.exports = {
   deleteLeave,
   createSalaryAdvance,
   calculateSalary,
+  previewSalary,
   paySalary,
   getEmployeeHistory,
   getEmployeeShareLink,

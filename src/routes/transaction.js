@@ -21,6 +21,9 @@ router.put('/:id', transactionController.updateTransaction);
 // Xóa đơn ghi nợ theo ID
 router.delete('/:id', transactionController.deleteTransaction);
 
+// Xóa hàng loạt đơn ghi nợ theo danh sách ID
+router.post('/bulk-delete', transactionController.deleteTransactionsBulk);
+
 
 // Lấy danh sách ảnh hóa đơn (lọc theo ngày, khách hàng, tìm kiếm)
 router.get('/invoices', transactionController.getInvoiceImages);

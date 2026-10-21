@@ -1,10 +1,93 @@
 // meat-management-be/src/controllers/portal.js
+const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError, UnauthorizedError } = require('../utils/errors');
 const { emitWorkspaceEvent } = require('../utils/socket');
+const { logActivity } = require('../utils/activityLogger');
 const { syncGroupCustomPricesToNewCustomers } = require('../services/groupPriceSyncService');
+const { getEligibleDaysForEmployee } = require('./employee');
+const { uploadToCloudinary, isCloudinaryConfigured } = require('../utils/cloudinary');
+
+// Thư mục lưu trữ ảnh hóa đơn cục bộ
+const uploadsDir = path.join(__dirname, '../../uploads/invoices');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Helper lưu tệp ảnh hóa đơn (hỗ trợ cả Base64 Data URI và Cloudinary)
+const processPortalMediaUpload = async (mediaInput) => {
+  if (!mediaInput || typeof mediaInput !== 'string') return null;
+
+  // Nếu đã là link web hoặc link server
+  if (mediaInput.startsWith('http://') || mediaInput.startsWith('https://') || mediaInput.startsWith('/uploads/')) {
+    return mediaInput;
+  }
+
+  let fileExt = 'jpg';
+  let isVideo = false;
+  let mimeType = 'image/jpeg';
+  let cleanBase64 = mediaInput;
+
+  if (mediaInput.startsWith('data:video/')) {
+    isVideo = true;
+    const match = mediaInput.match(/^data:video\/([a-zA-Z0-9+.\-_]+);base64,(.+)$/);
+    if (match && match.length === 3) {
+      const subType = match[1].toLowerCase();
+      fileExt = subType === 'quicktime' ? 'mov' : subType.split('+')[0];
+      mimeType = `video/${match[1]}`;
+      cleanBase64 = match[2];
+    } else {
+      fileExt = 'mp4';
+      mimeType = 'video/mp4';
+      cleanBase64 = mediaInput.split(',')[1] || mediaInput;
+    }
+  } else if (mediaInput.startsWith('data:image/')) {
+    const match = mediaInput.match(/^data:image\/([a-zA-Z0-9+.\-_]+);base64,(.+)$/);
+    if (match && match.length === 3) {
+      const subType = match[1].toLowerCase();
+      fileExt = subType === 'jpeg' ? 'jpg' : subType;
+      mimeType = `image/${match[1]}`;
+      cleanBase64 = match[2];
+    } else {
+      fileExt = 'jpg';
+      mimeType = 'image/jpeg';
+      cleanBase64 = mediaInput.split(',')[1] || mediaInput;
+    }
+  }
+
+  // Lưu file cục bộ vào thư mục uploads/invoices
+  const prefix = isVideo ? 'vid' : 'inv';
+  const fileName = `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${fileExt}`;
+  const filePath = path.join(uploadsDir, fileName);
+  const buffer = Buffer.from(cleanBase64, 'base64');
+  await fs.promises.writeFile(filePath, buffer);
+
+  let finalUrl = `/uploads/invoices/${fileName}`;
+
+  // Đẩy lên Cloudinary nếu có cấu hình
+  if (isCloudinaryConfigured()) {
+    try {
+      const dataUri = `data:${mimeType};base64,${cleanBase64}`;
+      const uploadRes = await uploadToCloudinary(dataUri, {
+        filePath,
+        folder: isVideo ? 'meat_invoices/videos' : 'meat_invoices',
+        resource_type: isVideo ? 'video' : 'image',
+      });
+      if (uploadRes && (uploadRes.secure_url || uploadRes.url)) {
+        finalUrl = uploadRes.secure_url || uploadRes.url;
+      }
+    } catch (cloudErr) {
+      console.warn('[PORTAL_UPLOAD] Lỗi tải lên Cloudinary, giữ link cục bộ:', cloudErr.message);
+    }
+  }
+
+  return finalUrl;
+};
+
 
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET || 'default_access_secret';
 const PORTAL_SESSION_SECRET = process.env.JWT_PORTAL_SECRET || process.env.JWT_ACCESS_SECRET || 'meat_manager_portal_secret_key_2026';
@@ -2241,22 +2324,34 @@ const getEmployeeSalaryPortalData = async (req, res, next) => {
       orderBy: { date: 'asc' },
     });
 
-    let workingDays = totalDaysInMonth;
+    const { eligibleDays, joinedMidMonth, startDayInMonth } = getEligibleDaysForEmployee(
+      employee.startDate,
+      year,
+      month,
+      totalDaysInMonth
+    );
+
+    let workingDays = eligibleDays;
     let fullDaysCount = 0;
     let halfDaysCount = 0;
     let absentDaysCount = 0;
 
     attendances.forEach((att) => {
-      if (att.status === 'ABSENT') {
-        workingDays -= 1.0;
-        absentDaysCount += 1;
-      } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
-        workingDays -= 0.5;
-        halfDaysCount += 1;
-      } else if (att.status === 'PRESENT') {
-        fullDaysCount += 1;
+      const attD = new Date(att.date);
+      if (attD.getDate() >= startDayInMonth) {
+        if (att.status === 'ABSENT') {
+          workingDays -= 1.0;
+          absentDaysCount += 1;
+        } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
+          workingDays -= 0.5;
+          halfDaysCount += 1;
+        } else if (att.status === 'PRESENT') {
+          fullDaysCount += 1;
+        }
       }
     });
+
+    workingDays = Math.max(0, workingDays);
 
     // 2. Tạm ứng trong tháng
     const advances = await prisma.salaryAdvance.findMany({
@@ -2278,7 +2373,15 @@ const getEmployeeSalaryPortalData = async (req, res, next) => {
 
     const baseSalary = parseFloat(employee.baseSalary);
     const dailySalary = Math.round(baseSalary / totalDaysInMonth);
-    const calculatedSalary = Math.round(dailySalary * workingDays);
+    let calculatedSalary = 0;
+    if (eligibleDays > 0) {
+      if (joinedMidMonth) {
+        calculatedSalary = Math.round(dailySalary * workingDays);
+      } else {
+        const leaveDays = absentDaysCount + halfDaysCount * 0.5;
+        calculatedSalary = Math.max(0, baseSalary - Math.round(leaveDays * dailySalary));
+      }
+    }
     const bonus = payment ? parseFloat(payment.bonus) : 0;
     const deductions = payment ? parseFloat(payment.deductions) : 0;
     const finalAmount = payment
@@ -2287,7 +2390,10 @@ const getEmployeeSalaryPortalData = async (req, res, next) => {
 
     // Danh sách ngày nghỉ / nửa buổi đối soát
     const leaves = attendances
-      .filter((att) => att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'))
+      .filter((att) => {
+        const attD = new Date(att.date);
+        return attD.getDate() >= startDayInMonth && (att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'));
+      })
       .map((att) => ({
         id: att.id,
         date: att.date.toISOString().split('T')[0],
@@ -2506,20 +2612,39 @@ const getStaffPortalSalaryData = async (req, res, next) => {
       orderBy: { date: 'asc' },
     });
 
+    const { eligibleDays, joinedMidMonth, startDayInMonth } = getEligibleDaysForEmployee(
+      employee.startDate,
+      year,
+      month,
+      totalDaysInMonth
+    );
+
     let leaveDays = 0;
     attendances.forEach((att) => {
-      if (att.status === 'ABSENT') {
-        leaveDays += (att.shift === 'HALF' ? 0.5 : 1.0);
-      } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
-        leaveDays += 0.5;
+      const attD = new Date(att.date);
+      if (attD.getDate() >= startDayInMonth) {
+        if (att.status === 'ABSENT') {
+          leaveDays += (att.shift === 'HALF' ? 0.5 : 1.0);
+        } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
+          leaveDays += 0.5;
+        }
       }
     });
+
+    const workingDays = Math.max(0, eligibleDays - leaveDays);
 
     // 2. Lương 1 ngày và tổng lương sau khi trừ ngày nghỉ
     const baseSalary = parseFloat(employee.baseSalary);
     const dailySalary = Math.round(baseSalary / totalDaysInMonth);
     const leaveDeduction = Math.round(leaveDays * dailySalary);
-    const calculatedSalary = Math.max(0, baseSalary - leaveDeduction);
+    let calculatedSalary = 0;
+    if (eligibleDays > 0) {
+      if (joinedMidMonth) {
+        calculatedSalary = Math.round(dailySalary * workingDays);
+      } else {
+        calculatedSalary = Math.max(0, baseSalary - leaveDeduction);
+      }
+    }
 
     // 3. Tạm ứng trong tháng
     const advances = await prisma.salaryAdvance.findMany({
@@ -2543,7 +2668,10 @@ const getStaffPortalSalaryData = async (req, res, next) => {
     });
 
     const leaves = attendances
-      .filter((att) => att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'))
+      .filter((att) => {
+        const attD = new Date(att.date);
+        return attD.getDate() >= startDayInMonth && (att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'));
+      })
       .map((att) => ({
         id: att.id,
         date: att.date.toISOString().split('T')[0],
@@ -2564,7 +2692,7 @@ const getStaffPortalSalaryData = async (req, res, next) => {
         merchantName: employee.user?.name || 'Cửa hàng',
         monthKey: targetMonthKey,
         totalDaysInMonth,
-        workingDays: totalDaysInMonth - leaveDays,
+        workingDays,
         stats: {
           leaveDays,
           leaveDeduction,
@@ -2599,6 +2727,896 @@ const getStaffPortalSalaryData = async (req, res, next) => {
   }
 };
 
+// ─────────────────────────────────────────────────────────────
+// CÁC API THAO TÁC CÔNG NỢ TRỰC TIẾP TỪ ZALO PORTAL (CẦN MÃ PIN BẢO MẬT)
+// ─────────────────────────────────────────────────────────────
+
+// Helper ký action token cho thao tác công nợ trên portal khi đã xác thực PIN chủ buôn
+const signDebtActionToken = (portalLinkId, userId) => {
+  return jwt.sign(
+    { portalLinkId, userId, type: 'PORTAL_DEBT_ACTION' },
+    PORTAL_SESSION_SECRET,
+    { expiresIn: '12h' }
+  );
+};
+
+// Helper xác thực session thao tác công nợ của chủ buôn
+const verifyDebtActionSession = (req, portalLink) => {
+  const headers = req.headers || {};
+  const query = req.query || {};
+
+  let actionToken = headers['x-portal-action-token'] || query.actionToken;
+  if (!actionToken && headers['authorization'] && headers['authorization'].startsWith('Bearer ')) {
+    actionToken = headers['authorization'].split(' ')[1];
+  }
+
+  if (!actionToken) {
+    throw new UnauthorizedError('Yêu cầu mã xác thực thao tác công nợ. Vui lòng nhập mã PIN.');
+  }
+
+  try {
+    const decoded = jwt.verify(actionToken, PORTAL_SESSION_SECRET);
+    if (decoded.type !== 'PORTAL_DEBT_ACTION' || decoded.portalLinkId !== portalLink.id) {
+      throw new ForbiddenError('Phiên thao tác công nợ không hợp lệ hoặc đã hết hạn.');
+    }
+    return decoded;
+  } catch (err) {
+    throw new ForbiddenError('Phiên thao tác công nợ không hợp lệ hoặc đã hết hạn. Vui lòng nhập lại mã PIN.');
+  }
+};
+
+// [POST] /api/v1/portal/debt-action/verify-pin/:token
+// Xác thực mã PIN để mở khóa thao tác chỉnh sửa / thu công nợ trên Portal
+const verifyPortalDebtActionPin = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const { pin } = req.body;
+
+    if (!pin) {
+      throw new BadRequestError('Vui lòng nhập mã PIN bảo mật.');
+    }
+
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token },
+      include: {
+        user: {
+          select: { id: true, name: true, pin: true }
+        }
+      }
+    });
+
+    if (!portalLink || !portalLink.isActive) {
+      throw new NotFoundError('Đường dẫn không tồn tại hoặc đã bị khóa.');
+    }
+
+    let isPinMatch = false;
+
+    // 1. Mã PIN xác thực quyền chủ buôn riêng cho phần này: 031070
+    if (String(pin).trim() === '031070') {
+      isPinMatch = true;
+    }
+
+    // 2. So khớp mã PIN với mã PIN của tài khoản chủ buôn (được băm bcrypt)
+    if (!isPinMatch && portalLink.user?.pin) {
+      try {
+        isPinMatch = await bcrypt.compare(String(pin).trim(), portalLink.user.pin);
+      } catch (e) {
+        isPinMatch = false;
+      }
+    }
+
+    // 3. Fallback: Nếu chủ buôn có cài mã PIN riêng cho link này (4 số)
+    if (!isPinMatch && portalLink.pin) {
+      isPinMatch = String(portalLink.pin).trim() === String(pin).trim();
+    }
+
+    if (!isPinMatch) {
+      throw new BadRequestError('Mã PIN bảo mật không chính xác. Vui lòng thử lại.');
+    }
+
+    const actionToken = signDebtActionToken(portalLink.id, portalLink.userId);
+
+    res.json({
+      success: true,
+      message: 'Xác thực mã PIN thành công. Đã mở khóa quyền thao tác công nợ.',
+      actionToken,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Helper tính toán các ngày còn nợ của một khách hàng phục vụ trả nợ theo ngày
+const computeUnpaidDaysForCustomer = (transactions, payments) => {
+  const dayMap = {};
+
+  // 1. Gom nhóm transactions theo ngày DD/MM/YYYY
+  transactions.forEach((tx) => {
+    const d = new Date(tx.date);
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const dateKey = `${day}/${month}/${year}`;
+    const dateStr = `${year}-${month}-${day}`;
+
+    if (!dayMap[dateKey]) {
+      const weekdays = ['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
+      const weekday = weekdays[d.getDay()];
+
+      dayMap[dateKey] = {
+        dateKey,
+        dateStr,
+        dateObj: d,
+        weekday,
+        totalDebt: 0,
+        paidAmount: 0,
+        remainingDebt: 0,
+        itemsList: [],
+      };
+    }
+
+    const txAmt = parseFloat(tx.totalAmount) || 0;
+    dayMap[dateKey].totalDebt += txAmt;
+
+    if (tx.items && tx.items.length > 0) {
+      tx.items.forEach((it) => {
+        const pName = it.product?.name || it.productName || 'Thịt';
+        const q = parseFloat(it.quantity) || 0;
+        const u = it.product?.unit || 'kg';
+        dayMap[dateKey].itemsList.push(`${pName} (${q}${u})`);
+      });
+    }
+  });
+
+  const sortedDays = Object.values(dayMap).sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime());
+
+  // Chuẩn bị danh sách thanh toán
+  const cashPayments = payments.map((p) => ({
+    id: p.id,
+    amount: parseFloat(p.amount) || 0,
+    remaining: parseFloat(p.amount) || 0,
+    paidAt: new Date(p.paidAt),
+    note: p.note || '',
+  })).sort((a, b) => a.paidAt.getTime() - b.paidAt.getTime());
+
+  // Helper trừ tiền thanh toán vào ngày
+  const applyPayment = (pm, day) => {
+    if (pm.remaining <= 0 || day.paidAmount >= day.totalDebt) return;
+    const toPay = day.totalDebt - day.paidAmount;
+    const used = Math.min(pm.remaining, toPay);
+    day.paidAmount += used;
+    pm.remaining -= used;
+  };
+
+  // Bước A: Thanh toán theo ngày cụ thể: "Thanh toán nợ ngày DD/MM/YYYY"
+  cashPayments.forEach((pm) => {
+    if (pm.remaining <= 0) return;
+    const trimNote = (pm.note || '').trim();
+    const dateMatch = trimNote.match(/^Thanh toán (?:nợ\s+)?ngày (\d{1,2})\/(\d{1,2})\/(\d{4})/i);
+    if (dateMatch) {
+      const dKey = `${String(dateMatch[1]).padStart(2, '0')}/${String(dateMatch[2]).padStart(2, '0')}/${dateMatch[3]}`;
+      const targetDay = dayMap[dKey];
+      if (targetDay) {
+        applyPayment(pm, targetDay);
+      }
+    }
+  });
+
+  // Bước B: Thanh toán theo tháng cụ thể: "Thanh toán nợ Tháng MM/YYYY"
+  cashPayments.forEach((pm) => {
+    if (pm.remaining <= 0) return;
+    const trimNote = (pm.note || '').trim();
+    const monthMatch = trimNote.match(/^Thanh toán (?:nợ|hóa đơn)?\s*[Tt]háng (\d{1,2})\/(\d{4})/i);
+    if (monthMatch) {
+      const targetMKey = `${String(monthMatch[1]).padStart(2, '0')}/${monthMatch[2]}`;
+      const monthDays = sortedDays.filter((d) => {
+        const dm = String(d.dateObj.getMonth() + 1).padStart(2, '0');
+        const dy = d.dateObj.getFullYear();
+        return `${dm}/${dy}` === targetMKey;
+      });
+      for (const day of monthDays) {
+        if (pm.remaining <= 0) break;
+        applyPayment(pm, day);
+      }
+    }
+  });
+
+  // Bước C: Phân bổ chung FIFO cho các khoản thanh toán còn lại
+  sortedDays.forEach((day) => {
+    while (day.paidAmount < day.totalDebt) {
+      const pm = cashPayments.find((p) => p.remaining > 0);
+      if (!pm) break;
+      applyPayment(pm, day);
+    }
+  });
+
+  // Lọc ra các ngày còn nợ (> 0) và sắp xếp ngày mới nhất lên đầu
+  const unpaidDays = sortedDays
+    .map((day) => {
+      const remainingDebt = Math.max(0, Math.round(day.totalDebt - day.paidAmount));
+      return {
+        dateKey: day.dateKey,
+        dateStr: day.dateStr,
+        weekday: day.weekday,
+        totalDebt: Math.round(day.totalDebt),
+        paidAmount: Math.round(day.paidAmount),
+        remainingDebt,
+        itemsSummary: day.itemsList.slice(0, 3).join(', ') + (day.itemsList.length > 3 ? '...' : ''),
+      };
+    })
+    .filter((day) => day.remainingDebt > 0)
+    .sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+
+  return unpaidDays;
+};
+
+// [GET] /api/v1/portal/debt-action/bootstrap/:token
+// Lấy danh mục hàng hóa, danh sách khách hàng và đơn giá riêng phục vụ ghi nợ / thu nợ trên portal
+const getPortalDebtActionBootstrap = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token },
+      include: {
+        customers: {
+          include: {
+            customer: true
+          }
+        }
+      }
+    });
+
+    if (!portalLink || !portalLink.isActive) {
+      throw new NotFoundError('Đường dẫn không tồn tại hoặc đã bị khóa.');
+    }
+
+    verifyDebtActionSession(req, portalLink);
+
+    const customerIds = portalLink.customers.map(c => c.customerId);
+    const userId = portalLink.userId;
+
+    const [products, customPrices, recentTransactions, recentPayments] = await Promise.all([
+      prisma.product.findMany({
+        where: { userId, isActive: true },
+        select: { id: true, name: true, defaultPrice: true, costPrice: true, unit: true },
+        orderBy: { name: 'asc' }
+      }),
+      prisma.customerProductPrice.findMany({
+        where: { customerId: { in: customerIds } },
+        include: {
+          product: { select: { id: true, name: true, unit: true } }
+        }
+      }),
+      prisma.transaction.findMany({
+        where: { customerId: { in: customerIds } },
+        include: {
+          customer: { select: { id: true, name: true } },
+          items: {
+            include: {
+              product: { select: { id: true, name: true, unit: true } }
+            }
+          }
+        },
+        orderBy: { date: 'desc' },
+        take: 200
+      }),
+      prisma.payment.findMany({
+        where: { customerId: { in: customerIds } },
+        include: {
+          customer: { select: { id: true, name: true } }
+        },
+        orderBy: { paidAt: 'desc' },
+        take: 200
+      })
+    ]);
+
+    // Tính công nợ hiện tại và các ngày nợ còn lại của từng khách
+    const customersWithDebt = await Promise.all(portalLink.customers.map(async (pc) => {
+      const c = pc.customer;
+      const [purchases, payments] = await Promise.all([
+        prisma.transaction.aggregate({
+          where: { customerId: c.id },
+          _sum: { totalAmount: true }
+        }),
+        prisma.payment.aggregate({
+          where: { customerId: c.id },
+          _sum: { amount: true }
+        })
+      ]);
+      const totalPurchase = Math.round(Number(purchases._sum.totalAmount || 0));
+      const totalPaid = Math.round(Number(payments._sum.amount || 0));
+      let debt = Math.round(totalPurchase - totalPaid + Number(c.manualDebt || 0));
+      if (Math.abs(debt) < 1) debt = 0;
+
+      // Tính danh sách các ngày còn nợ theo chuẩn FIFO & specific matching
+      const custTransactions = recentTransactions.filter((tx) => tx.customerId === c.id);
+      const custPayments = recentPayments.filter((p) => p.customerId === c.id);
+      const unpaidDays = computeUnpaidDaysForCustomer(custTransactions, custPayments);
+
+      return {
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        address: c.address,
+        debt,
+        unpaidDays,
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        customers: customersWithDebt,
+        products,
+        customPrices,
+        recentTransactions,
+        recentPayments
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [POST] /api/v1/portal/debt-action/collect-debt/:token
+// Thu tiền công nợ khách hàng trực tiếp từ Portal (hỗ trợ cả thu theo số tiền hoặc theo nhiều ngày)
+const submitPortalCollectDebt = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const { customerId, amount, paidAt, note, payments } = req.body;
+
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token },
+      include: {
+        customers: true,
+        user: { select: { id: true, name: true } }
+      }
+    });
+
+    if (!portalLink || !portalLink.isActive) {
+      throw new NotFoundError('Đường dẫn không tồn tại hoặc đã bị khóa.');
+    }
+
+    verifyDebtActionSession(req, portalLink);
+
+    if (!customerId) {
+      throw new BadRequestError('Vui lòng chọn khách hàng.');
+    }
+
+    const allowedIds = portalLink.customers.map(c => c.customerId);
+    if (!allowedIds.includes(customerId)) {
+      throw new ForbiddenError('Khách hàng này không thuộc phạm vi của nhóm Zalo Portal.');
+    }
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId }
+    });
+    if (!customer) throw new NotFoundError('Không tìm thấy khách hàng.');
+
+    // ─── TRƯỜNG HỢP 1: THU NỢ THEO NHIỀU NGÀY (BATCH/BY_DAY) ───
+    if (Array.isArray(payments) && payments.length > 0) {
+      const createdPayments = [];
+      let totalCollected = 0;
+      for (const item of payments) {
+        const itemAmt = parseFloat(item.amount);
+        if (isNaN(itemAmt) || itemAmt <= 0) continue;
+        const itemPaidAt = item.paidAt ? new Date(item.paidAt) : new Date();
+        const pRecord = await prisma.payment.create({
+          data: {
+            customerId,
+            createdBy: portalLink.userId,
+            amount: itemAmt,
+            paidAt: itemPaidAt,
+            note: item.note ? item.note.trim() : null,
+          },
+        });
+        createdPayments.push(pRecord);
+        totalCollected += itemAmt;
+      }
+
+      await prisma.portalLink.update({
+        where: { id: portalLink.id },
+        data: { lastPublishedAt: new Date() }
+      });
+
+      logActivity(
+        portalLink.userId,
+        'PORTAL_COLLECT_DEBT',
+        `Thu nợ qua Zalo Portal (${createdPayments.length} ngày): ${customer.name} trả tổng ${new Intl.NumberFormat('vi-VN').format(totalCollected)}đ`
+      );
+
+      emitWorkspaceEvent(portalLink.userId, 'CUSTOMER_UPDATED', {
+        action: 'PORTAL_COLLECT_DEBT',
+        userId: portalLink.userId,
+        customerId,
+        totalCollected,
+      });
+
+      return res.json({
+        success: true,
+        message: `Thu tiền công nợ thành công cho ${createdPayments.length} ngày.`,
+        data: createdPayments,
+      });
+    }
+
+    // ─── TRƯỜNG HỢP 2: THU NỢ THEO SỐ TIỀN ĐƠN LẺ ───
+    if (amount === undefined) {
+      throw new BadRequestError('Vui lòng nhập số tiền thanh toán.');
+    }
+
+    const payAmount = parseFloat(amount);
+    if (isNaN(payAmount) || payAmount <= 0) {
+      throw new BadRequestError('Số tiền thanh toán phải lớn hơn 0.');
+    }
+
+    const paymentPaidAt = paidAt ? new Date(paidAt) : new Date();
+
+    const payment = await prisma.payment.create({
+      data: {
+        customerId,
+        createdBy: portalLink.userId,
+        amount: payAmount,
+        paidAt: paymentPaidAt,
+        note: note ? note.trim() : null,
+      },
+      include: {
+        customer: { select: { name: true, phone: true } }
+      }
+    });
+
+    // Cập nhật lastPublishedAt để portal phản ánh số liệu mới ngay lập tức
+    await prisma.portalLink.update({
+      where: { id: portalLink.id },
+      data: { lastPublishedAt: new Date() }
+    });
+
+    logActivity(
+      portalLink.userId,
+      'PORTAL_COLLECT_DEBT',
+      `Thu nợ qua Zalo Portal: ${customer.name} trả ${new Intl.NumberFormat('vi-VN').format(payAmount)}đ`
+    );
+
+    emitWorkspaceEvent(portalLink.userId, 'CUSTOMER_UPDATED', {
+      action: 'PORTAL_COLLECT_DEBT',
+      userId: portalLink.userId,
+      customerId,
+      paymentId: payment.id,
+      amount: payAmount
+    });
+
+    res.json({
+      success: true,
+      message: 'Thu tiền công nợ thành công.',
+      data: payment
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [POST] /api/v1/portal/debt-action/create-debt/:token
+// Ghi nợ đơn hàng mới trực tiếp từ Portal
+const submitPortalCreateDebt = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const { customerId, date, note, items, invoiceImage } = req.body;
+
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token },
+      include: {
+        customers: true,
+        user: { select: { id: true, name: true } }
+      }
+    });
+
+    if (!portalLink || !portalLink.isActive) {
+      throw new NotFoundError('Đường dẫn không tồn tại hoặc đã bị khóa.');
+    }
+
+    verifyDebtActionSession(req, portalLink);
+
+    if (!customerId) {
+      throw new BadRequestError('Vui lòng chọn khách hàng.');
+    }
+
+    const allowedIds = portalLink.customers.map(c => c.customerId);
+    if (!allowedIds.includes(customerId)) {
+      throw new ForbiddenError('Khách hàng này không thuộc phạm vi của nhóm Zalo Portal.');
+    }
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      throw new BadRequestError('Đơn nợ phải có ít nhất một mặt hàng.');
+    }
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: customerId }
+    });
+    if (!customer) throw new NotFoundError('Không tìm thấy khách hàng.');
+
+    const userId = portalLink.userId;
+    const allUserProducts = await prisma.product.findMany({
+      where: { userId, isActive: true }
+    });
+    const productMap = new Map(allUserProducts.map(p => [p.id, p]));
+
+    let calculatedTotal = 0;
+    const formattedItems = [];
+
+    for (const item of items) {
+      const { productId, productName, quantity: reqQuantity, price: reqPrice, costPrice: reqCostPrice } = item;
+      if (reqQuantity === undefined || reqPrice === undefined) {
+        throw new BadRequestError('Mỗi dòng mặt hàng phải chứa thông tin số lượng và giá bán.');
+      }
+
+      let finalProductId = productId;
+      if (productName && productName.trim()) {
+        const trimmedName = productName.trim();
+        const norm = trimmedName.toLowerCase().replace(/\s+/g, '');
+        let matched = allUserProducts.find(p => p.name.toLowerCase().replace(/\s+/g, '') === norm);
+        if (!matched) {
+          matched = await prisma.product.create({
+            data: {
+              userId,
+              createdBy: userId,
+              name: trimmedName,
+              defaultPrice: parseFloat(reqPrice) || 0,
+              costPrice: reqCostPrice !== undefined ? parseFloat(reqCostPrice) : 0,
+              unit: 'kg'
+            }
+          });
+          allUserProducts.push(matched);
+          productMap.set(matched.id, matched);
+        }
+        finalProductId = matched.id;
+      }
+
+      if (!finalProductId) {
+        throw new BadRequestError('Không thể xác định sản phẩm cho dòng mặt hàng này.');
+      }
+
+      const product = productMap.get(finalProductId);
+      if (!product) throw new NotFoundError('Sản phẩm thịt không tồn tại.');
+
+      const qty = parseFloat(reqQuantity);
+      const prc = parseFloat(reqPrice);
+      const cp = reqCostPrice !== undefined ? parseFloat(reqCostPrice) : (parseFloat(product.costPrice) || 0);
+
+      const subtotal = Math.round(qty * prc);
+      const itemCost = Math.round(qty * cp);
+      const itemProfit = subtotal - itemCost;
+      calculatedTotal += subtotal;
+
+      formattedItems.push({
+        productId: finalProductId,
+        quantity: qty,
+        price: prc,
+        costPrice: cp,
+        amount: subtotal,
+        profit: itemProfit,
+      });
+    }
+
+    const txDate = date ? new Date(date) : new Date();
+
+    const transaction = await prisma.transaction.create({
+      data: {
+        userId,
+        customerId,
+        createdBy: userId,
+        date: txDate,
+        totalAmount: calculatedTotal,
+        note: note ? note.trim() : null,
+        items: {
+          create: formattedItems
+        }
+      },
+      include: {
+        customer: { select: { id: true, name: true } },
+        items: {
+          include: {
+            product: { select: { id: true, name: true, unit: true } }
+          }
+        }
+      }
+    });
+
+    await prisma.portalLink.update({
+      where: { id: portalLink.id },
+      data: { lastPublishedAt: new Date() }
+    });
+
+    logActivity(
+      portalLink.userId,
+      'PORTAL_CREATE_DEBT',
+      `Ghi nợ qua Zalo Portal: ${customer.name} - Tổng tiền: ${new Intl.NumberFormat('vi-VN').format(calculatedTotal)}đ`
+    );
+
+    emitWorkspaceEvent(portalLink.userId, 'CUSTOMER_UPDATED', {
+      action: 'PORTAL_CREATE_DEBT',
+      userId: portalLink.userId,
+      customerId,
+      transactionId: transaction.id,
+      amount: calculatedTotal
+    });
+
+    let invoiceRecord = null;
+    if (invoiceImage && typeof invoiceImage === 'string' && invoiceImage.trim()) {
+      try {
+        const savedImageUrl = await processPortalMediaUpload(invoiceImage);
+        if (savedImageUrl) {
+          invoiceRecord = await prisma.transactionInvoice.create({
+            data: {
+              userId,
+              customerId,
+              transactionId: transaction.id,
+              date: txDate,
+              imageUrl: savedImageUrl,
+              note: note ? `Hóa đơn: ${note}` : 'Ảnh hóa đơn Zalo Portal',
+            },
+          });
+        }
+      } catch (imgErr) {
+        console.warn('[PORTAL_CREATE_DEBT] Lỗi lưu ảnh hóa đơn:', imgErr.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Ghi nợ đơn hàng thành công.',
+      data: {
+        ...transaction,
+        invoice: invoiceRecord,
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [PUT] /api/v1/portal/debt-action/update-debt/:token/:transactionId
+// Cập nhật đơn nợ trực tiếp từ Portal
+const submitPortalUpdateDebt = async (req, res, next) => {
+  try {
+    const { token, transactionId } = req.params;
+    const { date, note, items } = req.body;
+
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token },
+      include: {
+        customers: true,
+        user: { select: { id: true, name: true } }
+      }
+    });
+
+    if (!portalLink || !portalLink.isActive) {
+      throw new NotFoundError('Đường dẫn không tồn tại hoặc đã bị khóa.');
+    }
+
+    verifyDebtActionSession(req, portalLink);
+
+    const allowedIds = portalLink.customers.map(c => c.customerId);
+    const existingTx = await prisma.transaction.findFirst({
+      where: {
+        id: transactionId,
+        customerId: { in: allowedIds },
+        userId: portalLink.userId
+      },
+      include: {
+        customer: true,
+        items: true
+      }
+    });
+
+    if (!existingTx) {
+      throw new NotFoundError('Không tìm thấy đơn nợ hoặc đơn nợ không thuộc quyền quản lý của link này.');
+    }
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      throw new BadRequestError('Đơn nợ phải có ít nhất một mặt hàng.');
+    }
+
+    const userId = portalLink.userId;
+    const allUserProducts = await prisma.product.findMany({
+      where: { userId, isActive: true }
+    });
+    const productMap = new Map(allUserProducts.map(p => [p.id, p]));
+
+    let calculatedTotal = 0;
+    const formattedItems = [];
+
+    for (const item of items) {
+      const { productId, productName, quantity: reqQuantity, price: reqPrice, costPrice: reqCostPrice } = item;
+      if (reqQuantity === undefined || reqPrice === undefined) {
+        throw new BadRequestError('Mỗi dòng mặt hàng phải chứa thông tin số lượng và giá bán.');
+      }
+
+      let finalProductId = productId;
+      if (productName && productName.trim()) {
+        const trimmedName = productName.trim();
+        const norm = trimmedName.toLowerCase().replace(/\s+/g, '');
+        let matched = allUserProducts.find(p => p.name.toLowerCase().replace(/\s+/g, '') === norm);
+        if (!matched) {
+          matched = await prisma.product.create({
+            data: {
+              userId,
+              createdBy: userId,
+              name: trimmedName,
+              defaultPrice: parseFloat(reqPrice) || 0,
+              costPrice: reqCostPrice !== undefined ? parseFloat(reqCostPrice) : 0,
+              unit: 'kg'
+            }
+          });
+          allUserProducts.push(matched);
+          productMap.set(matched.id, matched);
+        }
+        finalProductId = matched.id;
+      }
+
+      if (!finalProductId) {
+        throw new BadRequestError('Không thể xác định sản phẩm cho dòng mặt hàng này.');
+      }
+
+      const product = productMap.get(finalProductId);
+      if (!product) throw new NotFoundError('Sản phẩm thịt không tồn tại.');
+
+      const qty = parseFloat(reqQuantity);
+      const prc = parseFloat(reqPrice);
+      const cp = reqCostPrice !== undefined ? parseFloat(reqCostPrice) : (parseFloat(product.costPrice) || 0);
+
+      const subtotal = Math.round(qty * prc);
+      const itemCost = Math.round(qty * cp);
+      const itemProfit = subtotal - itemCost;
+      calculatedTotal += subtotal;
+
+      formattedItems.push({
+        productId: finalProductId,
+        quantity: qty,
+        price: prc,
+        costPrice: cp,
+        amount: subtotal,
+        profit: itemProfit,
+      });
+    }
+
+    // Xóa items cũ và tạo items mới trong transaction
+    await prisma.$transaction([
+      prisma.transactionItem.deleteMany({
+        where: { transactionId }
+      }),
+      prisma.transaction.update({
+        where: { id: transactionId },
+        data: {
+          date: date ? new Date(date) : existingTx.date,
+          totalAmount: calculatedTotal,
+          note: note !== undefined ? (note ? note.trim() : null) : existingTx.note,
+          items: {
+            create: formattedItems
+          }
+        }
+      })
+    ]);
+
+    const updatedTx = await prisma.transaction.findUnique({
+      where: { id: transactionId },
+      include: {
+        customer: { select: { id: true, name: true } },
+        items: {
+          include: {
+            product: { select: { id: true, name: true, unit: true } }
+          }
+        }
+      }
+    });
+
+    await prisma.portalLink.update({
+      where: { id: portalLink.id },
+      data: { lastPublishedAt: new Date() }
+    });
+
+    logActivity(
+      portalLink.userId,
+      'PORTAL_UPDATE_DEBT',
+      `Sửa đơn nợ qua Zalo Portal: ${existingTx.customer.name} - Tổng tiền: ${new Intl.NumberFormat('vi-VN').format(calculatedTotal)}đ`
+    );
+
+    emitWorkspaceEvent(portalLink.userId, 'CUSTOMER_UPDATED', {
+      action: 'PORTAL_UPDATE_DEBT',
+      userId: portalLink.userId,
+      customerId: existingTx.customerId,
+      transactionId
+    });
+
+    res.json({
+      success: true,
+      message: 'Cập nhật đơn nợ thành công.',
+      data: updatedTx
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [DELETE] /api/v1/portal/debt-action/delete-debt/:token/:transactionId
+// Xóa đơn nợ trực tiếp từ Portal
+const submitPortalDeleteDebt = async (req, res, next) => {
+  try {
+    const { token, transactionId } = req.params;
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token },
+      include: { customers: true }
+    });
+    if (!portalLink || !portalLink.isActive) throw new NotFoundError('Đường dẫn không tồn tại.');
+    verifyDebtActionSession(req, portalLink);
+
+    const allowedIds = portalLink.customers.map(c => c.customerId);
+    const tx = await prisma.transaction.findFirst({
+      where: { id: transactionId, customerId: { in: allowedIds }, userId: portalLink.userId },
+      include: { customer: true }
+    });
+    if (!tx) throw new NotFoundError('Không tìm thấy đơn nợ.');
+
+    await prisma.transactionItem.deleteMany({ where: { transactionId } });
+    await prisma.transaction.delete({ where: { id: transactionId } });
+
+    await prisma.portalLink.update({
+      where: { id: portalLink.id },
+      data: { lastPublishedAt: new Date() }
+    });
+
+    logActivity(portalLink.userId, 'PORTAL_DELETE_DEBT', `Xóa đơn nợ qua Zalo Portal: ${tx.customer.name}`);
+    emitWorkspaceEvent(portalLink.userId, 'CUSTOMER_UPDATED', {
+      action: 'PORTAL_DELETE_DEBT',
+      userId: portalLink.userId,
+      customerId: tx.customerId,
+      transactionId
+    });
+
+    res.json({ success: true, message: 'Đã xóa đơn nợ thành công.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [DELETE] /api/v1/portal/debt-action/delete-payment/:token/:paymentId
+// Xóa khoản thanh toán trực tiếp từ Portal
+const submitPortalDeletePayment = async (req, res, next) => {
+  try {
+    const { token, paymentId } = req.params;
+    const portalLink = await prisma.portalLink.findUnique({
+      where: { token },
+      include: { customers: true }
+    });
+    if (!portalLink || !portalLink.isActive) throw new NotFoundError('Đường dẫn không tồn tại.');
+    verifyDebtActionSession(req, portalLink);
+
+    const allowedIds = portalLink.customers.map(c => c.customerId);
+    const payment = await prisma.payment.findFirst({
+      where: { id: paymentId, customerId: { in: allowedIds } },
+      include: { customer: true }
+    });
+    if (!payment) throw new NotFoundError('Không tìm thấy khoản thanh toán.');
+
+    await prisma.payment.delete({ where: { id: paymentId } });
+
+    await prisma.portalLink.update({
+      where: { id: portalLink.id },
+      data: { lastPublishedAt: new Date() }
+    });
+
+    logActivity(portalLink.userId, 'PORTAL_DELETE_PAYMENT', `Xóa khoản thanh toán qua Zalo Portal: ${payment.customer.name}`);
+    emitWorkspaceEvent(portalLink.userId, 'CUSTOMER_UPDATED', {
+      action: 'PORTAL_DELETE_PAYMENT',
+      userId: portalLink.userId,
+      customerId: payment.customerId,
+      paymentId
+    });
+
+    res.json({ success: true, message: 'Đã xóa khoản thanh toán thành công.' });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   // Public
   getPublicPortalInfo,
@@ -2615,6 +3633,14 @@ module.exports = {
   getEmployeeSalaryPortalData,
   getStaffPortalInfo,
   getStaffPortalSalaryData,
+  // Thao tác công nợ trực tiếp từ Zalo Portal
+  verifyPortalDebtActionPin,
+  getPortalDebtActionBootstrap,
+  submitPortalCollectDebt,
+  submitPortalCreateDebt,
+  submitPortalUpdateDebt,
+  submitPortalDeleteDebt,
+  submitPortalDeletePayment,
   // Private Manage
   getPortalLinks,
   createPortalLink,

@@ -291,6 +291,7 @@ model Employee {
   address     String?  // Địa chỉ
   role        String?  // Vị trí công việc (ví dụ: Giao hàng, Lọc thịt, Bán sạp)
   baseSalary  Decimal  @db.Decimal(12, 2) // Lương cơ bản tháng (VND)
+  startDate   DateTime? // Ngày bắt đầu vào làm việc (nếu null là nhân viên cũ làm tròn tháng)
   isActive    Boolean  @default(true) // Trạng thái hoạt động (cho phép xóa mềm)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -344,13 +345,15 @@ model SalaryPayment {
   bonus            Decimal   @db.Decimal(12, 2) @default(0) // Tiền thưởng thêm
   deductions       Decimal   @db.Decimal(12, 2) @default(0) // Khoản phạt/trừ đi
   finalAmount      Decimal   @db.Decimal(12, 2) // Thực lĩnh
+  fromDate         DateTime? // Bắt đầu khoảng ngày tính lương
+  toDate           DateTime? // Kết thúc khoảng ngày tính lương
   status           String    @default("PAID") // PAID (Đã chi trả), PENDING (Chưa thanh toán)
   paidAt           DateTime? // Ngày chi trả thực tế
   note             String?   // Ghi chú
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  @@unique([employeeId, monthKey]) // Mỗi nhân viên chỉ chốt lương 1 lần duy nhất trong tháng
+  @@index([employeeId, monthKey]) // Hỗ trợ truy vấn lịch sử và đợt chi trả lương
   @@index([employeeId])
   @@map("employee_salary_payments")
 }

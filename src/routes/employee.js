@@ -26,6 +26,7 @@ router.post('/advances', employeeController.createSalaryAdvance);
 
 // API Tính toán và thanh toán lương
 router.get('/salary/calculate', employeeController.calculateSalary);
+router.get('/salary/preview', employeeController.previewSalary);
 router.post('/salary/pay', employeeController.paySalary);
 
 // Lịch sử của nhân viên

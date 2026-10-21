@@ -31,6 +31,22 @@ router.post('/sync-invoice/:token/:invoiceId', portalController.syncInvoiceViaPo
 // Chủ buôn công bố số liệu trực tiếp ngay trên portal
 router.post('/publish/:token', portalController.publishByToken);
 
+// ─── THAO TÁC CÔNG NỢ TRỰC TIẾP TRÊN PORTAL (BẢO VỆ BẰNG MÃ PIN CHỦ BUÔN) ───
+// 1. Xác thực mã PIN
+router.post('/debt-action/verify-pin/:token', portalController.verifyPortalDebtActionPin);
+// 2. Lấy dữ liệu danh mục hàng, khách hàng, giá riêng
+router.get('/debt-action/bootstrap/:token', portalController.getPortalDebtActionBootstrap);
+// 3. Thu công nợ
+router.post('/debt-action/collect-debt/:token', portalController.submitPortalCollectDebt);
+// 4. Ghi nợ mới
+router.post('/debt-action/create-debt/:token', portalController.submitPortalCreateDebt);
+// 5. Cập nhật đơn nợ
+router.put('/debt-action/update-debt/:token/:transactionId', portalController.submitPortalUpdateDebt);
+// 6. Xóa đơn nợ
+router.delete('/debt-action/delete-debt/:token/:transactionId', portalController.submitPortalDeleteDebt);
+// 7. Xóa khoản thanh toán
+router.delete('/debt-action/delete-payment/:token/:paymentId', portalController.submitPortalDeletePayment);
+
 // ─── CỔNG TRA CỨU PHIẾU LƯƠNG & CHẤM CÔNG NHÂN VIÊN QUA ZALO ───
 // Lấy thông tin cơ bản & kiểm tra yêu cầu mã PIN
 router.get('/employee-salary/info/:token', portalController.getEmployeeSalaryPortalInfo);

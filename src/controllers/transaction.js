@@ -718,6 +718,75 @@ const deleteTransaction = async (req, res, next) => {
   }
 };
 
+// 4b. Xóa hàng loạt giao dịch ghi nợ thịt (Bulk Delete Transactions)
+const deleteTransactionsBulk = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { ids } = req.body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      throw new BadRequestError('Vui lòng cung cấp danh sách ID đơn nợ cần xóa.');
+    }
+
+    // Tìm các đơn nợ thuộc workspace của user
+    const existingTransactions = await prisma.transaction.findMany({
+      where: {
+        id: { in: ids },
+        userId,
+      },
+      include: {
+        customer: { select: { id: true, name: true } },
+      },
+    });
+
+    if (existingTransactions.length === 0) {
+      throw new NotFoundError('Không tìm thấy đơn nợ nào phù hợp để xóa.');
+    }
+
+    // Kiểm tra bảo vệ quyền: Nếu là nhân viên thì chỉ được xóa đơn do chính mình tạo
+    const actorId = req.user.id;
+    const actorIsAdmin = req.user.isAdmin === true;
+    for (const tx of existingTransactions) {
+      if (!actorIsAdmin && tx.createdBy !== actorId && actorId !== tx.userId) {
+        throw new ForbiddenError(`Tài khoản của bạn không có quyền xóa đơn nợ của khách "${tx.customer?.name || 'ẩn'}" do người khác tạo.`);
+      }
+    }
+
+    const validIds = existingTransactions.map((tx) => tx.id);
+
+    // Xóa hàng loạt đơn nợ (transaction_items & invoices tự động xóa theo cascade)
+    await prisma.transaction.deleteMany({
+      where: {
+        id: { in: validIds },
+        userId,
+      },
+    });
+
+    const totalDeletedAmount = existingTransactions.reduce((sum, tx) => sum + Number(tx.totalAmount || 0), 0);
+    const customerNames = [...new Set(existingTransactions.map((tx) => tx.customer?.name).filter(Boolean))].join(', ');
+
+    await logActivity(
+      userId,
+      'DELETE_TRANSACTIONS_BULK',
+      `Xóa hàng loạt ${validIds.length} đơn nợ (Tổng tiền: ${Number(totalDeletedAmount).toLocaleString('vi-VN')}đ) của khách: ${customerNames || 'ẩn'}`
+    );
+
+    // Bắn socket thông báo realtime cho các khách hàng bị ảnh hưởng
+    const affectedCustomerIds = [...new Set(existingTransactions.map((tx) => tx.customerId).filter(Boolean))];
+    affectedCustomerIds.forEach((cId) => {
+      notifyCustomerUpdate(userId, 'DELETE_TRANSACTION', { customerId: cId });
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Xóa thành công ${validIds.length} đơn nợ.`,
+      deletedCount: validIds.length,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // 5. Tải lên hàng loạt ảnh hóa đơn, lưu đĩa và tự động đính kèm vào đơn công nợ trong ngày của từng khách hàng
 const uploadBatchInvoices = async (req, res, next) => {
   try {
@@ -1281,6 +1350,7 @@ module.exports = {
   getTransactions,
   updateTransaction,
   deleteTransaction,
+  deleteTransactionsBulk,
   uploadBatchInvoices,
   deleteInvoiceImage,
   getInvoiceImages,

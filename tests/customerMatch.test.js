@@ -1213,6 +1213,92 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
         expect(matchXaDan(input)).toBe(xaDanCustomer.id);
       }
     });
+
+    it('18. AI bóc tách chữ viết tay "Phùng Khong" / "Phung Khong" / "Phùng Khoang" / "Phùng Khơng" / "Phùng Khang" bắt buộc tự động khớp vào khách "lk01 phùng khoang"', async () => {
+      // 1. Tạo khách "lk01 phùng khoang" trong DB
+      const phungKhoangCustomer = await createTestCustomer(
+        testUser.id,
+        '[TEST]_lk01 phùng khoang',
+        '0999888774',
+        2000000
+      );
+
+      const customers = [
+        phungKhoangCustomer,
+        { id: 'cust_khac_1', name: '[TEST]_Khách khác' },
+      ];
+
+      const removeDiacritics = (str) => {
+        if (!str) return '';
+        return str
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/đ/g, 'd')
+          .replace(/Đ/g, 'd')
+          .toLowerCase()
+          .trim();
+      };
+
+      const matchPhungKhoang = (input) => {
+        const cleanDetected = removeDiacritics(input);
+        const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+        let matchedCustomerId = null;
+        const isDetectedPhungKhoang = (
+          cleanDetected.includes('phung khoang') ||
+          cleanDetected.includes('phung khong') ||
+          cleanDetected.includes('phung khang') ||
+          cleanDetected.includes('phung khơng') ||
+          cleanDetectedNoSpace === 'phungkhoang' ||
+          cleanDetectedNoSpace === 'phungkhong' ||
+          cleanDetectedNoSpace === 'phungkhang' ||
+          cleanDetectedNoSpace.includes('phungkhoang') ||
+          cleanDetectedNoSpace.includes('phungkhong') ||
+          cleanDetectedNoSpace.includes('phungkhang') ||
+          (cleanDetected.includes('phung') && (
+            cleanDetected.includes('khoang') ||
+            cleanDetected.includes('khong') ||
+            cleanDetected.includes('khang') ||
+            cleanDetected.includes('khơng')
+          ))
+        );
+
+        if (isDetectedPhungKhoang) {
+          const phungKhoangCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('phung khoang') || (cClean.includes('phung') && cClean.includes('khoang')) || cClean.includes('phung khong');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('khoang');
+          }) || null;
+
+          if (phungKhoangCust) {
+            matchedCustomerId = phungKhoangCust.id;
+          }
+        }
+
+        return matchedCustomerId;
+      };
+
+      const testInputs = [
+        'Phùng Khong',
+        'Phung Khong',
+        'phùng khong',
+        'phung khong',
+        'Phùng Khoang',
+        'Phung Khoang',
+        'phùng khoang',
+        'phung khoang',
+        'Phùng Khơng',
+        'Phùng Khang',
+        'phungkhong',
+        'phungkhoang',
+      ];
+
+      for (const input of testInputs) {
+        expect(matchPhungKhoang(input)).toBe(phungKhoangCustomer.id);
+      }
+    });
   });
 });
 

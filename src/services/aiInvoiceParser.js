@@ -434,6 +434,7 @@ I. XÁC ĐỊNH TÊN KHÁCH HÀNG (customer_name) TỪ GIỌNG NÓI:
 - "Giảng Võ" / "Giang Võ" => "Giảng võ".
 - "794" / "794 Láng Hạ" / "The Industree" => "794 láng hạ".
 - "Cuốn An Khánh" / "An Khang" => "Cuốn an khánh".
+- "Phùng Khoang" / "Phung Khoang" / "Phùng Khong" / "Phung Khong" / "Phùng Khơng" / "Phung Khơng" / "Phùng Khang" / "Phung Khang" => "lk01 phùng khoang".
 - "Sành CS1" / "Sách CS1" / "Sành lẩu CS1" / "Sành 1" => "sành lẩu cs1".
 - "Sành CS2" / "Sách CS2" / "Sành lẩu CS2" / "Sành 2" => "sành lẩu cs2".
 - Nếu không nhắc tên khách: trả về customer_name = null.
@@ -547,6 +548,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 - "Akb" / "AK b" / "A kb" / "ak b" / "a bình" / "a.binh" / "Anh Bình" / "anh binh" / "a binh" / "ak binh" (chữ viết tay viết tắt "Akb" / "AK b") => "Anh bình".
 - "Xã Pan" / "Xa Pan" / "Xã pan" / "xa pan" / "Xã Ban" / "Xa Ban" / "Xã Đàn" / "Xa Dan" / "236 Xã Đàn" / "236 Xã Pan" / "236 xa dan" / "236 xa pan" (chữ viết tay tên khách hàng "Xã Đàn" hoặc "236 Xã Đàn", chữ "Đàn" viết ngoáy/thảo nét chữ Đ và à-n hay bị AI nhìn nhầm thành chữ P-a-n => "Xã Pan" / "Xa Pan") => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "236 xã đàn".
 - "Tài" / "lai" / "lại" / "tai" / "tài" (chữ viết tay "Tài" chữ T hoa viết thảo hay bị nhìn nhầm thành chữ "l" => "lai") => "Tài".
+- "Phùng Khoang" / "Phung Khoang" / "Phùng Khong" / "Phung Khong" / "Phùng Khơng" / "Phung Khơng" / "Phùng Khang" / "Phung Khang" / "lk01 phùng khoang" (chữ viết tay tên khách hàng "Phùng Khoang", chữ "Khoang" viết thảo nét nối o-a-n-g hay bị AI nhìn nhầm thành "Phùng Khong" hoặc "Phung Khong") => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "lk01 phùng khoang" (hoặc khách hàng có chứa "Phùng Khoang" trong danh bạ).
 - Có 3 chữ số "794" (794 lang ha / 794 láng hạ) => "794 láng hạ" (TUYỆT ĐỐI CẤM nhận diện thành "Cuốn láng hạ").
 - Tiêu đề "LÒ MỔ MINH THUẤN" / "LÒ MỔ MINH THUẦN" => Nhà cung cấp "Minh thuần" (viết tắt B: Bắp bò, sx/sn: Sườn).
 - ĐẶC BIỆT CHÚ Ý CHỮ KÝ Ở CHÂN TRANG / ĐÁY HÓA ĐƠN:
@@ -983,6 +985,42 @@ if (!matchedCustomerId) {
 
           if (thuyGaCust) {
             matchedCustomerId = thuyGaCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Ưu tiên khớp khách "lk01 phùng khoang" / "Phùng Khoang" nếu AI nhận diện là "Phùng Khong", "Phung Khong", "Phùng Khoang", "Phung Khoang", "Phùng Khơng", "Phùng Khang", "phung khong", "phungkhoang", "phungkhong"...
+        const isDetectedPhungKhoang = (
+          cleanDetected.includes('phung khoang') ||
+          cleanDetected.includes('phung khong') ||
+          cleanDetected.includes('phung khang') ||
+          cleanDetected.includes('phung khơng') ||
+          cleanDetectedNoSpace === 'phungkhoang' ||
+          cleanDetectedNoSpace === 'phungkhong' ||
+          cleanDetectedNoSpace === 'phungkhang' ||
+          cleanDetectedNoSpace.includes('phungkhoang') ||
+          cleanDetectedNoSpace.includes('phungkhong') ||
+          cleanDetectedNoSpace.includes('phungkhang') ||
+          (cleanDetected.includes('phung') && (
+            cleanDetected.includes('khoang') ||
+            cleanDetected.includes('khong') ||
+            cleanDetected.includes('khang') ||
+            cleanDetected.includes('khơng')
+          ))
+        );
+
+        if (isDetectedPhungKhoang) {
+          const phungKhoangCust = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('phung khoang') || (cClean.includes('phung') && cClean.includes('khoang')) || cClean.includes('phung khong');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim());
+            return cClean.includes('khoang');
+          }) || null;
+
+          if (phungKhoangCust) {
+            matchedCustomerId = phungKhoangCust.id;
           }
         }
       }
