@@ -18,7 +18,7 @@ if (cloudinaryUrl) {
   });
 }
 
-const { isR2Configured, uploadToR2, deleteFromR2 } = require('./r2');
+const { isR2Configured, uploadToR2, deleteFromR2, compressMedia } = require('./r2');
 
 /**
  * Kiểm tra xem dịch vụ lưu trữ đám mây (Cloudflare R2 hoặc Cloudinary) đã được cấu hình hay chưa
@@ -181,4 +181,5 @@ module.exports = {
   isR2Configured,
   uploadToR2,
   deleteFromR2,
+  compressMedia,
 };

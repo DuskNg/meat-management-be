@@ -81,11 +81,14 @@ const detectFileInfo = (fileData, options = {}) => {
   return { isVideo, mimeType, ext };
 };
 
+const { compressMedia } = require('./mediaCompressor');
+
 /**
  * Tải ảnh hoặc video lên Cloudflare R2
+ * Tự động nén và tối ưu hóa dung lượng tối đa trước khi đưa vào kho lưu trữ
  * @param {string|Buffer} fileData - Base64 data URI, đường dẫn file trên đĩa hoặc Buffer
  * @param {Object} [options] - Tùy chọn folder, public_id, filePath, resource_type
- * @returns {Promise<{ secure_url: string, url: string, public_id: string, resource_type: string, bytes: number }>}
+ * @returns {Promise<{ secure_url: string, url: string, public_id: string, resource_type: string, bytes: number, originalBytes?: number }>}
  */
 const uploadToR2 = async (fileData, options = {}) => {
   if (!isR2Configured()) {
@@ -99,7 +102,7 @@ const uploadToR2 = async (fileData, options = {}) => {
   // Xác định file path thực tế trên đĩa nếu có
   const localFilePath = options.filePath || (typeof fileData === 'string' && !fileData.startsWith('data:') && !fileData.startsWith('http') && fs.existsSync(fileData) ? fileData : null);
 
-  const { isVideo, mimeType, ext } = detectFileInfo(localFilePath || fileData, options);
+  let { isVideo, mimeType, ext } = detectFileInfo(localFilePath || fileData, options);
 
   // Chuẩn bị Buffer dữ liệu cần tải lên
   let fileBuffer = null;
@@ -120,6 +123,26 @@ const uploadToR2 = async (fileData, options = {}) => {
     throw new Error('Dữ liệu tệp tải lên Cloudflare R2 không hợp lệ hoặc rỗng.');
   }
 
+  const originalBytes = fileBuffer.length;
+
+  // --- BƯỚC NÉN VÀ TỐI ƯU HÓA DUNG LƯỢNG TỐI ĐA TRƯỚC KHI TẢI LÊN CLOUDFLARE R2 ---
+  try {
+    const compressionResult = await compressMedia(localFilePath || fileBuffer, {
+      isVideo,
+      resource_type: isVideo ? 'video' : 'image',
+      maxDimension: 1920,
+      quality: 75,
+    });
+
+    if (compressionResult && compressionResult.buffer && compressionResult.buffer.length > 0) {
+      fileBuffer = compressionResult.buffer;
+      if (compressionResult.mimeType) mimeType = compressionResult.mimeType;
+      if (compressionResult.ext) ext = compressionResult.ext;
+    }
+  } catch (compressErr) {
+    console.warn('[CLOUDFLARE_R2] Bỏ qua nén do lỗi, tiếp tục upload dữ liệu gốc:', compressErr.message);
+  }
+
   // Tạo khóa lưu trữ (Key) trên R2
   const folder = (options.folder || 'meat_invoices').replace(/^\/+|\/+$/g, '');
   let objectKey = options.public_id;
@@ -127,6 +150,8 @@ const uploadToR2 = async (fileData, options = {}) => {
     const randomHex = crypto.randomBytes(6).toString('hex');
     const prefix = isVideo ? 'vid' : 'img';
     objectKey = `${folder}/${prefix}_${Date.now()}_${randomHex}.${ext}`;
+  } else if (!path.extname(objectKey)) {
+    objectKey = `${objectKey}.${ext}`;
   }
 
   // Thực hiện tải lên với cơ chế thử lại (Retry 3 lần)
@@ -203,4 +228,5 @@ module.exports = {
   uploadToR2,
   deleteFromR2,
   getR2Client,
+  compressMedia,
 };
