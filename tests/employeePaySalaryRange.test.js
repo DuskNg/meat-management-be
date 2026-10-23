@@ -152,4 +152,86 @@ describe('Luồng Nghiệp Vụ: Xem Trước & Chi Trả Lương Theo Khoảng 
     // Từ 16 đến 31 là 16 công, không nghỉ, không ứng -> 16.000.000đ
     expect(parseFloat(payment.finalAmount)).toBe(16000000);
   });
+
+  it('5. POST /api/v1/employees/salary/pay kèm amount tùy chỉnh: Hệ thống lưu đúng số tiền người dùng chỉ định', async () => {
+    // Tạo thêm nhân viên test thứ 2 để thử nghiệm thanh toán với số tiền tùy chỉnh
+    const emp2 = await prisma.employee.create({
+      data: {
+        userId: testUser.id,
+        name: 'NV_TestAmountCustom',
+        role: 'Giao hàng',
+        baseSalary: 15000000,
+        startDate: new Date('2026-11-01'),
+        isActive: true,
+      },
+    });
+
+    const res = await request(app)
+      .post('/api/v1/employees/salary/pay')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        employeeId: emp2.id,
+        fromDate: '2026-11-01',
+        toDate: '2026-11-15',
+        monthKey: '11/2026',
+        amount: 8500000, // Người dùng tự nhập 8.500.000đ
+        note: 'Trả lương tùy chỉnh 8.500.000đ',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    const payment = res.body.data;
+    expect(parseFloat(payment.finalAmount)).toBe(8500000);
+
+    // Dọn dẹp nhân viên test 2
+    await prisma.salaryPayment.deleteMany({ where: { employeeId: emp2.id } });
+    await prisma.employee.delete({ where: { id: emp2.id } });
+  });
+
+  it('6. Khi trả lương 1 phần: GET /api/v1/employees trừ chính xác số tiền đã trả vào remainingSalary, đánh dấu isPartiallyPaid = true', async () => {
+    // Tạo nhân viên test 3: Lương 30.000.000đ, đã trả đợt 1 là 10.000.000đ
+    const emp3 = await prisma.employee.create({
+      data: {
+        userId: testUser.id,
+        name: 'NV_TestTraLuongMotPhan',
+        role: 'Lọc thịt',
+        baseSalary: 30000000,
+        startDate: new Date('2026-10-01'),
+        isActive: true,
+      },
+    });
+
+    // Trả lương 1 phần: 10.000.000đ
+    await request(app)
+      .post('/api/v1/employees/salary/pay')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        employeeId: emp3.id,
+        fromDate: '2026-10-01',
+        toDate: '2026-10-10',
+        monthKey: '10/2026',
+        amount: 10000000,
+        note: 'Trả đợt 1',
+      });
+
+    // Gọi API lấy danh sách nhân viên tháng 10/2026
+    const res = await request(app)
+      .get('/api/v1/employees?monthKey=10/2026')
+      .set('Authorization', `Bearer ${testToken}`);
+
+    expect(res.status).toBe(200);
+    const empData = res.body.data.find((e) => e.id === emp3.id);
+    expect(empData).toBeDefined();
+    expect(empData.totalPaidSalary).toBe(10000000);
+    // Tổng lương 30.000.000đ - Đã trả 10.000.000đ = Còn lại 20.000.000đ
+    expect(empData.remainingSalary).toBe(20000000);
+    // Vì mới trả 1 phần nên isPartiallyPaid = true, isPaid = false
+    expect(empData.isPartiallyPaid).toBe(true);
+    expect(empData.isPaid).toBe(false);
+
+    // Dọn dẹp nhân viên test 3
+    await prisma.salaryPayment.deleteMany({ where: { employeeId: emp3.id } });
+    await prisma.employee.delete({ where: { id: emp3.id } });
+  });
 });
+

@@ -21,6 +21,22 @@ const parseMonthKey = (monthKey) => {
   return { month, year };
 };
 
+// Helper parse chuỗi ngày linh hoạt (hỗ trợ cả DD/MM/YYYY lẫn YYYY-MM-DD)
+const parseFlexibleDate = (dateStr) => {
+  if (!dateStr) return null;
+  if (dateStr instanceof Date) return dateStr;
+  if (typeof dateStr === 'string' && dateStr.includes('/')) {
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const d = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      const y = parseInt(parts[2], 10);
+      return new Date(y, m - 1, d);
+    }
+  }
+  return new Date(dateStr);
+};
+
 // Helper tính số ngày công hợp lệ trong tháng dựa vào ngày bắt đầu vào làm (startDate)
 const getEligibleDaysForEmployee = (startDate, year, month, totalDaysInMonth) => {
   if (!startDate) {
@@ -237,8 +253,13 @@ const getEmployees = async (req, res, next) => {
 
     const result = await Promise.all(employees.map(async (emp) => {
       const totalAdvances = emp.advances ? emp.advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0) : 0;
-      const isPaid = emp.payments ? emp.payments.length > 0 : false;
-      const paidAt = isPaid ? emp.payments[0].paidAt : null;
+      
+      // Tính tổng số tiền lương đã chi trả cho nhân viên trong tháng này
+      const totalPaidSalary = emp.payments
+        ? emp.payments
+            .filter((p) => p.status === 'PAID')
+            .reduce((sum, p) => sum + parseFloat(p.finalAmount || 0), 0)
+        : 0;
 
       const baseSalary = parseFloat(emp.baseSalary);
       const dailySalary = Math.round(baseSalary / totalDaysInMonth);
@@ -302,10 +323,24 @@ const getEmployees = async (req, res, next) => {
           }
         });
       }
-      const currentRemainingSalary = Math.max(0, currentSalary - currentAdvances);
+      
+      // Lương tính đến ngày hiện tại sau khi trừ tạm ứng và trừ các đợt lương đã chi trả
+      const currentRemainingSalary = Math.max(0, currentSalary - currentAdvances - totalPaidSalary);
 
       const carryOver = await calculateCarryOver(emp.id, baseSalary, targetMonthKey, emp.startDate);
-      const remainingSalary = calculatedSalary - totalAdvances + carryOver;
+      
+      // Tổng lương thực lĩnh cả tháng (trước khi trừ tiền đã chi trả)
+      const monthNetSalary = calculatedSalary - totalAdvances + carryOver;
+
+      // Số tiền lương CÒN LẠI cần thanh toán sau khi trừ các đợt lương đã chi trả
+      const remainingSalary = monthNetSalary - totalPaidSalary;
+
+      // Trạng thái thanh toán:
+      // - isPaid (đã trả đủ): khi đã có trả lương và số tiền còn lại <= 0
+      // - isPartiallyPaid (đã trả 1 phần): khi đã trả nhưng vẫn còn tiền lương chưa trả hết
+      const isPaid = totalPaidSalary > 0 && remainingSalary <= 0;
+      const isPartiallyPaid = totalPaidSalary > 0 && remainingSalary > 0;
+      const paidAt = emp.payments && emp.payments.length > 0 ? emp.payments[0].paidAt : null;
 
       // Loại bỏ trường advances, attendances và payments để payload gọn nhẹ
       const { advances, attendances, payments, ...rest } = emp;
@@ -313,6 +348,8 @@ const getEmployees = async (req, res, next) => {
       return {
         ...rest,
         totalAdvances,
+        totalPaidSalary,
+        monthNetSalary,
         leaveDays,
         leaveDeduction,
         dailySalary,
@@ -320,6 +357,7 @@ const getEmployees = async (req, res, next) => {
         remainingSalary,
         carryOver,
         isPaid,
+        isPartiallyPaid,
         paidAt,
         totalDaysInMonth,
         eligibleDays,
@@ -831,11 +869,11 @@ const previewSalary = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy nhân viên.');
     }
 
-    const startOfFromDate = new Date(fromDate);
-    startOfFromDate.setHours(0, 0, 0, 0);
+    const startOfFromDate = parseFlexibleDate(fromDate);
+    if (startOfFromDate) startOfFromDate.setHours(0, 0, 0, 0);
 
-    const endOfToDate = new Date(toDate);
-    endOfToDate.setHours(23, 59, 59, 999);
+    const endOfToDate = parseFlexibleDate(toDate);
+    if (endOfToDate) endOfToDate.setHours(23, 59, 59, 999);
 
     if (isNaN(startOfFromDate.getTime()) || isNaN(endOfToDate.getTime())) {
       throw new BadRequestError('Định dạng ngày không hợp lệ.');
@@ -985,7 +1023,7 @@ const previewSalary = async (req, res, next) => {
 const paySalary = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { employeeId, monthKey, fromDate, toDate, bonus, deductions, note } = req.body;
+    const { employeeId, monthKey, fromDate, toDate, bonus, deductions, note, amount } = req.body;
 
     if (!employeeId) {
       throw new BadRequestError('employeeId là bắt buộc.');
@@ -1007,11 +1045,11 @@ const paySalary = async (req, res, next) => {
 
     if (fromDate && toDate) {
       // ─── Chi trả lương theo khoảng ngày lựa chọn ───
-      startOfPeriod = new Date(fromDate);
-      startOfPeriod.setHours(0, 0, 0, 0);
+      startOfPeriod = parseFlexibleDate(fromDate);
+      if (startOfPeriod) startOfPeriod.setHours(0, 0, 0, 0);
 
-      endOfPeriod = new Date(toDate);
-      endOfPeriod.setHours(23, 59, 59, 999);
+      endOfPeriod = parseFlexibleDate(toDate);
+      if (endOfPeriod) endOfPeriod.setHours(23, 59, 59, 999);
 
       if (isNaN(startOfPeriod.getTime()) || isNaN(endOfPeriod.getTime())) {
         throw new BadRequestError('Định dạng khoảng ngày không hợp lệ.');
@@ -1159,7 +1197,11 @@ const paySalary = async (req, res, next) => {
       totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
     }
 
-    const finalAmount = Math.max(0, calculatedSalary - totalAdvances + bonusVal - deductionsVal);
+    let finalAmount = Math.max(0, calculatedSalary - totalAdvances + bonusVal - deductionsVal);
+    // Nếu có truyền trực tiếp số tiền chi trả lương mong muốn, ưu tiên lấy theo số tiền này
+    if (amount !== undefined && amount !== null && !isNaN(parseFloat(amount))) {
+      finalAmount = Math.max(0, parseFloat(amount));
+    }
 
     const payment = await prisma.salaryPayment.create({
       data: {
