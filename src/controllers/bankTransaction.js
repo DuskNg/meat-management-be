@@ -4,6 +4,8 @@ const { BadRequestError, NotFoundError } = require('../utils/errors');
 const { logActivity } = require('../utils/activityLogger');
 const { emitWorkspaceEvent } = require('../utils/socket');
 
+const { removeDiacritics } = require('../utils/searchHelper');
+
 /**
  * 1. Webhook nhận biến động số dư từ SePay
  * Endpoint: POST /api/v1/bank-transactions/webhook
@@ -25,6 +27,28 @@ const { emitWorkspaceEvent } = require('../utils/socket');
  */
 const handleSepayWebhook = async (req, res, next) => {
   try {
+    // 0. Xác thực bảo mật Webhook (Nếu hệ thống có thiết lập SEPAY_API_KEY trong biến môi trường)
+    const expectedApiKey = process.env.SEPAY_API_KEY ? process.env.SEPAY_API_KEY.trim() : null;
+    if (expectedApiKey) {
+      const authHeader = req.headers.authorization || '';
+      let providedKey = '';
+      if (authHeader.startsWith('Apikey ')) {
+        providedKey = authHeader.substring(7).trim();
+      } else if (authHeader.startsWith('Bearer ')) {
+        providedKey = authHeader.substring(7).trim();
+      } else {
+        providedKey = authHeader.trim();
+      }
+
+      if (!providedKey || providedKey !== expectedApiKey) {
+        console.warn('[SEPAY_WEBHOOK_AUTH] Yêu cầu bị từ chối: API Key không khớp hoặc thiếu header Authorization.');
+        return res.status(401).json({
+          success: false,
+          message: 'Unauthorized: SePay API Key không hợp lệ hoặc không khớp.',
+        });
+      }
+    }
+
     const payload = req.body || {};
     console.log('[SEPAY_WEBHOOK] Nhận dữ liệu webhook:', JSON.stringify(payload));
 
@@ -49,10 +73,16 @@ const handleSepayWebhook = async (req, res, next) => {
       }
     }
 
-    // Kiểm tra xem giao dịch này đã được ghi nhận trước đó chưa (dựa theo sepayId hoặc referenceCode)
+    // 1. Kiểm tra Idempotency chống trùng lặp (dựa theo sepayId)
     if (sepayId) {
       const existing = await prisma.bankTransaction.findUnique({
         where: { sepayId },
+        include: {
+          customer: {
+            select: { id: true, name: true, phone: true },
+          },
+          payment: true,
+        },
       });
       if (existing) {
         console.log(`[SEPAY_WEBHOOK] Bỏ qua giao dịch đã tồn tại (sepayId: ${sepayId})`);
@@ -64,9 +94,9 @@ const handleSepayWebhook = async (req, res, next) => {
       }
     }
 
-    // Tìm chủ buôn (User) sở hữu để gán:
-    // Ưu tiên userId nếu được gửi từ tham số cấu hình webhook, nếu không gán cho chủ buôn đầu tiên
-    let targetUserId = payload.userId || null;
+    // 2. Tìm chủ buôn (User) sở hữu để gán:
+    // Ưu tiên userId từ query parameter (URL SePay cấu hình ?userId=...) hoặc payload
+    let targetUserId = req.query?.userId || req.query?.user_id || payload.userId || null;
     if (!targetUserId) {
       const defaultUser = await prisma.user.findFirst({
         where: { isActive: true, isAdmin: false },
@@ -75,6 +105,101 @@ const handleSepayWebhook = async (req, res, next) => {
       targetUserId = defaultUser?.id || null;
     }
 
+    // 3. Tự động nhận diện khách hàng (Auto-matching thông minh)
+    let matchedCustomerId = null;
+    let matchConfidence = null; // 'EXACT_PHONE' | 'EXACT_CODE' | 'NAME_SUGGESTION'
+
+    if (transferType === 'in' && transferAmount > 0 && targetUserId) {
+      const activeCustomers = await prisma.customer.findMany({
+        where: { userId: targetUserId, isActive: true },
+        select: { id: true, name: true, phone: true },
+      });
+
+      const fullText = `${code || ''} ${content || ''} ${description || ''}`.trim();
+      const normFullText = removeDiacritics(fullText).toLowerCase();
+
+      // Ưu tiên 1: Khớp chính xác theo Số điện thoại của khách hàng trong nội dung (Độ tin cậy 100%)
+      for (const cust of activeCustomers) {
+        if (cust.phone) {
+          const cleanPhone = cust.phone.replace(/[^0-9]/g, '');
+          if (cleanPhone.length >= 9 && fullText.includes(cleanPhone)) {
+            matchedCustomerId = cust.id;
+            matchConfidence = 'EXACT_PHONE';
+            break;
+          }
+        }
+      }
+
+      // Ưu tiên 2: Khớp theo Mã thanh toán SePay bóc tách (code)
+      if (!matchedCustomerId && code && code.trim()) {
+        const cleanCode = code.trim().toLowerCase();
+        for (const cust of activeCustomers) {
+          if (cust.phone && cleanCode.includes(cust.phone.toLowerCase())) {
+            matchedCustomerId = cust.id;
+            matchConfidence = 'EXACT_CODE';
+            break;
+          }
+          const normCustName = removeDiacritics(cust.name).toLowerCase().replace(/\s+/g, '');
+          if (normCustName && normCustName.length >= 4 && cleanCode.includes(normCustName)) {
+            matchedCustomerId = cust.id;
+            matchConfidence = 'EXACT_CODE';
+            break;
+          }
+        }
+      }
+
+      // Ưu tiên 3: Gợi ý theo Tên khách hàng xuất hiện trong nội dung chuyển khoản
+      if (!matchedCustomerId) {
+        const matchedByName = [];
+        for (const cust of activeCustomers) {
+          const normCustName = removeDiacritics(cust.name).toLowerCase().trim();
+          if (normCustName && normCustName.length >= 4 && normFullText.includes(normCustName)) {
+            matchedByName.push(cust);
+          }
+        }
+        if (matchedByName.length === 1) {
+          matchedCustomerId = matchedByName[0].id;
+          matchConfidence = 'NAME_SUGGESTION';
+        }
+      }
+    }
+
+    // 4. Nếu khớp chính xác 100% qua SĐT hoặc Mã SePay: Tự động tạo phiếu thu tiền trừ nợ Payment
+    let paymentId = null;
+    let initialStatus = 'UNPROCESSED';
+
+    if (matchedCustomerId && (matchConfidence === 'EXACT_PHONE' || matchConfidence === 'EXACT_CODE')) {
+      const autoPayment = await prisma.payment.create({
+        data: {
+          customerId: matchedCustomerId,
+          createdBy: targetUserId,
+          amount: transferAmount,
+          paidAt: txDate,
+          note: `Tự động gán & trừ nợ từ SePay (${gateway || 'NH'}): ${content || code || ''}`.trim(),
+        },
+      });
+      paymentId = autoPayment.id;
+      initialStatus = 'PROCESSED';
+
+      const matchedCustObj = await prisma.customer.findUnique({
+        where: { id: matchedCustomerId },
+        select: { name: true },
+      });
+
+      await logActivity(
+        targetUserId,
+        'AUTO_ASSIGN_BANK_TRANSACTION',
+        `Tự động cấn trừ công nợ ${transferAmount.toLocaleString('vi-VN')}đ cho khách hàng ${matchedCustObj?.name || ''} từ SePay (Khớp ${matchConfidence === 'EXACT_PHONE' ? 'SĐT' : 'Mã thanh toán'})`
+      );
+
+      emitWorkspaceEvent(targetUserId, 'CUSTOMER_UPDATED', {
+        action: 'CREATE_PAYMENT',
+        customerId: matchedCustomerId,
+        paymentId: autoPayment.id,
+      });
+    }
+
+    // 5. Lưu giao dịch ngân hàng vào cơ sở dữ liệu
     const newBankTx = await prisma.bankTransaction.create({
       data: {
         userId: targetUserId,
@@ -90,26 +215,33 @@ const handleSepayWebhook = async (req, res, next) => {
         content,
         referenceCode,
         description,
-        status: 'UNPROCESSED',
+        status: initialStatus,
+        matchedCustomerId,
+        paymentId,
         rawPayload: JSON.stringify(payload),
       },
       include: {
         customer: {
           select: { id: true, name: true, phone: true },
         },
+        payment: true,
       },
     });
 
-    // Phát socket thông báo cho màn hình Web/App biết có biến động số dư mới tức thì
+    // 6. Phát socket thông báo cho màn hình Web/App biết có biến động số dư mới tức thì
     if (targetUserId) {
       emitWorkspaceEvent(targetUserId, 'BANK_TRANSACTION_RECEIVED', {
         transaction: newBankTx,
+        autoProcessed: initialStatus === 'PROCESSED',
+        matchConfidence,
       });
     }
 
     res.status(201).json({
       success: true,
-      message: 'Nhận và lưu giao dịch SePay thành công.',
+      message: initialStatus === 'PROCESSED'
+        ? `Đã nhận giao dịch và tự động cấn trừ nợ cho khách hàng ${newBankTx.customer?.name}.`
+        : 'Nhận và lưu giao dịch SePay thành công.',
       data: newBankTx,
     });
   } catch (error) {
