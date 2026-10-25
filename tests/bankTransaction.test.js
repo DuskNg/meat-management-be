@@ -200,15 +200,12 @@ describe('Luồng Nghiệp Vụ: Webhook SePay & Quản Lý Giao Dịch Ngân H�
 
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
-    expect(res.body.data.status).toBe('PROCESSED');
+    expect(res.body.data.status).toBe('UNPROCESSED');
     expect(res.body.data.matchedCustomerId).toBe(testCustomer.id);
-    expect(res.body.data.paymentId).toBeDefined();
+    expect(res.body.data.paymentId).toBeNull();
 
-    // Dọn dẹp giao dịch và payment tự sinh
+    // Dọn dẹp giao dịch test
     await prisma.bankTransaction.deleteMany({ where: { sepayId: autoSepayId } });
-    if (res.body.data.paymentId) {
-      await prisma.payment.deleteMany({ where: { id: res.body.data.paymentId } });
-    }
   });
 
   it('8. Auto-Match: Tự động nhận diện khách hàng khi trường code chứa SĐT khách', async () => {
@@ -233,15 +230,12 @@ describe('Luồng Nghiệp Vụ: Webhook SePay & Quản Lý Giao Dịch Ngân H�
 
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
-    expect(res.body.data.status).toBe('PROCESSED');
+    expect(res.body.data.status).toBe('UNPROCESSED');
     expect(res.body.data.matchedCustomerId).toBe(testCustomer.id);
-    expect(res.body.data.paymentId).toBeDefined();
+    expect(res.body.data.paymentId).toBeNull();
 
     // Dọn dẹp
     await prisma.bankTransaction.deleteMany({ where: { sepayId: codeSepayId } });
-    if (res.body.data.paymentId) {
-      await prisma.payment.deleteMany({ where: { id: res.body.data.paymentId } });
-    }
   });
 
   it('9. Xác thực bảo mật: Chặn 401 khi có SEPAY_API_KEY nhưng sai key, và nhận 201 khi đúng Apikey', async () => {

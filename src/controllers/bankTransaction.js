@@ -181,40 +181,11 @@ const handleSepayWebhook = async (req, res, next) => {
       }
     }
 
-    // 4. Nếu khớp chính xác 100% qua SĐT hoặc Mã SePay: Tự động tạo phiếu thu tiền trừ nợ Payment
-    let paymentId = null;
-    let initialStatus = 'UNPROCESSED';
-
-    if (matchedCustomerId && (matchConfidence === 'EXACT_PHONE' || matchConfidence === 'EXACT_CODE')) {
-      const autoPayment = await prisma.payment.create({
-        data: {
-          customerId: matchedCustomerId,
-          createdBy: targetUserId,
-          amount: transferAmount,
-          paidAt: txDate,
-          note: `Tự động gán & trừ nợ từ SePay (${gateway || 'NH'}): ${content || code || ''}`.trim(),
-        },
-      });
-      paymentId = autoPayment.id;
-      initialStatus = 'PROCESSED';
-
-      const matchedCustObj = await prisma.customer.findUnique({
-        where: { id: matchedCustomerId },
-        select: { name: true },
-      });
-
-      await logActivity(
-        targetUserId,
-        'AUTO_ASSIGN_BANK_TRANSACTION',
-        `Tự động cấn trừ công nợ ${transferAmount.toLocaleString('vi-VN')}đ cho khách hàng ${matchedCustObj?.name || ''} từ SePay (Khớp ${matchConfidence === 'EXACT_PHONE' ? 'SĐT' : 'Mã thanh toán'})`
-      );
-
-      emitWorkspaceEvent(targetUserId, 'CUSTOMER_UPDATED', {
-        action: 'CREATE_PAYMENT',
-        customerId: matchedCustomerId,
-        paymentId: autoPayment.id,
-      });
-    }
+    // 4. Nhận diện gợi ý khách hàng (Không tự động tạo phiếu thu trừ nợ để bảo toàn 100% dòng tiền thực tế khi đang test)
+    // Mọi giao dịch mới nhận đều ở trạng thái UNPROCESSED (Chờ xử lý).
+    // Chỉ khi người dùng chủ động bấm 'Gán khách & trừ nợ' trên giao diện thì mới tạo phiếu thu nợ Payment.
+    const paymentId = null;
+    const initialStatus = 'UNPROCESSED';
 
     // 5. Lưu giao dịch ngân hàng vào cơ sở dữ liệu
     const newBankTx = await prisma.bankTransaction.create({
