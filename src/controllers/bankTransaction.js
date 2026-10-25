@@ -64,10 +64,14 @@ const handleSepayWebhook = async (req, res, next) => {
     const referenceCode = payload.referenceCode || null;
     const description = payload.description || null;
 
-    // Chuẩn hóa ngày giao dịch
+    // Chuẩn hóa ngày giao dịch (SePay gửi chuỗi "YYYY-MM-DD HH:mm:ss" theo giờ Việt Nam GMT+7)
     let txDate = new Date();
     if (payload.transactionDate) {
-      const parsed = new Date(payload.transactionDate);
+      const rawDateStr = String(payload.transactionDate).trim();
+      const isoWithTz = rawDateStr.includes('T') || rawDateStr.includes('+') || rawDateStr.endsWith('Z')
+        ? rawDateStr
+        : `${rawDateStr.replace(' ', 'T')}+07:00`;
+      const parsed = new Date(isoWithTz);
       if (!isNaN(parsed.getTime())) {
         txDate = parsed;
       }
