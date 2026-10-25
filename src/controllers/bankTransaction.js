@@ -97,6 +97,19 @@ const handleSepayWebhook = async (req, res, next) => {
     // 2. Tìm chủ buôn (User) sở hữu để gán:
     // Ưu tiên userId từ query parameter (URL SePay cấu hình ?userId=...) hoặc payload
     let targetUserId = req.query?.userId || req.query?.user_id || payload.userId || null;
+
+    // Nếu không có userId truyền vào, tự động tìm theo lịch sử số tài khoản ngân hàng (accountNumber)
+    if (!targetUserId && accountNumber) {
+      const lastTxWithAccount = await prisma.bankTransaction.findFirst({
+        where: { accountNumber, userId: { not: null } },
+        orderBy: { transactionDate: 'desc' },
+        select: { userId: true },
+      });
+      if (lastTxWithAccount?.userId) {
+        targetUserId = lastTxWithAccount.userId;
+      }
+    }
+
     if (!targetUserId) {
       const defaultUser = await prisma.user.findFirst({
         where: { isActive: true, isAdmin: false },
