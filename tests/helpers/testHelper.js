@@ -18,6 +18,8 @@ const createTestUser = async (customName = 'Chủ Buôn Test') => {
       isAdmin: false,
       canManageCustomers: true,
       canManageDebt: true,
+      canManageProfit: true,
+      canManageTransactions: true,
     },
   });
 

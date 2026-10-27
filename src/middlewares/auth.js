@@ -138,6 +138,8 @@ const resolveWorkspace = async (req, res, next) => {
                 canManageStore: true,
                 canManageInventory: true,
                 canManageShop: true,
+                canManageProfit: true,
+                canManageTransactions: true,
               },
             },
           },

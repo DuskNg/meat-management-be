@@ -25,6 +25,8 @@ const getUsers = async (req, res, next) => {
         canManageStore: true,
         canManageInventory: true,
         canManageShop: true,
+        canManageProfit: true,
+        canManageTransactions: true,
         isActive: true,
         deletedAt: true,
         createdAt: true,
@@ -50,6 +52,8 @@ const getUsers = async (req, res, next) => {
                     canManageStore: true,
                     canManageInventory: true,
                     canManageShop: true,
+                    canManageProfit: true,
+                    canManageTransactions: true,
                   },
                 },
               },
@@ -77,6 +81,8 @@ const getUsers = async (req, res, next) => {
           canManageStore: owner.canManageStore,
           canManageInventory: owner.canManageInventory,
           canManageShop: owner.canManageShop,
+          canManageProfit: owner.canManageProfit,
+          canManageTransactions: owner.canManageTransactions,
         };
       }
       return user;
@@ -183,7 +189,7 @@ const restoreUser = async (req, res, next) => {
 const updatePermissions = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { isWorkspaceOwner, canManageCustomers, canManageDebt, canManageBadDebt, canManageEmployees, canManageStore, canManageInventory, canManageShop } = req.body;
+    const { isWorkspaceOwner, canManageCustomers, canManageDebt, canManageBadDebt, canManageEmployees, canManageStore, canManageInventory, canManageShop, canManageProfit, canManageTransactions } = req.body;
 
     const user = await prisma.user.findUnique({
       where: { id },
@@ -214,6 +220,8 @@ const updatePermissions = async (req, res, next) => {
     const storeVal = canManageStore !== undefined ? !!canManageStore : undefined;
     const inventoryVal = canManageInventory !== undefined ? !!canManageInventory : undefined;
     const shopVal = canManageShop !== undefined ? !!canManageShop : undefined;
+    const profitVal = canManageProfit !== undefined ? !!canManageProfit : undefined;
+    const transactionsVal = canManageTransactions !== undefined ? !!canManageTransactions : undefined;
 
     const updatedUser = await prisma.user.update({
       where: { id },
@@ -226,6 +234,8 @@ const updatePermissions = async (req, res, next) => {
         canManageStore: storeVal,
         canManageInventory: inventoryVal,
         canManageShop: shopVal,
+        canManageProfit: profitVal,
+        canManageTransactions: transactionsVal,
       },
     });
 
@@ -246,6 +256,8 @@ const updatePermissions = async (req, res, next) => {
       if (storeVal === false) permissionsToRevoke.canManageStore = false;
       if (inventoryVal === false) permissionsToRevoke.canManageInventory = false;
       if (shopVal === false) permissionsToRevoke.canManageShop = false;
+      if (profitVal === false) permissionsToRevoke.canManageProfit = false;
+      if (transactionsVal === false) permissionsToRevoke.canManageTransactions = false;
 
       // Chỉ thực hiện cập nhật nếu có ít nhất một quyền bị thu hồi
       if (Object.keys(permissionsToRevoke).length > 0) {
@@ -267,7 +279,7 @@ const updatePermissions = async (req, res, next) => {
     await logActivity(
       req.user.id,
       'UPDATE_USER_PERMISSIONS',
-      `Phân quyền cho tài khoản ${user.name} (${user.phone}): Chủ Workspace [${!!updatedUser.isWorkspaceOwner}], Khách hàng [${!!updatedUser.canManageCustomers}], Công nợ [${!!updatedUser.canManageDebt}], Nợ xấu [${!!updatedUser.canManageBadDebt}], Nhân viên [${!!updatedUser.canManageEmployees}], Cửa hàng [${!!updatedUser.canManageStore}], Kho [${!!updatedUser.canManageInventory}], Cửa hàng tính giờ [${!!updatedUser.canManageShop}]`
+      `Phân quyền cho tài khoản ${user.name} (${user.phone}): Chủ Workspace [${!!updatedUser.isWorkspaceOwner}], Khách hàng [${!!updatedUser.canManageCustomers}], Công nợ [${!!updatedUser.canManageDebt}], Nợ xấu [${!!updatedUser.canManageBadDebt}], Nhân viên [${!!updatedUser.canManageEmployees}], Cửa hàng [${!!updatedUser.canManageStore}], Kho [${!!updatedUser.canManageInventory}], Cửa hàng tính giờ [${!!updatedUser.canManageShop}], Lợi nhuận [${!!updatedUser.canManageProfit}], Giao dịch [${!!updatedUser.canManageTransactions}]`
     );
 
     res.status(200).json({
@@ -286,6 +298,8 @@ const updatePermissions = async (req, res, next) => {
           canManageStore: updatedUser.canManageStore,
           canManageInventory: updatedUser.canManageInventory,
           canManageShop: updatedUser.canManageShop,
+          canManageProfit: updatedUser.canManageProfit,
+          canManageTransactions: updatedUser.canManageTransactions,
         },
       },
     });
@@ -461,6 +475,8 @@ const toggleWorkspaceOwner = async (req, res, next) => {
         canManageStore: updated.canManageStore,
         canManageInventory: updated.canManageInventory,
         canManageShop: updated.canManageShop,
+        canManageProfit: updated.canManageProfit,
+        canManageTransactions: updated.canManageTransactions,
       },
     });
   } catch (error) {

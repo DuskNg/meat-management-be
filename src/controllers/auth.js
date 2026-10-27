@@ -81,6 +81,8 @@ const requestOtp = async (req, res, next) => {
           canManageStore: membership.canManageStore,
           canManageInventory: membership.canManageInventory,
           canManageShop: membership.canManageShop,
+          canManageProfit: membership.canManageProfit,
+          canManageTransactions: membership.canManageTransactions,
         }
       : {
           canManageCustomers: user.canManageCustomers,
@@ -90,6 +92,8 @@ const requestOtp = async (req, res, next) => {
           canManageStore: user.canManageStore,
           canManageInventory: user.canManageInventory,
           canManageShop: user.canManageShop,
+          canManageProfit: user.canManageProfit,
+          canManageTransactions: user.canManageTransactions,
         };
 
     // Trả về trực tiếp thông tin đăng nhập thành công cho client
@@ -215,6 +219,8 @@ const verifyOtp = async (req, res, next) => {
           canManageStore: membership.canManageStore,
           canManageInventory: membership.canManageInventory,
           canManageShop: membership.canManageShop,
+          canManageProfit: membership.canManageProfit,
+          canManageTransactions: membership.canManageTransactions,
         }
       : {
           canManageCustomers: user.canManageCustomers,
@@ -224,6 +230,8 @@ const verifyOtp = async (req, res, next) => {
           canManageStore: user.canManageStore,
           canManageInventory: user.canManageInventory,
           canManageShop: user.canManageShop,
+          canManageProfit: user.canManageProfit,
+          canManageTransactions: user.canManageTransactions,
         };
 
     res.status(200).json({
@@ -341,6 +349,8 @@ const getProfile = async (req, res, next) => {
         canManageStore: true,
         canManageInventory: true,
         canManageShop: true,
+        canManageProfit: true,
+        canManageTransactions: true,
         isActive: true,
         createdAt: true,
         updatedAt: true,
@@ -373,6 +383,8 @@ const getProfile = async (req, res, next) => {
           canManageStore: membership.canManageStore,
           canManageInventory: membership.canManageInventory,
           canManageShop: membership.canManageShop,
+          canManageProfit: membership.canManageProfit,
+          canManageTransactions: membership.canManageTransactions,
         }
       : {
           canManageCustomers: user.canManageCustomers,
@@ -382,6 +394,8 @@ const getProfile = async (req, res, next) => {
           canManageStore: user.canManageStore,
           canManageInventory: user.canManageInventory,
           canManageShop: user.canManageShop,
+          canManageProfit: user.canManageProfit,
+          canManageTransactions: user.canManageTransactions,
         };
 
     res.status(200).json({

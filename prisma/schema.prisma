@@ -29,6 +29,8 @@ model User {
   canManageStore     Boolean  @default(false) // Quyền quản lý cửa hàng (bàn, món ăn)
   canManageInventory Boolean  @default(false) // Quyền quản lý kho (sản phẩm, tồn kho)
   canManageShop      Boolean  @default(false) // Quyền quản lý cửa hàng tính giờ (bida, karaoke...)
+  canManageProfit    Boolean  @default(false) // Quyền quản lý lợi nhuận (báo cáo lợi nhuận, đối soát lò)
+  canManageTransactions Boolean @default(false) // Quyền quản lý giao dịch (biến động số dư SePay, cấn trừ nợ)
   isActive           Boolean  @default(true)  // Trạng thái hoạt động (cho phép xóa mềm)
   deletedAt          DateTime?                // Thời điểm xóa tài khoản tạm thời
   isWorkspaceOwner   Boolean  @default(false) // Admin đánh dấu tài khoản này được phép tạo Workspace
@@ -504,6 +506,8 @@ model WorkspaceMember {
   canManageStore     Boolean @default(false)
   canManageInventory Boolean @default(false)
   canManageShop      Boolean @default(false)
+  canManageProfit    Boolean @default(false)
+  canManageTransactions Boolean @default(false)
 
   joinedAt     DateTime  @default(now())
 

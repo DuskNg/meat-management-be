@@ -260,6 +260,8 @@ const getJoinStatus = async (req, res, next) => {
             canManageStore: membership.canManageStore,
             canManageInventory: membership.canManageInventory,
             canManageShop: membership.canManageShop,
+            canManageProfit: membership.canManageProfit,
+            canManageTransactions: membership.canManageTransactions,
           },
         },
       });
@@ -317,6 +319,8 @@ const approveJoinRequest = async (req, res, next) => {
             canManageStore: true,
             canManageInventory: true,
             canManageShop: true,
+            canManageProfit: true,
+            canManageTransactions: true,
           },
         },
       },
@@ -348,6 +352,8 @@ const approveJoinRequest = async (req, res, next) => {
       canManageStore: false,
       canManageInventory: false,
       canManageShop: false,
+      canManageProfit: false,
+      canManageTransactions: false,
     };
 
     // Tạo thành viên với quyền được sao chép từ chủ và cập nhật trạng thái yêu cầu
@@ -436,6 +442,8 @@ const updateMemberPermissions = async (req, res, next) => {
       canManageStore,
       canManageInventory,
       canManageShop,
+      canManageProfit,
+      canManageTransactions,
     } = req.body;
 
     const workspace = await prisma.workspace.findUnique({ where: { ownerId } });
@@ -460,6 +468,8 @@ const updateMemberPermissions = async (req, res, next) => {
         canManageStore: canManageStore !== undefined ? !!canManageStore : undefined,
         canManageInventory: canManageInventory !== undefined ? !!canManageInventory : undefined,
         canManageShop: canManageShop !== undefined ? !!canManageShop : undefined,
+        canManageProfit: canManageProfit !== undefined ? !!canManageProfit : undefined,
+        canManageTransactions: canManageTransactions !== undefined ? !!canManageTransactions : undefined,
       },
     });
 
@@ -474,6 +484,8 @@ const updateMemberPermissions = async (req, res, next) => {
         canManageStore: canManageStore !== undefined ? !!canManageStore : undefined,
         canManageInventory: canManageInventory !== undefined ? !!canManageInventory : undefined,
         canManageShop: canManageShop !== undefined ? !!canManageShop : undefined,
+        canManageProfit: canManageProfit !== undefined ? !!canManageProfit : undefined,
+        canManageTransactions: canManageTransactions !== undefined ? !!canManageTransactions : undefined,
       },
     });
 
@@ -488,6 +500,8 @@ const updateMemberPermissions = async (req, res, next) => {
         canManageStore: updated.canManageStore,
         canManageInventory: updated.canManageInventory,
         canManageShop: updated.canManageShop,
+        canManageProfit: updated.canManageProfit,
+        canManageTransactions: updated.canManageTransactions,
       },
     });
 
@@ -534,6 +548,8 @@ const kickMember = async (req, res, next) => {
       canManageStore: false,
       canManageInventory: false,
       canManageShop: false,
+      canManageProfit: false,
+      canManageTransactions: false,
     };
 
     // Xóa thành viên, đặt lại yêu cầu thành rejected và reset quyền trong bảng User về false
@@ -594,6 +610,8 @@ const leaveWorkspace = async (req, res, next) => {
       canManageStore: false,
       canManageInventory: false,
       canManageShop: false,
+      canManageProfit: false,
+      canManageTransactions: false,
     };
 
     // Xóa thành viên và reset quyền trong bảng User về false

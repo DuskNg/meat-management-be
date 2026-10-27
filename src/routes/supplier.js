@@ -4,16 +4,18 @@ const router = express.Router();
 const supplierController = require('../controllers/supplier');
 const { authenticateToken, requirePermission, resolveWorkspace } = require('../middlewares/auth');
 
-// Bảo vệ tất cả các tuyến đường bằng middleware xác thực token và quyền
+// Bảo vệ tất cả các tuyến đường bằng middleware xác thực token
 router.use(authenticateToken);
 router.use(resolveWorkspace); // Chuyển hướng userId sang workspace owner nếu là nhân viên
+
+// Báo cáo quản lý lợi nhuận toàn diện (Phân quyền riêng: canManageProfit)
+router.get('/profit-report', requirePermission('canManageProfit'), supplierController.getProfitReport);
+
+// Các chức năng nhà cung cấp và công nợ còn lại yêu cầu quyền canManageDebt
 router.use(requirePermission('canManageDebt'));
 
 // Lấy danh sách toàn bộ nhà cung cấp kèm công nợ
 router.get('/', supplierController.getSuppliers);
-
-// Báo cáo quản lý lợi nhuận toàn diện (Đối soát tiền bán, tiền nhập, kết luận lãi lỗ)
-router.get('/profit-report', supplierController.getProfitReport);
 
 // Tạo mới nhà cung cấp
 router.post('/', supplierController.createSupplier);
