@@ -98,6 +98,7 @@ const quickPriceRoutes = require('./routes/quickPrice');
 const bankTransactionRoutes = require('./routes/bankTransaction');
 const periodicReminderRoutes = require('./routes/periodicReminder');
 const quickNoteRoutes = require('./routes/quickNote');
+const mediaRoutes = require('./routes/media');
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/customers', customerRoutes);
@@ -118,6 +119,7 @@ app.use('/api/v1/quick-price', quickPriceRoutes);
 app.use('/api/v1/bank-transactions', bankTransactionRoutes);
 app.use('/api/v1/periodic-reminders', periodicReminderRoutes);
 app.use('/api/v1/quick-note', quickNoteRoutes);
+app.use('/api/v1/media', mediaRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
 app.get('/health', (req, res) => {
