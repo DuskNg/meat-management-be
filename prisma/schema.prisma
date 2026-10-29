@@ -57,6 +57,8 @@ model User {
   quickPriceLinks      QuickPriceLink[]      // Danh sách link Zalo cho chủ cập nhật giá nhanh
   bankTransactions     BankTransaction[]     // Danh sách các giao dịch ngân hàng từ SePay
   portalDeliveryRequests PortalDeliveryRequest[] // Danh sách đơn báo hàng từ Portal
+  customerAiAliases    CustomerAiAlias[]     // Từ điển AI tự học chữ viết tay khách hàng
+  productAiAliases     ProductAiAlias[]      // Từ điển AI tự học chữ viết tay món thịt
   quickNote            QuickNote?            // Ghi chú cần nhớ của chủ buôn
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
@@ -111,6 +113,7 @@ model Customer {
   bankTransactions    BankTransaction[]    // Các giao dịch ngân hàng khớp với khách hàng này
   periodicReminders   PeriodicReminderConfig[] // Cấu hình lịch gửi công nợ định kỳ của khách hàng này
   portalDeliveryRequests PortalDeliveryRequest[] // Danh sách các lượt báo hàng của khách hàng này
+  aiAliases           CustomerAiAlias[]    // Các tên viết tắt/chữ viết tay AI tự học của khách hàng này
 
   @@index([userId]) // Tối ưu hóa truy vấn tìm kiếm danh sách khách hàng của từng chủ buôn
   @@map("customers") // Đặt tên bảng trong PostgreSQL là "customers"
@@ -134,6 +137,7 @@ model Product {
   transactionItems TransactionItem[] // Danh sách các chi tiết dòng đơn hàng sử dụng sản phẩm này
   customPrices     CustomerProductPrice[] // Danh sách giá bán riêng của sản phẩm này cho từng khách hàng
   recurringDebtItems RecurringDebtItem[] // Danh sách dòng đơn nợ cố định sử dụng sản phẩm này
+  aiAliases        ProductAiAlias[]  // Các tên viết tắt/chữ viết tay AI tự học của sản phẩm thịt này
 
   @@index([userId]) // Tối ưu hóa truy vấn danh mục sản phẩm theo chủ buôn
   @@map("products") // Đặt tên bảng trong PostgreSQL là "products"
@@ -882,4 +886,52 @@ model QuickNote {
 
   @@map("quick_notes")
 }
+
+// ─── TỪ ĐIỂN AI TỰ HỌC CHỮ VIẾT TAY & TÊN VIẾT TẮT KHÁCH HÀNG ───
+model CustomerAiAlias {
+  id              String   @id @default(uuid())
+  userId          String   // ID của chủ buôn sở hữu từ điển này
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customerId      String   // ID của khách hàng chuẩn được khớp tới
+  customer        Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  rawAlias        String   // Cụm từ gốc AI đọc được trên tích kê (ví dụ: "268 Lương P.h", "Xã Pan")
+  normalizedAlias String   // Cụm từ đã bỏ dấu, viết thường, chuẩn hóa khoảng trắng (ví dụ: "268 luong p.h", "xa pan")
+  compactAlias    String   // Cụm từ đã bỏ dấu, xóa mọi dấu câu & khoảng trắng (ví dụ: "268luongph", "xapan")
+  usageCount      Int      @default(1) // Số lần chủ buôn đã xác nhận cặp từ khóa này
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, normalizedAlias])
+  @@index([userId])
+  @@index([customerId])
+  @@index([userId, compactAlias])
+  @@map("customer_ai_aliases")
+}
+
+// ─── TỪ ĐIỂN AI TỰ HỌC CHỮ VIẾT TAY & TÊN VIẾT TẮT MÓN THỊT ───
+model ProductAiAlias {
+  id              String   @id @default(uuid())
+  userId          String   // ID của chủ buôn sở hữu từ điển này
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId       String   // ID của sản phẩm thịt chuẩn được khớp tới
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  rawAlias        String   // Cụm từ gốc AI đọc được trên tích kê/video (ví dụ: "g.cộc", "bắp rùa", "rẻ sườn")
+  normalizedAlias String   // Cụm từ đã bỏ dấu, viết thường, chuẩn hóa khoảng trắng (ví dụ: "g.coc", "bap rua", "re suon")
+  compactAlias    String   // Cụm từ đã bỏ dấu, xóa mọi dấu câu & khoảng trắng (ví dụ: "gcoc", "baprua", "resuon")
+  usageCount      Int      @default(1) // Số lần chủ buôn đã xác nhận cặp từ khóa món thịt này
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, normalizedAlias])
+  @@index([userId])
+  @@index([productId])
+  @@index([userId, compactAlias])
+  @@map("product_ai_aliases")
+}
+
+
 

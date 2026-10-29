@@ -1299,7 +1299,285 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
         expect(matchPhungKhoang(input)).toBe(phungKhoangCustomer.id);
       }
     });
+
+    it('19. AI bóc tách chữ viết tay chứa "268" (ví dụ "268 Lương P.h", "268 Luong Ph", "268", "268 Khương đình", "Khương đình"...) bắt buộc tự động khớp vào khách "268 Khương đình"', async () => {
+      const khuongDinhCustomer = await createTestCustomer(
+        testUser.id,
+        '[TEST]_268 Khương đình',
+        '0999888774',
+        1800000
+      );
+
+      const customers = [
+        khuongDinhCustomer,
+        { id: 'cust_khac_2', name: '[TEST]_Khách khác' },
+      ];
+
+      const removeDiacritics = (str) => {
+        if (!str) return '';
+        return str
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/đ/g, 'd')
+          .replace(/Đ/g, 'd')
+          .toLowerCase()
+          .trim();
+      };
+
+      const matchKhuongDinh = (input) => {
+        const cleanDetected = removeDiacritics(input);
+        const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+        let matchedCustomerId = null;
+        const isDetectedKhuongDinh = (
+          cleanDetected.includes('268') ||
+          cleanDetectedNoSpace.includes('268') ||
+          cleanDetected.includes('khuong dinh') ||
+          cleanDetectedNoSpace.includes('khuongdinh')
+        );
+
+        if (isDetectedKhuongDinh) {
+          const cust268 = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return (cClean.includes('268') && (cClean.includes('khuong') || cClean.includes('dinh')));
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean.includes('268');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean.includes('khuong dinh') || (cClean.includes('khuong') && cClean.includes('dinh'));
+          }) || null;
+
+          if (cust268) {
+            matchedCustomerId = cust268.id;
+          }
+        }
+
+        return matchedCustomerId;
+      };
+
+      const testInputs = [
+        '268 Lương P.h',
+        '268 Luong P.h',
+        '268 Lương Ph',
+        '268 Luong Ph',
+        '268 luong p.h',
+        '268',
+        '268 Khương đình',
+        '268 Khương Đình',
+        '268 khương đình',
+        '268 khuong dinh',
+        'Khương đình',
+        'khuong dinh',
+        'Khương Đình',
+        '268 kh',
+      ];
+
+      for (const input of testInputs) {
+        expect(matchKhuongDinh(input)).toBe(khuongDinhCustomer.id);
+      }
+    });
+
+    it('20. AI Tự học Từ điển Chữ viết tay (CustomerAiAlias): Khi chủ buôn sửa khách cho 1 đơn, hệ thống tự nhớ vĩnh viễn cho các lần sau và tự động cập nhật các đơn chờ duyệt cùng chữ viết tay', async () => {
+      const {
+        learnCustomerAiAlias,
+        matchCustomerFromAiAliases,
+      } = require('../src/services/aiInvoiceParser');
+
+      // Arrange: Tạo khách hàng chuẩn trong DB với giá riêng
+      const targetCustomer = await createTestCustomer(
+        testUser.id,
+        'Nhà hàng Bò Tơ Tây Ninh (Cơ sở 88)'
+      );
+      const testProductGau = await prisma.product.create({
+        data: {
+          userId: testUser.id,
+          name: 'Gầu Bò',
+          defaultPrice: 200000,
+          unit: 'kg',
+        },
+      });
+      await prisma.customerProductPrice.create({
+        data: {
+          customerId: targetCustomer.id,
+          productId: testProductGau.id,
+          price: 245000,
+        },
+      });
+
+      // Tạo 1 đơn đang chờ duyệt khác có cùng chữ viết tay "Bò Tơ 88 Láng"
+      const pendingSub = await prisma.staffSubmission.create({
+        data: {
+          userId: testUser.id,
+          senderName: '[TEST]_Staff_Alias',
+          fileUrl: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==',
+          fileType: 'IMAGE',
+          status: 'READY_FOR_REVIEW',
+          detectedCustomerName: 'Bò Tơ 88 Láng',
+          matchedCustomerId: null,
+        },
+      });
+
+      // Act 1: Chủ buôn chọn khách "Nhà hàng Bò Tơ Tây Ninh (Cơ sở 88)" cho chữ viết tay "Bò Tơ 88 Láng" và bấm duyệt
+      const learnedResult = await learnCustomerAiAlias(
+        testUser.id,
+        'Bò Tơ 88 Láng',
+        targetCustomer.id
+      );
+
+      // Assert 1: Đã lưu vào bảng CustomerAiAlias và tự động cập nhật đơn chờ duyệt pendingSub
+      expect(learnedResult).toBeTruthy();
+      expect(learnedResult.customer.id).toBe(targetCustomer.id);
+      expect(learnedResult.autoUpdatedIds).toContain(pendingSub.id);
+
+      const updatedPendingSub = await prisma.staffSubmission.findUnique({
+        where: { id: pendingSub.id },
+      });
+      expect(updatedPendingSub.matchedCustomerId).toBe(targetCustomer.id);
+
+      // Act 2: Kiểm tra hàm matchCustomerFromAiAliases với các biến thể viết hoa/thường/dấu câu
+      const aliases = await prisma.customerAiAlias.findMany({ where: { userId: testUser.id } });
+      const activeCustomers = await prisma.customer.findMany({
+        where: { userId: testUser.id, isActive: true },
+        select: { id: true, name: true },
+      });
+
+      for (const variant of ['Bò Tơ 88 Láng', 'bo to 88 lang', 'BO TO 88 LANG', 'Bò Tơ 88 - Láng']) {
+        const matched = matchCustomerFromAiAliases(variant, aliases, activeCustomers);
+        expect(matched).toBeTruthy();
+        expect(matched.customer.id).toBe(targetCustomer.id);
+      }
+
+      // Act 3: Kiểm tra getStaffSubmissions tự động gắn matchedCustomerId và matchedByAiAlias = true cho đơn chưa khớp
+      const unlinkedSub = await prisma.staffSubmission.create({
+        data: {
+          userId: testUser.id,
+          senderName: '[TEST]_Staff_NextDay',
+          fileUrl: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==',
+          fileType: 'IMAGE',
+          status: 'READY_FOR_REVIEW',
+          detectedCustomerName: 'bo to 88 lang',
+          matchedCustomerId: null,
+        },
+      });
+
+      const matchedForNextDay = matchCustomerFromAiAliases(
+        unlinkedSub.detectedCustomerName,
+        aliases,
+        activeCustomers
+      );
+      expect(matchedForNextDay).toBeTruthy();
+      expect(matchedForNextDay.customer.id).toBe(targetCustomer.id);
+    });
+
+    it('21. AI Tự học Từ điển Chữ viết tay Món Thịt (ProductAiAlias): Khi chủ buôn sửa tên thịt cho 1 đơn, hệ thống tự nhớ vĩnh viễn cho các lần sau và tự động cập nhật món thịt + giá riêng trên các đơn chờ duyệt khác', async () => {
+      const {
+        learnProductAiAlias,
+        matchProductFromAiAliases,
+        matchProductByName,
+      } = require('../src/services/aiInvoiceParser');
+
+      // Arrange: Tạo khách hàng và sản phẩm "Bắp hoa đặc biệt" kèm giá riêng 285.000đ
+      const custBapHoa = await createTestCustomer(testUser.id, 'Nhà hàng Lẩu Bò 99');
+      const prodBapHoa = await prisma.product.create({
+        data: {
+          userId: testUser.id,
+          name: 'Bắp hoa đặc biệt',
+          defaultPrice: 260000,
+          unit: 'kg',
+        },
+      });
+      const prodThanBo = await prisma.product.create({
+        data: {
+          userId: testUser.id,
+          name: 'Thăn bò mềm',
+          defaultPrice: 250000,
+          unit: 'kg',
+        },
+      });
+
+      await prisma.customerProductPrice.create({
+        data: {
+          customerId: custBapHoa.id,
+          productId: prodBapHoa.id,
+          price: 285000,
+        },
+      });
+
+      // Tạo 1 đơn đang chờ duyệt có món thịt AI đọc là "b.rùa lõi" (chưa khớp được món chuẩn)
+      const pendingSubMeat = await prisma.staffSubmission.create({
+        data: {
+          userId: testUser.id,
+          senderName: '[TEST]_Staff_MeatAlias',
+          fileUrl: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==',
+          fileType: 'IMAGE',
+          status: 'READY_FOR_REVIEW',
+          matchedCustomerId: custBapHoa.id,
+          rawAiResponse: JSON.stringify({
+            customer_name: 'Nhà hàng Lẩu Bò 99',
+            items: [{ name: 'b.rùa lõi', quantity: 2, price: 200000, amount: 400000 }],
+          }),
+          items: {
+            create: [
+              {
+                rawName: 'B.rùa lõi',
+                matchedProductId: null,
+                quantity: 2,
+                price: 200000,
+                amount: 400000,
+              },
+            ],
+          },
+        },
+        include: { items: true },
+      });
+
+      // Act 1: Chủ buôn chọn món "Bắp hoa đặc biệt" cho chữ viết tay "b.rùa lõi" và bấm duyệt
+      const learnedProdResult = await learnProductAiAlias(
+        testUser.id,
+        'b.rùa lõi',
+        prodBapHoa.id
+      );
+
+      // Assert 1: Đã lưu vào bảng ProductAiAlias và tự động cập nhật món + giá riêng (285.000đ) cho đơn chờ duyệt pendingSubMeat
+      expect(learnedProdResult).toBeTruthy();
+      expect(learnedProdResult.product.id).toBe(prodBapHoa.id);
+      expect(learnedProdResult.autoUpdatedSubmissionIds).toContain(pendingSubMeat.id);
+
+      const updatedItem = await prisma.staffSubmissionItem.findUnique({
+        where: { id: pendingSubMeat.items[0].id },
+      });
+      expect(updatedItem.matchedProductId).toBe(prodBapHoa.id);
+      expect(updatedItem.rawName).toBe('Bắp hoa đặc biệt');
+      expect(Number(updatedItem.price)).toBe(285000);
+      expect(Number(updatedItem.amount)).toBe(2 * 285000);
+
+      // Act 2: Kiểm tra matchProductFromAiAliases và matchProductByName với các biến thể viết hoa/thường/dấu câu
+      const prodAliases = await prisma.productAiAlias.findMany({ where: { userId: testUser.id } });
+      const activeProds = await prisma.product.findMany({
+        where: { userId: testUser.id, isActive: true },
+      });
+
+      for (const variant of ['b.rùa lõi', 'B.Rùa Lõi', 'b rua loi', 'B-rua-loi']) {
+        const matched = matchProductFromAiAliases(variant, prodAliases, activeProds);
+        expect(matched).toBeTruthy();
+        expect(matched.product.id).toBe(prodBapHoa.id);
+
+        const matchedViaHelper = matchProductByName(variant, activeProds, new Map(), prodAliases);
+        expect(matchedViaHelper).toBeTruthy();
+        expect(matchedViaHelper.id).toBe(prodBapHoa.id);
+      }
+
+      // Act 3: Bảo vệ an toàn - Không cho phép ghi đè tên chính thức của 1 sản phẩm đang hoạt động khác ("Thăn bò mềm") thành alias của "Bắp hoa đặc biệt"
+      const blockedAlias = await learnProductAiAlias(
+        testUser.id,
+        'Thăn bò mềm',
+        prodBapHoa.id
+      );
+      expect(blockedAlias).toBeNull();
+    });
   });
 });
+
 
 

@@ -86,7 +86,31 @@ const cleanupTestUser = async (userId) => {
       },
     });
 
-    // 4. Xóa giá bán riêng của khách hàng
+    // 4. Xóa từ điển AI tự học của khách hàng & món thịt
+    if (prisma.customerAiAlias) {
+      await prisma.customerAiAlias.deleteMany({
+        where: { userId },
+      });
+    }
+    if (prisma.productAiAlias) {
+      await prisma.productAiAlias.deleteMany({
+        where: { userId },
+      });
+    }
+
+    // 4b. Xóa đơn gửi của nhân viên (nếu có)
+    if (prisma.staffSubmission) {
+      await prisma.staffSubmissionItem.deleteMany({
+        where: {
+          submission: { userId },
+        },
+      });
+      await prisma.staffSubmission.deleteMany({
+        where: { userId },
+      });
+    }
+
+    // 4c. Xóa giá bán riêng của khách hàng
     await prisma.customerProductPrice.deleteMany({
       where: {
         customer: { userId },

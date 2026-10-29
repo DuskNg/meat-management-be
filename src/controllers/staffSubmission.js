@@ -6,7 +6,13 @@ const prisma = require('../utils/db');
 const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/errors');
 const { uploadToCloudinary } = require('../utils/cloudinary');
 const { emitWorkspaceEvent } = require('../utils/socket');
-const { parseStaffSubmission } = require('../services/aiInvoiceParser');
+const {
+  parseStaffSubmission,
+  learnCustomerAiAlias,
+  matchCustomerFromAiAliases,
+  learnProductAiAlias,
+  matchProductFromAiAliases,
+} = require('../services/aiInvoiceParser');
 const { logActivity } = require('../utils/activityLogger');
 
 // Đảm bảo thư mục lưu trữ ảnh/video nhân viên nộp luôn sẵn sàng
@@ -121,6 +127,36 @@ const verifyLinkPin = async (req, res, next) => {
 /**
  * Nhân viên gửi hàng loạt ảnh hóa đơn / video (Tối ưu siêu tốc: lưu trữ cục bộ tức thì -> phản hồi nhân viên ngay -> upload Cloudinary & AI chạy ngầm)
  */
+// Hàng đợi điều phối phân tích AI ngầm (Giới hạn tối đa 2 luồng đồng thời để chống tràn RAM OOM trên Render và tránh Gemini Rate Limit khi nhân viên gửi 50-100 ảnh/video cùng lúc)
+const aiParseQueue = [];
+let activeAiParseCount = 0;
+const MAX_CONCURRENT_AI_PARSE = 2;
+
+const processAiParseQueue = () => {
+  while (activeAiParseCount < MAX_CONCURRENT_AI_PARSE && aiParseQueue.length > 0) {
+    const nextSubmissionId = aiParseQueue.shift();
+    if (!nextSubmissionId) continue;
+    activeAiParseCount += 1;
+
+    parseStaffSubmission(nextSubmissionId)
+      .catch((err) => {
+        console.error(`[BACKGROUND_AI_ERROR] Lỗi phân tích submission ${nextSubmissionId}:`, err.message || err);
+      })
+      .finally(() => {
+        activeAiParseCount = Math.max(0, activeAiParseCount - 1);
+        processAiParseQueue();
+      });
+  }
+};
+
+const enqueueAiParse = (submissionId) => {
+  if (!submissionId) return;
+  if (!aiParseQueue.includes(submissionId)) {
+    aiParseQueue.push(submissionId);
+  }
+  processAiParseQueue();
+};
+
 const submitBatchFromStaff = async (req, res, next) => {
   try {
     const { token } = req.params;
@@ -149,13 +185,12 @@ const submitBatchFromStaff = async (req, res, next) => {
     const ss = String(now.getSeconds()).padStart(2, '0');
     const submissionDate = new Date(`${dateYMD}T${hh}:${mm}:${ss}+07:00`);
 
-    // Danh sách các tác vụ chạy ngầm sau khi đã trả response cho client
-    const bgTasks = [];
+    const createdSubmissions = [];
 
-    // Xử lý song song tất cả các tệp cùng lúc (dùng indexOf/substring thay Regex tránh ReDoS)
-    const saveTasks = files.map(async (fileItem) => {
+    // Xử lý tuần tự từng tệp trong batch để kiểm soát chặt chẽ bộ nhớ RAM (tránh giải mã hàng chục Buffer cùng lúc gây OOM)
+    for (const fileItem of files) {
       const fileData = fileItem.fileData || fileItem.uri || fileItem.url;
-      if (!fileData) return null;
+      if (!fileData) continue;
 
       let isVideo =
         fileItem.fileType === 'VIDEO' ||
@@ -215,20 +250,42 @@ const submitBatchFromStaff = async (req, res, next) => {
       const fileName = `sub_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
       const filePath = path.join(uploadsStaffDir, fileName);
 
-      let localUrl = fileData;
-      let rawBase64ToUpload = null;
+      let finalFileUrl = fileData;
       let savedFilePath = null;
 
       if (cleanBase64) {
         try {
-          // Ghi file bất đồng bộ qua libuv thread pool (không chặn Event Loop của Node.js)
+          // Ghi file tạm ra đĩa để hỗ trợ trình nén ảnh/video (Sharp/FFmpeg)
           await fs.promises.writeFile(filePath, Buffer.from(cleanBase64, 'base64'));
-          localUrl = `/uploads/staff_submissions/${fileName}`;
           savedFilePath = filePath;
-          // Với video, giải phóng base64 ngay khỏi RAM để tránh tràn bộ nhớ (OOM) trên máy chủ
-          rawBase64ToUpload = isVideo ? null : fileData;
+          finalFileUrl = `/uploads/staff_submissions/${fileName}`;
+          // Giải phóng chuỗi base64 ngay lập tức để tiết kiệm RAM
+          cleanBase64 = null;
         } catch (saveErr) {
           console.error('[LOCAL_SAVE_ERR] Lỗi lưu tệp cục bộ:', saveErr);
+        }
+      }
+
+      // BƯỚC QUAN TRỌNG NHẤT: Tải thẳng lên Cloudflare R2 / Cloudinary TRƯỚC KHI lưu DB và phản hồi client
+      // Đảm bảo 100% tệp đã nằm vĩnh viễn trên đám mây, không bao giờ bị mất khi server Render restart!
+      const uploadSource = (savedFilePath && fs.existsSync(savedFilePath)) ? savedFilePath : fileData;
+      if (uploadSource && (typeof uploadSource !== 'string' || !uploadSource.startsWith('http'))) {
+        try {
+          const uploadRes = await uploadToCloudinary(uploadSource, {
+            filePath: savedFilePath,
+            folder: `meat_manager/${userId}/staff_submissions`,
+            resource_type: isVideo ? 'video' : 'image',
+          });
+          if (uploadRes && (uploadRes.secure_url || uploadRes.url)) {
+            finalFileUrl = uploadRes.secure_url || uploadRes.url;
+            // Đã lên đám mây an toàn -> xóa ngay file tạm trên ổ đĩa máy chủ để chống đầy bộ nhớ
+            if (savedFilePath && fs.existsSync(savedFilePath)) {
+              await fs.promises.unlink(savedFilePath).catch(() => {});
+              savedFilePath = null;
+            }
+          }
+        } catch (cloudErr) {
+          console.warn('[UPLOAD_CLOUD_WARN] Lỗi tải lên đám mây trực tiếp, tạm giữ file cục bộ để Scheduler đồng bộ lại:', cloudErr.message);
         }
       }
 
@@ -238,26 +295,15 @@ const submitBatchFromStaff = async (req, res, next) => {
           linkId: link.id,
           senderName: senderName || fileItem.senderName || null,
           note: note || fileItem.note || null,
-          fileUrl: localUrl,
+          fileUrl: finalFileUrl,
           fileType,
           date: submissionDate,
           status: 'PENDING',
         },
       });
 
-      bgTasks.push({
-        submissionId: submission.id,
-        filePath: savedFilePath,
-        rawBase64: rawBase64ToUpload,
-        isVideo,
-        localUrl,
-      });
-
-      return submission;
-    });
-
-    const results = await Promise.all(saveTasks);
-    const createdSubmissions = results.filter(Boolean);
+      createdSubmissions.push(submission);
+    }
 
     // Phát socket thông báo cho chủ buôn có hóa đơn mới gửi về ngay lập tức
     emitWorkspaceEvent(userId, 'NEW_STAFF_SUBMISSIONS', {
@@ -266,54 +312,18 @@ const submitBatchFromStaff = async (req, res, next) => {
       date: submissionDate,
     });
 
-    // Trả về kết quả thành công NGAY LẬP TỨC để nhân viên yên tâm (chỉ mất ~100-200ms!)
+    // Trả về kết quả thành công khi ảnh/video đã nằm an toàn trên Cloudflare R2
     res.json({
       success: true,
-      message: `Đã lưu trữ thành công ${createdSubmissions.length} tệp hóa đơn/video. Hệ thống AI đang tự động phân tích ngầm.`,
+      message: `Đã lưu trữ an toàn ${createdSubmissions.length} tệp hóa đơn/video lên đám mây. Hệ thống AI đang tự động phân tích.`,
       data: createdSubmissions,
     });
 
-    // Kích hoạt tác vụ nền (Cloudinary & AI) SAU KHI ĐÃ TRẢ RESPONSE CHO CLIENT
+    // Đưa vào hàng đợi phân tích AI có kiểm soát (tối đa 2 luồng đồng thời, chống tràn RAM tuyệt đối)
     res.on('finish', () => {
-      setImmediate(async () => {
-        for (const item of bgTasks) {
-          try {
-            const uploadSource = (item.filePath && fs.existsSync(item.filePath)) ? item.filePath : item.rawBase64;
-            if (uploadSource) {
-              try {
-                const uploadRes = await uploadToCloudinary(uploadSource, {
-                  filePath: item.filePath,
-                  folder: `meat_manager/${userId}/staff_submissions`,
-                  resource_type: item.isVideo ? 'video' : 'image',
-                });
-                if (uploadRes && (uploadRes.secure_url || uploadRes.url)) {
-                  const cloudUrl = uploadRes.secure_url || uploadRes.url;
-                  await prisma.staffSubmission.update({
-                    where: { id: item.submissionId },
-                    data: { fileUrl: cloudUrl },
-                  });
-                  // Đồng bộ đường dẫn Cloudinary mới cho TransactionInvoice nếu đơn nợ đã được tạo bằng localUrl trước đó
-                  if (item.localUrl) {
-                    await prisma.transactionInvoice.updateMany({
-                      where: { imageUrl: item.localUrl },
-                      data: { imageUrl: cloudUrl },
-                    });
-                  }
-                }
-              } catch (cloudErr) {
-                console.warn('[BACKGROUND_CLOUDINARY] Upload Cloudinary chạy ngầm lỗi, giữ link máy chủ cục bộ:', cloudErr.message);
-              }
-            }
-
-            // Gọi AI phân tích hóa đơn ngầm
-            parseStaffSubmission(item.submissionId).catch((err) => {
-              console.error(`[BACKGROUND_AI_ERROR] Lỗi phân tích submission ${item.submissionId}:`, err);
-            });
-          } catch (itemErr) {
-            console.error('[BACKGROUND_ITEM_ERR]', itemErr);
-          }
-        }
-      });
+      for (const sub of createdSubmissions) {
+        enqueueAiParse(sub.id);
+      }
     });
   } catch (error) {
     next(error);
@@ -437,10 +447,82 @@ const getStaffSubmissions = async (req, res, next) => {
       });
     }
 
+    // Tải từ điển AI tự học (CustomerAiAlias & ProductAiAlias) để tự động khớp ngay cho các đơn chưa duyệt
+    const [aiAliases, activeCustomers, productAiAliases, activeProducts] = await Promise.all([
+      prisma.customerAiAlias.findMany({
+        where: { userId },
+        orderBy: [{ usageCount: 'desc' }, { updatedAt: 'desc' }],
+      }).catch(() => []),
+      prisma.customer.findMany({
+        where: { userId, isActive: true },
+        select: { id: true, name: true, phone: true },
+      }).catch(() => []),
+      prisma.productAiAlias.findMany({
+        where: { userId },
+        orderBy: [{ usageCount: 'desc' }, { updatedAt: 'desc' }],
+      }).catch(() => []),
+      prisma.product.findMany({
+        where: { userId, isActive: true },
+        select: { id: true, name: true, defaultPrice: true, unit: true },
+      }).catch(() => []),
+    ]);
+
     const dataWithSupplier = submissions.map((sub) => {
       const matchedSupplier = (sub.transactionId && supplierMap[sub.transactionId]) || null;
+      let matchedCustomer = sub.matchedCustomer;
+      let matchedCustomerId = sub.matchedCustomerId;
+      let matchedByAiAlias = false;
+
+      if (sub.rawAiResponse && sub.rawAiResponse.includes('"matched_by_ai_alias":true')) {
+        matchedByAiAlias = true;
+      }
+
+      if (sub.status !== 'APPROVED' && !matchedSupplier && sub.detectedCustomerName && aiAliases.length > 0) {
+        const learned = matchCustomerFromAiAliases(sub.detectedCustomerName, aiAliases, activeCustomers);
+        if (learned && learned.customer) {
+          matchedCustomer = learned.customer;
+          matchedCustomerId = learned.customer.id;
+          matchedByAiAlias = true;
+        }
+      }
+
+      // Đính kèm aiRawName gốc và tự động khớp món thịt từ Từ điển AI tự học (ProductAiAlias) cho các đơn chưa duyệt
+      let parsedAiItems = [];
+      if (sub.rawAiResponse) {
+        try {
+          const parsedAi = JSON.parse(sub.rawAiResponse);
+          if (Array.isArray(parsedAi?.items)) parsedAiItems = parsedAi.items;
+        } catch {}
+      }
+
+      const enrichedItems = (sub.items || []).map((it, idx) => {
+        const aiRawName = parsedAiItems[idx]?.name || it.rawName || '';
+        if (sub.status !== 'APPROVED' && productAiAliases.length > 0) {
+          const learnedProd =
+            matchProductFromAiAliases(aiRawName, productAiAliases, activeProducts) ||
+            matchProductFromAiAliases(it.rawName, productAiAliases, activeProducts);
+          if (learnedProd && learnedProd.product) {
+            return {
+              ...it,
+              aiRawName,
+              matchedProductId: learnedProd.product.id,
+              rawName: learnedProd.product.name,
+              matchedByProductAiAlias: true,
+            };
+          }
+        }
+        return {
+          ...it,
+          aiRawName,
+        };
+      });
+
       return {
         ...sub,
+        items: enrichedItems,
+        matchedCustomerId,
+        matchedCustomer,
+        matchedByAiAlias,
         matchedSupplier,
         targetType: matchedSupplier ? 'supplier' : 'customer',
       };
@@ -498,6 +580,11 @@ const updateStaffSubmission = async (req, res, next) => {
 
     const submission = await prisma.staffSubmission.findFirst({
       where: { id, userId },
+      include: {
+        items: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
 
     if (!submission) {
@@ -516,8 +603,36 @@ const updateStaffSubmission = async (req, res, next) => {
       data: updateData,
     });
 
+    // Tự động lưu vào Từ điển AI tự học (CustomerAiAlias) nếu chủ buôn chọn khách hàng cho đơn có tên AI đọc được
+    const rawNameForLearn = detectedCustomerName !== undefined ? detectedCustomerName : submission.detectedCustomerName;
+    if (matchedCustomerId && rawNameForLearn) {
+      await learnCustomerAiAlias(userId, rawNameForLearn, matchedCustomerId, id);
+    }
+
     // Cập nhật lại danh sách món thịt nếu có truyền vào
     if (items && Array.isArray(items)) {
+      let parsedAiItemsForLearn = [];
+      if (submission.rawAiResponse) {
+        try {
+          const parsedAi = JSON.parse(submission.rawAiResponse);
+          if (Array.isArray(parsedAi?.items)) parsedAiItemsForLearn = parsedAi.items;
+        } catch {}
+      }
+      const origItemsForLearn = submission.items || [];
+      for (let idx = 0; idx < items.length; idx++) {
+        const it = items[idx];
+        const targetProdId = it.matchedProductId || it.productId;
+        if (!targetProdId) continue;
+        const origDbItem =
+          (it.id && origItemsForLearn.find((si) => si.id === it.id)) ||
+          (origItemsForLearn.length === items.length ? origItemsForLearn[idx] : null);
+        const aiJsonRawName = parsedAiItemsForLearn.length === items.length ? parsedAiItemsForLearn[idx]?.name : null;
+        const rawCandidates = [...new Set([it.aiRawName, aiJsonRawName, origDbItem?.rawName].filter(Boolean))];
+        for (const rawCand of rawCandidates) {
+          await learnProductAiAlias(userId, rawCand, targetProdId, id);
+        }
+      }
+
       await prisma.staffSubmissionItem.deleteMany({
         where: { submissionId: id },
       });
@@ -1229,6 +1344,65 @@ const approveStaffSubmission = async (req, res, next) => {
       };
     });
 
+    // Tự động dạy AI nhớ cặp từ khóa chữ viết tay khách hàng (detectedCustomerName => finalCustomerId) vĩnh viễn cho các lần sau
+    if (!isSupplierTarget && finalCustomerId && submission.detectedCustomerName) {
+      const learnedInfo = await learnCustomerAiAlias(userId, submission.detectedCustomerName, finalCustomerId, id);
+      if (learnedInfo) {
+        result.learnedAlias = {
+          rawAlias: learnedInfo.alias.rawAlias,
+          customerId: learnedInfo.customer.id,
+          customerName: learnedInfo.customer.name,
+          autoUpdatedIds: learnedInfo.autoUpdatedIds || [],
+        };
+      }
+    }
+
+    // Tự động dạy AI nhớ cặp từ khóa chữ viết tay món thịt (aiRawName => matchedProductId) vĩnh viễn cho các lần sau
+    if (Array.isArray(finalItems) && finalItems.length > 0) {
+      let parsedAiItems = [];
+      if (submission.rawAiResponse) {
+        try {
+          const parsedAi = JSON.parse(submission.rawAiResponse);
+          if (Array.isArray(parsedAi?.items)) parsedAiItems = parsedAi.items;
+        } catch {}
+      }
+      const origItems = submission.items || [];
+      const learnedProducts = [];
+      const allAutoUpdatedSubIds = new Set();
+
+      for (let idx = 0; idx < finalItems.length; idx++) {
+        const it = finalItems[idx];
+        const targetProdId = it.matchedProductId || it.productId;
+        if (!targetProdId) continue;
+
+        const origDbItem =
+          (it.id && origItems.find((si) => si.id === it.id)) ||
+          (origItems.length === finalItems.length ? origItems[idx] : null);
+        const aiJsonRawName = parsedAiItems.length === finalItems.length ? parsedAiItems[idx]?.name : null;
+        const rawCandidates = [...new Set([it.aiRawName, aiJsonRawName, origDbItem?.rawName].filter(Boolean))];
+
+        for (const rawCand of rawCandidates) {
+          const learnedProdInfo = await learnProductAiAlias(userId, rawCand, targetProdId, id);
+          if (learnedProdInfo) {
+            learnedProducts.push({
+              rawAlias: learnedProdInfo.alias.rawAlias,
+              productId: learnedProdInfo.product.id,
+              productName: learnedProdInfo.product.name,
+              autoUpdatedSubmissionIds: learnedProdInfo.autoUpdatedSubmissionIds || [],
+            });
+            (learnedProdInfo.autoUpdatedSubmissionIds || []).forEach((sId) => allAutoUpdatedSubIds.add(sId));
+          }
+        }
+      }
+
+      if (learnedProducts.length > 0) {
+        result.learnedProductAliases = {
+          items: learnedProducts,
+          autoUpdatedSubmissionIds: [...allAutoUpdatedSubIds],
+        };
+      }
+    }
+
     const custName = result.submission?.matchedCustomer?.name || 'Khách';
     const senderInfo = submission.senderName ? ` do ${submission.senderName} nộp` : '';
 
@@ -1528,6 +1702,45 @@ const reparseStaffSubmission = async (req, res, next) => {
 
     if (!submission) {
       throw new NotFoundError('Không tìm thấy hóa đơn cần quét lại.');
+    }
+
+    // Kiểm tra nếu file vẫn còn là đường dẫn cục bộ /uploads/ nhưng file đã bị xóa khỏi ổ đĩa
+    // (thường xảy ra sau khi server Render restart do ephemeral filesystem)
+    if (submission.fileUrl && submission.fileUrl.startsWith('/uploads/')) {
+      const diskPath = path.join(__dirname, '../../', submission.fileUrl);
+      if (!fs.existsSync(diskPath)) {
+        await prisma.staffSubmission.update({
+          where: { id },
+          data: {
+            status: 'READY_FOR_REVIEW',
+            aiError: 'File ảnh/video đã bị xóa khỏi máy chủ (server restart). Nhân viên cần gửi lại ảnh hóa đơn.',
+          },
+        });
+        return res.json({
+          success: false,
+          message: 'File ảnh/video không còn trên máy chủ. Vui lòng yêu cầu nhân viên gửi lại ảnh hóa đơn.',
+          data: { id, status: 'READY_FOR_REVIEW' },
+        });
+      } else {
+        // Nếu file cục bộ vẫn còn trên đĩa -> tự động đẩy lên Cloudflare R2 vĩnh viễn trước khi quét lại AI
+        try {
+          const isVideoFile = submission.fileType === 'VIDEO' || /\.(mp4|mov|webm|avi|mkv)$/i.test(diskPath);
+          const uploadRes = await uploadToCloudinary(diskPath, {
+            filePath: diskPath,
+            folder: `meat_manager/${userId}/staff_submissions`,
+            resource_type: isVideoFile ? 'video' : 'image',
+          });
+          if (uploadRes && (uploadRes.secure_url || uploadRes.url)) {
+            await prisma.staffSubmission.update({
+              where: { id },
+              data: { fileUrl: uploadRes.secure_url || uploadRes.url },
+            });
+            await fs.promises.unlink(diskPath).catch(() => {});
+          }
+        } catch (reuploadErr) {
+          console.warn('[REPARSE_UPLOAD_WARN] Không thể đồng bộ lên đám mây khi quét lại:', reuploadErr.message);
+        }
+      }
     }
 
     // Chuyển trạng thái sang ANALYZING và xóa lỗi cũ

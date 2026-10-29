@@ -15,6 +15,445 @@ const removeDiacritics = (str) => {
     .replace(/Đ/g, 'D');
 };
 
+// Danh sách các từ khóa chung chung không được phép lưu làm tên viết tắt khách hàng
+const GENERIC_ALIAS_BLACKLIST = new Set([
+  'khach le',
+  'khach hang',
+  'khach',
+  'tien hang',
+  'thit le',
+  'thit bo',
+  'hoa don',
+  'ban le',
+  'nhap hang',
+  'tra hang',
+  'tra lai hang',
+  'khong ro',
+  'chua ro',
+  'null',
+  'undefined',
+  'none',
+]);
+
+/**
+ * Chuẩn hóa cụm từ tên khách hàng AI đọc được từ tích kê để lưu/tra cứu trong bảng CustomerAiAlias
+ */
+const normalizeCustomerAliasText = (rawName) => {
+  if (!rawName || typeof rawName !== 'string') return null;
+
+  // Làm sạch các từ khóa trả hàng / nhập hàng nếu dính vào tên khách
+  const cleanRaw = rawName
+    .replace(/\b(nhập thịt|nhập hàng|mua thịt|mua hàng|nhập vào|mua vào|nhập về|mua về|lấy vào|lấy thịt về|lấy hàng về|nhập lô|nhập kho|nhập lò|mua lò|nhap thit|nhap hang|mua thit|mua hang|nhap vao|mua vao|nhap ve|mua ve|lay vao|nhap kho|nhap lo|mua lo|nhập|nhap|mua|trả hàng|gửi về|trả về|trả lại|gửi lại|hàng trả|thu hồi|bắn về|quay đầu|đổi trả|hoàn hàng|tra hang|gui ve|tra ve|tra lai|gui lai|hang tra|quay dau|doi tra|hoan hang|trả|tra)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleanRaw) return null;
+
+  const normalizedAlias = removeDiacritics(cleanRaw.toLowerCase())
+    .replace(/^\[test\]_/, '')
+    .replace(/[-–—:(),.;'"!?/\\[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const compactAlias = normalizedAlias.replace(/[^a-z0-9]/g, '');
+
+  if (!compactAlias || compactAlias.length < 2) return null;
+  if (GENERIC_ALIAS_BLACKLIST.has(normalizedAlias) || GENERIC_ALIAS_BLACKLIST.has(compactAlias)) {
+    return null;
+  }
+
+  return {
+    cleanRaw,
+    normalizedAlias,
+    compactAlias,
+  };
+};
+
+/**
+ * Tra cứu khách hàng từ danh sách Từ điển AI tự học (CustomerAiAlias)
+ */
+const matchCustomerFromAiAliases = (rawDetectedName, aliases, customers) => {
+  if (!rawDetectedName || !Array.isArray(aliases) || aliases.length === 0 || !Array.isArray(customers) || customers.length === 0) {
+    return null;
+  }
+
+  const norm = normalizeCustomerAliasText(rawDetectedName);
+  if (!norm) return null;
+
+  // 1. Ưu tiên khớp chính xác 100% theo normalizedAlias hoặc compactAlias
+  const exactAlias = aliases.find(
+    (a) => a.normalizedAlias === norm.normalizedAlias || (a.compactAlias && a.compactAlias === norm.compactAlias)
+  );
+  if (exactAlias) {
+    const foundCust = customers.find((c) => c.id === exactAlias.customerId);
+    if (foundCust) {
+      return { customer: foundCust, alias: exactAlias };
+    }
+  }
+
+  // 2. Khớp cụm từ khóa đã học (chỉ áp dụng cho alias có độ dài >= 4 ký tự để tránh khớp nhầm từ ngắn)
+  const sortedAliases = [...aliases]
+    .filter((a) => a.compactAlias && a.compactAlias.length >= 4)
+    .sort((a, b) => (b.compactAlias.length - a.compactAlias.length) || ((b.usageCount || 0) - (a.usageCount || 0)));
+
+  const detectedWords = norm.normalizedAlias.split(' ').filter(Boolean);
+  for (const a of sortedAliases) {
+    const aliasWords = (a.normalizedAlias || '').split(' ').filter(Boolean);
+    const isWordBoundaryMatch = aliasWords.length > 0 && aliasWords.every((w) => detectedWords.includes(w));
+    if (isWordBoundaryMatch || (a.normalizedAlias.length >= 5 && norm.normalizedAlias.includes(a.normalizedAlias))) {
+      const foundCust = customers.find((c) => c.id === a.customerId);
+      if (foundCust) {
+        return { customer: foundCust, alias: a };
+      }
+    }
+  }
+
+  return null;
+};
+
+/**
+ * Tự động ghi nhớ cặp từ khóa chữ viết tay AI đọc được (rawDetectedName) => Khách hàng chuẩn (customerId)
+ * khi chủ buôn sửa khách hàng và bấm Duyệt / Lưu đơn.
+ * Đồng thời tự động cập nhật ngay các đơn khác đang chờ duyệt có cùng chữ viết tay!
+ */
+const learnCustomerAiAlias = async (userId, rawDetectedName, customerId, excludeSubmissionId = null) => {
+  try {
+    if (!userId || !rawDetectedName || !customerId) return null;
+
+    const norm = normalizeCustomerAliasText(rawDetectedName);
+    if (!norm) return null;
+
+    const customer = await prisma.customer.findFirst({
+      where: { id: customerId, userId, isActive: true },
+      select: { id: true, name: true, phone: true },
+    });
+    if (!customer) return null;
+
+    const savedAlias = await prisma.customerAiAlias.upsert({
+      where: {
+        userId_normalizedAlias: {
+          userId,
+          normalizedAlias: norm.normalizedAlias,
+        },
+      },
+      update: {
+        customerId: customer.id,
+        rawAlias: norm.cleanRaw,
+        compactAlias: norm.compactAlias,
+        usageCount: { increment: 1 },
+      },
+      create: {
+        userId,
+        customerId: customer.id,
+        rawAlias: norm.cleanRaw,
+        normalizedAlias: norm.normalizedAlias,
+        compactAlias: norm.compactAlias,
+        usageCount: 1,
+      },
+    });
+
+    // Tự động áp dụng ngay tức khắc cho các hóa đơn khác đang chờ duyệt (READY_FOR_REVIEW / PENDING) có cùng chữ viết tay
+    const pendingSubmissions = await prisma.staffSubmission.findMany({
+      where: {
+        userId,
+        status: { in: ['READY_FOR_REVIEW', 'PENDING'] },
+        detectedCustomerName: { not: null },
+        ...(excludeSubmissionId ? { id: { not: excludeSubmissionId } } : {}),
+      },
+      select: {
+        id: true,
+        detectedCustomerName: true,
+        matchedCustomerId: true,
+        rawAiResponse: true,
+      },
+    });
+
+    const autoUpdatedIds = [];
+    for (const sub of pendingSubmissions) {
+      const subNorm = normalizeCustomerAliasText(sub.detectedCustomerName);
+      if (
+        subNorm &&
+        (subNorm.normalizedAlias === norm.normalizedAlias || subNorm.compactAlias === norm.compactAlias)
+      ) {
+        let updatedRawJson = sub.rawAiResponse;
+        try {
+          const parsed = sub.rawAiResponse ? JSON.parse(sub.rawAiResponse) : {};
+          parsed.matched_by_ai_alias = true;
+          parsed.learned_alias = norm.cleanRaw;
+          updatedRawJson = JSON.stringify(parsed);
+        } catch {}
+
+        await prisma.staffSubmission.update({
+          where: { id: sub.id },
+          data: {
+            matchedCustomerId: customer.id,
+            rawAiResponse: updatedRawJson,
+          },
+        });
+        autoUpdatedIds.push(sub.id);
+      }
+    }
+
+    return {
+      alias: savedAlias,
+      customer,
+      autoUpdatedIds,
+    };
+  } catch (err) {
+    console.warn('[AI_ALIAS_LEARN_WARN] Lỗi khi lưu từ điển AI tự học:', err.message);
+    return null;
+  }
+};
+
+// Danh sách các từ khóa món thịt chung chung không được phép lưu làm tên viết tắt sản phẩm
+const GENERIC_PRODUCT_ALIAS_BLACKLIST = new Set([
+  'thit',
+  'thit le',
+  'thit bo',
+  'mon le',
+  'tien hang',
+  'tien',
+  'tra hang',
+  'tra hang nhanh',
+  'thit tra lai',
+  'thit nhap',
+  'nhap hang',
+  'hoa don',
+  'khach le',
+  'khong ro',
+  'chua ro',
+  'null',
+  'undefined',
+  'none',
+]);
+
+/**
+ * Chuẩn hóa cụm từ tên món thịt AI đọc được từ tích kê/video để lưu/tra cứu trong bảng ProductAiAlias
+ */
+const normalizeProductAliasText = (rawMeatName) => {
+  if (!rawMeatName || typeof rawMeatName !== 'string') return null;
+
+  // Làm sạch các từ khóa hành động/trả hàng/nhập hàng nếu dính vào tên món thịt
+  const cleanRaw = rawMeatName
+    .replace(/\b(lay them|lấy thêm|lay|lấy|them|thêm|cho chi tuyet|cho chị tuyết|chi tuyet|chị tuyết|cua chi tuyet|của chị tuyết|gui ve|gửi về|tra hang|trả hàng|tra ve|trả về|tra lai|trả lại|gui lai|gửi lại|hang tra|hàng trả|thu hoi|thu hồi|quay dau|quay đầu|doi tra|đổi trả|hoan hang|hoàn hàng|nhap hang|nhập hàng|nhap thit|nhập thịt|tra|trả)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleanRaw) return null;
+
+  const normalizedAlias = removeDiacritics(cleanRaw.toLowerCase())
+    .replace(/^\[test\]_/, '')
+    .replace(/[-–—:(),.;'"!?/\\[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const compactAlias = normalizedAlias.replace(/[^a-z0-9]/g, '');
+
+  // Không học chuỗi quá ngắn (< 2 ký tự) hoặc chuỗi toàn chữ số
+  if (!compactAlias || compactAlias.length < 2 || /^\d+$/.test(compactAlias)) return null;
+  if (GENERIC_PRODUCT_ALIAS_BLACKLIST.has(normalizedAlias) || GENERIC_PRODUCT_ALIAS_BLACKLIST.has(compactAlias)) {
+    return null;
+  }
+
+  return {
+    cleanRaw,
+    normalizedAlias,
+    compactAlias,
+  };
+};
+
+/**
+ * Tra cứu sản phẩm thịt từ danh sách Từ điển AI tự học (ProductAiAlias)
+ */
+const matchProductFromAiAliases = (rawDetectedMeatName, aliases, products) => {
+  if (!rawDetectedMeatName || !Array.isArray(aliases) || aliases.length === 0 || !Array.isArray(products) || products.length === 0) {
+    return null;
+  }
+
+  const norm = normalizeProductAliasText(rawDetectedMeatName);
+  if (!norm) return null;
+
+  // 1. Ưu tiên khớp chính xác 100% theo normalizedAlias hoặc compactAlias
+  const exactAlias = aliases.find(
+    (a) => a.normalizedAlias === norm.normalizedAlias || (a.compactAlias && a.compactAlias === norm.compactAlias)
+  );
+  if (exactAlias) {
+    const foundProd = products.find((p) => p.id === exactAlias.productId);
+    if (foundProd) {
+      return { product: foundProd, alias: exactAlias };
+    }
+  }
+
+  // 2. Khớp cụm từ khóa đã học (chỉ áp dụng cho alias có độ dài >= 4 ký tự để tránh khớp nhầm từ ngắn)
+  const sortedAliases = [...aliases]
+    .filter((a) => a.compactAlias && a.compactAlias.length >= 4)
+    .sort((a, b) => (b.compactAlias.length - a.compactAlias.length) || ((b.usageCount || 0) - (a.usageCount || 0)));
+
+  const detectedWords = norm.normalizedAlias.split(' ').filter(Boolean);
+  for (const a of sortedAliases) {
+    const aliasWords = (a.normalizedAlias || '').split(' ').filter(Boolean);
+    const isWordBoundaryMatch = aliasWords.length > 0 && aliasWords.every((w) => detectedWords.includes(w));
+    if (isWordBoundaryMatch || (a.normalizedAlias.length >= 5 && norm.normalizedAlias.includes(a.normalizedAlias))) {
+      const foundProd = products.find((p) => p.id === a.productId);
+      if (foundProd) {
+        return { product: foundProd, alias: a };
+      }
+    }
+  }
+
+  return null;
+};
+
+/**
+ * Tự động ghi nhớ cặp từ khóa chữ viết tay món thịt AI đọc được (rawDetectedMeatName) => Sản phẩm chuẩn (productId)
+ * khi chủ buôn sửa món thịt và bấm Duyệt / Lưu đơn.
+ * Đồng thời tự động cập nhật ngay các dòng món thịt trong các đơn khác đang chờ duyệt có cùng chữ viết tay (kèm giá riêng)!
+ */
+const learnProductAiAlias = async (userId, rawDetectedMeatName, productId, excludeSubmissionId = null) => {
+  try {
+    if (!userId || !rawDetectedMeatName || !productId) return null;
+
+    const norm = normalizeProductAliasText(rawDetectedMeatName);
+    if (!norm) return null;
+
+    const activeProducts = await prisma.product.findMany({
+      where: { userId, isActive: true },
+      select: { id: true, name: true, defaultPrice: true, unit: true },
+    });
+
+    const product = activeProducts.find((p) => p.id === productId);
+    if (!product) return null;
+
+    const prodLower = removeDiacritics(product.name.toLowerCase().trim());
+    if (prodLower === 'tien hang' || prodLower.startsWith('tien ')) return null;
+
+    // Bảo vệ an toàn: Nếu từ khóa rawDetectedMeatName trùng khớp 100% với tên chính thức của MỘT SẢN PHẨM KHÁC
+    // đang hoạt động trong danh mục, thì KHÔNG ghi đè tên gốc của sản phẩm kia thành alias của sản phẩm này!
+    const exactOtherProduct = activeProducts.find((p) => {
+      if (p.id === product.id) return false;
+      const otherNorm = normalizeProductAliasText(p.name);
+      if (!otherNorm) return false;
+      return otherNorm.normalizedAlias === norm.normalizedAlias || otherNorm.compactAlias === norm.compactAlias;
+    });
+    if (exactOtherProduct) {
+      return null;
+    }
+
+    const savedAlias = await prisma.productAiAlias.upsert({
+      where: {
+        userId_normalizedAlias: {
+          userId,
+          normalizedAlias: norm.normalizedAlias,
+        },
+      },
+      update: {
+        productId: product.id,
+        rawAlias: norm.cleanRaw,
+        compactAlias: norm.compactAlias,
+        usageCount: { increment: 1 },
+      },
+      create: {
+        userId,
+        productId: product.id,
+        rawAlias: norm.cleanRaw,
+        normalizedAlias: norm.normalizedAlias,
+        compactAlias: norm.compactAlias,
+        usageCount: 1,
+      },
+    });
+
+    // Tự động áp dụng ngay tức khắc cho các dòng món thịt trong các hóa đơn khác đang chờ duyệt (READY_FOR_REVIEW / PENDING)
+    const pendingSubmissions = await prisma.staffSubmission.findMany({
+      where: {
+        userId,
+        status: { in: ['READY_FOR_REVIEW', 'PENDING'] },
+        ...(excludeSubmissionId ? { id: { not: excludeSubmissionId } } : {}),
+      },
+      include: {
+        items: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+
+    // Nạp bảng giá riêng cho sản phẩm vừa học để đảm bảo Nguyên Tắc Bảo Toàn Giá Riêng
+    const customPricesForProduct = await prisma.customerProductPrice.findMany({
+      where: { productId: product.id },
+      select: { customerId: true, price: true },
+    });
+    const customPriceByCustomer = new Map(
+      customPricesForProduct.map((cp) => [cp.customerId, parseFloat(cp.price)])
+    );
+
+    const autoUpdatedSubmissionIds = [];
+    for (const sub of pendingSubmissions) {
+      let parsedAiItems = [];
+      try {
+        if (sub.rawAiResponse) {
+          const parsed = JSON.parse(sub.rawAiResponse);
+          if (Array.isArray(parsed.items)) parsedAiItems = parsed.items;
+        }
+      } catch {}
+
+      let subUpdated = false;
+      for (let idx = 0; idx < (sub.items || []).length; idx++) {
+        const subItem = sub.items[idx];
+        const aiRawItemName = parsedAiItems[idx]?.name || '';
+        const itemNorm1 = normalizeProductAliasText(subItem.rawName);
+        const itemNorm2 = normalizeProductAliasText(aiRawItemName);
+
+        const isMatchedAlias =
+          (itemNorm1 && (itemNorm1.normalizedAlias === norm.normalizedAlias || itemNorm1.compactAlias === norm.compactAlias)) ||
+          (itemNorm2 && (itemNorm2.normalizedAlias === norm.normalizedAlias || itemNorm2.compactAlias === norm.compactAlias));
+
+        if (isMatchedAlias) {
+          const qty = subItem.quantity != null ? parseFloat(subItem.quantity) : null;
+          const custCustomPrice = sub.matchedCustomerId ? customPriceByCustomer.get(sub.matchedCustomerId) : null;
+          let newPrice = subItem.price != null ? parseFloat(subItem.price) : null;
+          let newAmount = subItem.amount != null ? parseFloat(subItem.amount) : null;
+
+          // Ưu tiên áp giá riêng của khách hàng cho món thịt vừa học
+          if (custCustomPrice != null && custCustomPrice > 0) {
+            newPrice = custCustomPrice;
+            if (qty != null && qty > 0) {
+              newAmount = Math.round(qty * custCustomPrice);
+            }
+          } else if ((newPrice == null || newPrice <= 0) && product.defaultPrice != null && parseFloat(product.defaultPrice) > 0) {
+            newPrice = parseFloat(product.defaultPrice);
+            if (qty != null && qty > 0) {
+              newAmount = Math.round(qty * newPrice);
+            }
+          }
+
+          await prisma.staffSubmissionItem.update({
+            where: { id: subItem.id },
+            data: {
+              matchedProductId: product.id,
+              rawName: product.name,
+              price: newPrice,
+              amount: newAmount,
+            },
+          });
+          subUpdated = true;
+        }
+      }
+
+      if (subUpdated) {
+        autoUpdatedSubmissionIds.push(sub.id);
+      }
+    }
+
+    return {
+      alias: savedAlias,
+      product,
+      autoUpdatedSubmissionIds,
+    };
+  } catch (err) {
+    console.warn('[AI_PRODUCT_ALIAS_LEARN_WARN] Lỗi khi lưu từ điển món thịt AI tự học:', err.message);
+    return null;
+  }
+};
+
 // Helper chuẩn hóa khối lượng cân thịt (xử lý trường hợp đọc liên tiếp các số cân điện tử: 1 9 5 -> 1.95, 1 6 9 2 -> 16.92)
 const normalizeWeightQuantity = (val) => {
   if (val == null) return null;
@@ -72,8 +511,17 @@ const normalizeWeightQuantity = (val) => {
  * So khớp sản phẩm với danh mục sản phẩm của chủ buôn theo từ khóa chuẩn xác,
  * ngăn chặn triệt để tình trạng nhận nhầm chéo (ví dụ: Diềm bò thành Thăn bò, Lá vai thành Lạc vai).
  */
-const matchProductByName = (cleanItemName, products, customerPriceMap = new Map()) => {
+const matchProductByName = (cleanItemName, products, customerPriceMap = new Map(), productAiAliases = []) => {
   if (!cleanItemName || !Array.isArray(products) || products.length === 0) return null;
+
+  // 0. Ưu tiên tuyệt đối số 0: So khớp từ Bảng Từ Điển Món Thịt AI Tự Học (ProductAiAlias) do chủ buôn đã dạy
+  if (Array.isArray(productAiAliases) && productAiAliases.length > 0) {
+    const learnedMatch = matchProductFromAiAliases(cleanItemName, productAiAliases, products);
+    if (learnedMatch && learnedMatch.product) {
+      return learnedMatch.product;
+    }
+  }
+
   const cleanLower = removeDiacritics(cleanItemName.toLowerCase().trim());
   const cleanNoSpace = cleanLower.replace(/\s+/g, '');
 
@@ -299,9 +747,33 @@ const fetchFileAsBase64 = async (url) => {
     }
   }
 
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Không thể tải file từ URL: ${url} (Mã lỗi: ${response.status})`);
+  // Nếu URL là đường dẫn cục bộ /uploads/ nhưng file không còn trên ổ đĩa
+  // (do server restart trên Render), tuyệt đối KHÔNG gọi fetch() với URL tương đối
+  // vì Node.js fetch() chỉ chấp nhận URL tuyệt đối (http/https)
+  if (url.startsWith('/uploads/')) {
+    throw new Error('File ảnh/video đã bị xóa khỏi máy chủ (server restart). Nhân viên cần gửi lại ảnh hóa đơn.');
+  }
+
+  // Tải tệp từ đám mây với cơ chế tự động thử lại 3 lần (chống lỗi "fetch failed" khi kết nối mạng chập chờn tạm thời)
+  let response = null;
+  let lastFetchError = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      response = await fetch(url);
+      if (response.ok) break;
+      lastFetchError = new Error(`Không thể tải file từ URL: ${url} (Mã lỗi: ${response.status})`);
+      if (response.status === 404) throw lastFetchError;
+    } catch (fetchErr) {
+      lastFetchError = fetchErr;
+      if (fetchErr.message && fetchErr.message.includes('Mã lỗi: 404')) throw fetchErr;
+      console.warn(`[AI_PARSER] Lỗi mạng khi tải file từ URL (Lần ${attempt}/3): ${fetchErr.message}`);
+    }
+    if (attempt < 3) {
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+  if (!response || !response.ok) {
+    throw lastFetchError || new Error(`Không thể tải file từ URL: ${url}`);
   }
   const arrayBuffer = await response.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
@@ -355,8 +827,8 @@ const parseStaffSubmission = async (submissionId) => {
 
     emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_ANALYZING', { id: submissionId });
 
-    // 2. Lấy danh sách khách hàng, sản phẩm và nhà cung cấp hiện tại của chủ buôn để làm từ điển đối chiếu cho AI
-    const [customers, products, suppliers] = await Promise.all([
+    // 2. Lấy danh sách khách hàng, sản phẩm, nhà cung cấp và Từ điển AI tự học (CustomerAiAlias & ProductAiAlias) của chủ buôn
+    const [customers, products, suppliers, customerAiAliases, productAiAliases] = await Promise.all([
       prisma.customer.findMany({
         where: { userId, isActive: true },
         select: { id: true, name: true, phone: true },
@@ -369,11 +841,39 @@ const parseStaffSubmission = async (submissionId) => {
         where: { userId, isActive: true },
         select: { id: true, name: true, phone: true },
       }),
+      prisma.customerAiAlias.findMany({
+        where: { userId },
+        orderBy: [{ usageCount: 'desc' }, { updatedAt: 'desc' }],
+      }).catch(() => []),
+      prisma.productAiAlias.findMany({
+        where: { userId },
+        orderBy: [{ usageCount: 'desc' }, { updatedAt: 'desc' }],
+      }).catch(() => []),
     ]);
 
     const customerNamesList = customers.map((c) => c.name).join(', ');
     const productNamesList = products.map((p) => p.name).join(', ');
     const supplierNamesList = suppliers.map((s) => s.name).join(', ');
+    const customerMapById = new Map(customers.map((c) => [c.id, c]));
+    const learnedAliasesPromptList = (customerAiAliases || [])
+      .map((a) => {
+        const cust = customerMapById.get(a.customerId);
+        if (!cust) return null;
+        return `"${a.rawAlias}" => "${cust.name}"`;
+      })
+      .filter(Boolean)
+      .slice(0, 80)
+      .join('; ');
+    const productMapById = new Map(products.map((p) => [p.id, p]));
+    const learnedProductAliasesPromptList = (productAiAliases || [])
+      .map((a) => {
+        const prod = productMapById.get(a.productId);
+        if (!prod) return null;
+        return `"${a.rawAlias}" => "${prod.name}"`;
+      })
+      .filter(Boolean)
+      .slice(0, 80)
+      .join('; ');
 
     // 3. Tải tệp thành Base64
     const filePayload = await fetchFileAsBase64(submission.fileUrl);
@@ -404,6 +904,8 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 - Khách hàng quen: [${customerNamesList || 'Chưa có'}]
 - Nhà cung cấp: [${supplierNamesList || 'Chưa có'}]
 - Món thịt thường bán: [${productNamesList || 'Chưa có'}]
+- Từ điển chữ viết tay & tên viết tắt khách hàng chủ buôn đã dạy AI (ƯU TIÊN SỐ 1): [${learnedAliasesPromptList || 'Chưa có'}]
+- Từ điển chữ viết tay & tên gọi món thịt chủ buôn đã dạy AI (ƯU TIÊN SỐ 1): [${learnedProductAliasesPromptList || 'Chưa có'}]
 
 I. XÁC ĐỊNH TÊN KHÁCH HÀNG (customer_name) TỪ GIỌNG NÓI:
 1. Quy tắc nhận diện theo tên gọi:
@@ -422,6 +924,7 @@ I. XÁC ĐỊNH TÊN KHÁCH HÀNG (customer_name) TỪ GIỌNG NÓI:
 - "Chinga" / "Chị Thúy Nga" / "Cô Nga" => "Chị Thúy Nga".
 - "Anh Nghĩa" / "Thăn Bình Đà" => "Thăn bình đà(anh Nghĩa)".
 - "52" / "52 Trần Thái Tông" => "52  trần thái tông".
+- "268" / "268 Khương Đình" / "Khương Đình" / "268 Lương P.h" => "268 khương đình".
 - "Minh" / "Minh Trang" => "Minh trang".
 - "Trung Kính" / "Bếp Trung Kính" => "Trung kính".
 - "Thái Hà" => "Thái hà".
@@ -482,6 +985,8 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 - Khách hàng quen: [${customerNamesList || 'Chưa có'}]
 - Nhà cung cấp: [${supplierNamesList || 'Chưa có'}]
 - Món thịt thường bán: [${productNamesList || 'Chưa có'}]
+- Từ điển chữ viết tay & tên viết tắt khách hàng chủ buôn đã dạy AI (ƯU TIÊN SỐ 1): [${learnedAliasesPromptList || 'Chưa có'}]
+- Từ điển chữ viết tay & tên gọi món thịt chủ buôn đã dạy AI (ƯU TIÊN SỐ 1): [${learnedProductAliasesPromptList || 'Chưa có'}]
 
 0. KIỂM TRA BỐ CỤC HÓA ĐƠN BÁN HÀNG:
 - Chỉ bóc tách khi ảnh có bố cục hóa đơn bán hàng tiêu chuẩn: Có tiêu đề in "HÓA ĐƠN BÁN HÀNG", bảng biểu kẻ ô chia cột (STT, Tên hàng, Số lượng, Đơn giá, Thành tiền) hoặc dòng in "Tên khách hàng:".
@@ -537,6 +1042,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 - "Sành CS1" / "Sách CS1" / "Sanh CS1" / "Sach CS1" / "Sành CS 1" / "Sách CS 1" / "Sành 1" / "Sách 1" (chữ viết tay tên khách hàng "Sành CS1", nét chữ 'ành' viết móc thon/nhọn thường bị AI nhìn nhầm thành chữ 'ách' => "Sách CS1") => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "sành lẩu cs1".
 - "Sành CS2" / "Sách CS2" / "Sanh CS2" / "Sach CS2" / "Sành CS 2" / "Sách CS 2" / "Sành 2" / "Sách 2" => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "sành lẩu cs2".
 - Số "52" (hoặc "52 trần thái tông") => "52  trần thái tông".
+- Số "268" (hoặc "268 khương đình", "268 Khương Đình", "268 Lương P.h", "268...") (chữ viết tay nét chữ Khương Đình thường bị AI nhìn nhầm thành Lương P.h hoặc chỉ thấy số 268) => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "268 khương đình" (hoặc khách hàng có chứa "268" trong danh bạ).
 - "minh" / "mih" / "Minh trang" => "Minh trang".
 - "Tuy kh" / "Trung kh" / "Trung kính" => "Trung kính".
 - "Thái Hà" / "Hkú Hà" / "Thai Ha" => "Thái hà".
@@ -615,7 +1121,41 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
       },
     });
 
-    const parsedJson = JSON.parse(geminiResult.text.trim() || '{}');
+    // Phân tích JSON an toàn, tự động khôi phục nếu Gemini trả về chuỗi JSON bị cắt ngang do vượt giới hạn token
+    const parsedJson = (() => {
+      const rawText = (geminiResult.text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+      if (!rawText) return {};
+      try {
+        return JSON.parse(rawText);
+      } catch (jsonErr) {
+        console.warn('[AI_PARSER] JSON trả về bị cắt ngang, đang tự động khôi phục:', jsonErr.message);
+        const recovered = { items: [] };
+        const custMatch = rawText.match(/"customer_name"\s*:\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|null)/);
+        if (custMatch && custMatch[1] !== undefined) recovered.customer_name = custMatch[1];
+        const dateMatch = rawText.match(/"invoice_date"\s*:\s*"([^"]+)"/);
+        if (dateMatch) recovered.invoice_date = dateMatch[1];
+        const validMatch = rawText.match(/"is_valid_invoice"\s*:\s*(true|false)/);
+        if (validMatch) recovered.is_valid_invoice = validMatch[1] === 'true';
+        const returnMatch = rawText.match(/"is_return"\s*:\s*(true|false)/);
+        if (returnMatch) recovered.is_return = returnMatch[1] === 'true';
+        const importMatch = rawText.match(/"is_import"\s*:\s*(true|false)/);
+        if (importMatch) recovered.is_import = importMatch[1] === 'true';
+        const quickMatch = rawText.match(/"is_quick_debt"\s*:\s*(true|false)/);
+        if (quickMatch) recovered.is_quick_debt = quickMatch[1] === 'true';
+        const itemsIdx = rawText.indexOf('"items"');
+        if (itemsIdx !== -1) {
+          const itemsSlice = rawText.substring(itemsIdx);
+          const itemBlocks = itemsSlice.match(/\{[^{}]*"name"\s*:\s*"[^"]*"[^{}]*\}/g) || [];
+          for (const block of itemBlocks) {
+            try {
+              const parsedItem = JSON.parse(block);
+              if (parsedItem && parsedItem.name) recovered.items.push(parsedItem);
+            } catch {}
+          }
+        }
+        return recovered;
+      }
+    })();
     // Kiểm tra xem ảnh có bố cục của một hóa đơn bán hàng hợp lệ không
     const isValidInvoice = isVideo || parsedJson.is_valid_invoice !== false;
     const rawItems = (isValidInvoice && Array.isArray(parsedJson.items)) ? parsedJson.items : [];
@@ -743,6 +1283,14 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
       const cleanDetected = removeDiacritics(customerNameToMatch.toLowerCase().trim());
       const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
 
+      // 00. ƯU TIÊN TUYỆT ĐỐI SỐ 1: Tra cứu trong Bảng Từ Điển AI Tự Học (CustomerAiAlias) do chủ buôn đã duyệt trước đó
+      const learnedMatch = matchCustomerFromAiAliases(customerNameToMatch, customerAiAliases, customers);
+      if (learnedMatch && learnedMatch.customer) {
+        matchedCustomerId = learnedMatch.customer.id;
+        parsedJson.matched_by_ai_alias = true;
+        parsedJson.learned_alias = learnedMatch.alias.rawAlias;
+      }
+
       // 0a. ĐẶC BIỆT: Khớp ưu tiên khách "Bếp trung kính" nếu AI nhận diện là "Trung kính", "trung kh", "tuy kh", "trungkinh"...
       // BẮT BUỘC ưu tiên tìm khách có chứa "bep trung kinh" / "bep" + "trung" + "kinh" trước,
       // TUYỆT ĐỐI không để Rule 0 (Exact Match) khớp nhầm vào khách "Trungkinh"!
@@ -775,7 +1323,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
         cleanDetectedNoSpace.includes('beptrungkinh') ||
         (cleanDetected.includes('trung') && cleanDetected.includes('kinh'));
 
-      if (isDetectedTrungKinh) {
+      if (!matchedCustomerId && isDetectedTrungKinh) {
         const bepTrungKinhCust = customers.find((c) => {
           const cClean = removeDiacritics(c.name.toLowerCase().trim());
           return cClean.includes('bep trung kinh') || (cClean.includes('bep') && cClean.includes('trung') && cClean.includes('kinh'));
@@ -1021,6 +1569,33 @@ if (!matchedCustomerId) {
 
           if (phungKhoangCust) {
             matchedCustomerId = phungKhoangCust.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "268 Khương đình" nếu AI nhận diện có số 268 (ví dụ: "268 Lương P.h", "268 Khương Đình", "268"...) hoặc "khương đình"
+        const isDetectedKhuongDinh = (
+          cleanDetected.includes('268') ||
+          cleanDetectedNoSpace.includes('268') ||
+          cleanDetected.includes('khuong dinh') ||
+          cleanDetectedNoSpace.includes('khuongdinh')
+        );
+
+        if (isDetectedKhuongDinh) {
+          const cust268 = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return (cClean.includes('268') && (cClean.includes('khuong') || cClean.includes('dinh')));
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean.includes('268');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean.includes('khuong dinh') || (cClean.includes('khuong') && cClean.includes('dinh'));
+          }) || null;
+
+          if (cust268) {
+            matchedCustomerId = cust268.id;
           }
         }
       }
@@ -1853,6 +2428,31 @@ if (!matchedCustomerId) {
       }
 
       if (!matchedCustomerId) {
+        // Khớp ưu tiên khách "268 Khương đình" nếu AI nhận diện có số 268 hoặc khương đình
+        if (
+          cleanDetected.includes('268') ||
+          cleanDetectedNoSpace.includes('268') ||
+          cleanDetected.includes('khuong dinh') ||
+          cleanDetectedNoSpace.includes('khuongdinh')
+        ) {
+          const cust268 = customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return (cClean.includes('268') && (cClean.includes('khuong') || cClean.includes('dinh')));
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean.includes('268');
+          }) || customers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
+            return cClean.includes('khuong dinh') || (cClean.includes('khuong') && cClean.includes('dinh'));
+          }) || null;
+
+          if (cust268) {
+            matchedCustomerId = cust268.id;
+          }
+        }
+      }
+
+      if (!matchedCustomerId) {
         // 1. Ưu tiên khớp CHÍNH XÁC 100% (Exact Match) trước (Tránh trường hợp "Kcc" bị nhận nhầm sang "Kcc1")
         const exactCust = customers.find((c) => {
           const cName = removeDiacritics(c.name.toLowerCase().trim());
@@ -2246,16 +2846,24 @@ if (!matchedCustomerId) {
         .trim();
       const cleanLower = removeDiacritics(cleanedRaw || rawLower);
 
-      // Ưu tiên chuẩn hóa theo quy tắc từ lóng
-      let normalizedName =
-        SPECIAL_MEAT_MAP[cleanedRaw] ||
-        SPECIAL_MEAT_MAP[rawLower] ||
-        SPECIAL_MEAT_MAP[cleanLower] ||
-        SPECIAL_MEAT_MAP[removeDiacritics(rawLower)] ||
-        (cleanedRaw ? (cleanedRaw.charAt(0).toUpperCase() + cleanedRaw.slice(1)) : rawOriginal || 'Thịt lẻ').trim();
+      // 00. Ưu tiên tuyệt đối số 00: Kiểm tra trong Bảng Từ Điển Món Thịt AI Tự Học (ProductAiAlias) trước mọi rule tĩnh
+      const learnedProductMatch =
+        matchProductFromAiAliases(rawOriginal, productAiAliases, products) ||
+        matchProductFromAiAliases(cleanedRaw, productAiAliases, products);
+
+      // Ưu tiên chuẩn hóa theo từ điển AI tự học, sau đó mới đến quy tắc từ lóng
+      let normalizedName = learnedProductMatch
+        ? learnedProductMatch.product.name
+        : (
+          SPECIAL_MEAT_MAP[cleanedRaw] ||
+          SPECIAL_MEAT_MAP[rawLower] ||
+          SPECIAL_MEAT_MAP[cleanLower] ||
+          SPECIAL_MEAT_MAP[removeDiacritics(rawLower)] ||
+          (cleanedRaw ? (cleanedRaw.charAt(0).toUpperCase() + cleanedRaw.slice(1)) : rawOriginal || 'Thịt lẻ').trim()
+        );
 
       // Nếu tên món chỉ gồm 1 ký tự duy nhất (như chữ 'x' viết ngoáy thành r, v, y, t, c...) thì auto là "Xg Bò" (trừ 's' là "Sườn")
-      if (cleanLower.length === 1) {
+      if (!learnedProductMatch && cleanLower.length === 1) {
         if (cleanLower === 's') {
           normalizedName = 'Sườn';
         } else {
@@ -2298,8 +2906,9 @@ if (!matchedCustomerId) {
 
       const cleanItemName = removeDiacritics(normalizedName.toLowerCase());
 
-      // So khớp với danh mục sản phẩm của chủ buôn bằng thuật toán so khớp chính xác matchProductByName
-      const matchedProd = matchProductByName(cleanItemName, products, customerPriceMap);
+      // So khớp với danh mục sản phẩm của chủ buôn (ưu tiên số 1 từ điển AI tự học, sau đó đến matchProductByName)
+      const matchedProd = (learnedProductMatch && learnedProductMatch.product) ||
+        matchProductByName(cleanItemName, products, customerPriceMap, productAiAliases);
       const customPriceVal = matchedProd ? customerPriceMap.get(matchedProd.id) : null;
 
       // QUY TẮC BẢO VỆ ĐẶC BIỆT CHO XG BÒ (XƯƠNG BÒ):
@@ -2483,5 +3092,11 @@ if (!matchedCustomerId) {
 module.exports = {
   parseStaffSubmission,
   matchProductByName,
+  normalizeCustomerAliasText,
+  matchCustomerFromAiAliases,
+  learnCustomerAiAlias,
+  normalizeProductAliasText,
+  matchProductFromAiAliases,
+  learnProductAiAlias,
 };
 
