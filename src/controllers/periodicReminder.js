@@ -32,6 +32,7 @@ const DEFAULT_RESTAURANTS_SEED = [
   { matchTerms: ['lk', 'lẩu ốc', 'lk(lẩu ốc)'], groupName: 'Các nhà hàng riêng lẻ', reminderDays: '1,15' },
   { matchTerms: ['chị thúy nga', 'thúy nga'], groupName: 'Các nhà hàng riêng lẻ', reminderDays: '1,15' },
   { matchTerms: ['hồng hạnh', 'hồng hạnh hqv'], groupName: 'Các nhà hàng riêng lẻ', reminderDays: '1,15' },
+  { matchTerms: ['chị tuyết', 'chị tuyết(toan nga thái dũng)', 'tuyết'], groupName: 'Các nhà hàng riêng lẻ', reminderDays: '1,15', notes: 'text_copy' },
 ];
 
 /**
