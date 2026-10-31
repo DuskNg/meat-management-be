@@ -276,12 +276,11 @@ const cleanupPaidDebtMedia = async (options = {}) => {
             }
 
             try {
-              // 2. Làm rỗng link fileUrl trong DB (giữ lại nội dung items và lịch sử duyệt)
+              // 2. Làm rỗng link fileUrl trong DB (giữ lại nội dung items và lịch sử duyệt, không ghi đè vào note của đơn hàng)
               await prisma.staffSubmission.update({
                 where: { id: sub.id },
                 data: {
                   fileUrl: '',
-                  note: `${sub.note || ''} [Ảnh/video đã tự động dọn dẹp sau 15 ngày thu nợ]`.trim(),
                 },
               });
             } catch (upDbErr) {

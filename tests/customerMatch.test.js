@@ -941,12 +941,17 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
       }
     });
 
-    it('16. Tự động nhận diện chính xác khách "Thuỷ gà" khi AI bóc tách "Chị Huy Ga", "Huy Ga", "C Huy Ga", "Chị Thủy Gà"...', () => {
+    it('16. Tự động nhận diện chính xác khách "Thuỷ gà" khi AI bóc tách "Chị Huy Ga", "Huy Ga", "C Huy Ga", "Chị Thủy Gà"... và TUYỆT ĐỐI không nhầm sang "Chị Thúy Nga"', () => {
       const thuyGaCustomer = {
         id: 'cust_thuy_ga_id',
         name: '[TEST]_Thuỷ gà(thủy lê zalo nhóm bò)',
       };
+      const thuyNgaCustomer = {
+        id: 'cust_thuy_nga_id',
+        name: '[TEST]_Chị Thúy Nga',
+      };
       const customers = [
+        thuyNgaCustomer, // Đặt Chị Thúy Nga lên trước để test triệt để tránh nhầm
         thuyGaCustomer,
         { id: 'cust_huy_id', name: '[TEST]_Huy' },
         { id: 'cust_dam_huy_id', name: '[TEST]_Đàm huy' },
@@ -968,7 +973,7 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
         const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
 
         let matchedCustomerId = null;
-        const isDetectedThuyGa = (
+        const isDetectedThuyGa = !cleanDetected.includes('nga') && !cleanDetectedNoSpace.includes('nga') && (
           cleanDetectedNoSpace === 'chihuyga' ||
           cleanDetectedNoSpace === 'chuyga' ||
           cleanDetectedNoSpace === 'huyga' ||
@@ -985,8 +990,8 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
           cleanDetected === 'c thuy ga' ||
           cleanDetected === 'thuy ga' ||
           cleanDetected === 'thuy le' ||
-          (cleanDetected.includes('huy') && cleanDetected.includes('ga')) ||
-          (cleanDetected.includes('thuy') && cleanDetected.includes('ga')) ||
+          (cleanDetected.includes('huy') && /\bga\b/.test(cleanDetected)) ||
+          (cleanDetected.includes('thuy') && /\bga\b/.test(cleanDetected)) ||
           (cleanDetected.includes('thuy') && cleanDetected.includes('le')) ||
           cleanDetectedNoSpace.includes('huyga') ||
           cleanDetectedNoSpace.includes('thuyga') ||
@@ -996,10 +1001,17 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
         if (isDetectedThuyGa) {
           const thuyGaCust = customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
-            return (cClean.includes('thuy') && cClean.includes('ga')) || (cClean.includes('thuy') && cClean.includes('le'));
+            if (cClean.includes('nga')) return false;
+            return (
+              (cClean.includes('thuy') && /\bga\b/.test(cClean)) ||
+              (cClean.includes('thuy') && cClean.includes('le')) ||
+              cClean.includes('thuy ga') ||
+              cClean.includes('thuy le')
+            );
           }) || customers.find((c) => {
             const cClean = removeDiacritics(c.name.toLowerCase().trim()).replace(/^\[test\]_/, '');
-            return cClean.includes('ga') && (cClean.includes('thuy') || cClean.includes('huy'));
+            if (cClean.includes('nga')) return false;
+            return /\bga\b/.test(cClean) && (cClean.includes('thuy') || cClean.includes('huy'));
           }) || null;
 
           if (thuyGaCust) {
@@ -1024,10 +1036,15 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
         'thuy ga',
         'Thuỷ gà',
         'Thủy Lê',
+        'Thuỷ gà(thủy lê zalo nhóm bò)',
       ];
       for (const input of testInputs) {
         expect(matchThuyGa(input)).toBe(thuyGaCustomer.id);
       }
+
+      // Đảm bảo "Chị Thúy Nga" KHÔNG bị khớp vào Thủy Gà
+      expect(matchThuyGa('Chị Thúy Nga')).toBeNull();
+      expect(matchThuyGa('thuy nga')).toBeNull();
     });
 
     it('16. AI bóc tách chữ viết tay "Akb" / "AK b" / "A kb" / "a bình" / "a.binh" / "anh binh" bắt buộc tự động khớp vào khách "Anh bình" (và KHÔNG nhầm sang "Thăn bình đà")', async () => {

@@ -201,6 +201,9 @@ const getEmployees = async (req, res, next) => {
               lte: endOfMonth,
             }
           } : undefined,
+          orderBy: {
+            date: 'asc',
+          },
         },
         attendances: {
           where: startOfMonth ? {
@@ -342,11 +345,20 @@ const getEmployees = async (req, res, next) => {
       const isPartiallyPaid = totalPaidSalary > 0 && remainingSalary > 0;
       const paidAt = emp.payments && emp.payments.length > 0 ? emp.payments[0].paidAt : null;
 
-      // Loại bỏ trường advances, attendances và payments để payload gọn nhẹ
-      const { advances, attendances, payments, ...rest } = emp;
+      // Chuẩn hóa danh sách chi tiết các lần tạm ứng trong tháng
+      const formattedAdvances = (emp.advances || []).map((adv) => ({
+        id: adv.id,
+        amount: parseFloat(adv.amount),
+        date: adv.date,
+        note: adv.note || null,
+      }));
+
+      // Loại bỏ attendances và payments, giữ lại danh sách advances để tách từng lần ứng
+      const { attendances, payments, ...rest } = emp;
 
       return {
         ...rest,
+        advances: formattedAdvances,
         totalAdvances,
         totalPaidSalary,
         monthNetSalary,
@@ -363,6 +375,10 @@ const getEmployees = async (req, res, next) => {
         eligibleDays,
         workingDays,
         joinedMidMonth,
+        startDayInMonth,
+        startDayText: joinedMidMonth && startDayInMonth > 1
+          ? `(từ ${startDayInMonth.toString().padStart(2, '0')}/${targetMonth.toString().padStart(2, '0')})`
+          : '',
         isBeforeJoined,
         // Dữ liệu lũy kế tính đến ngày hiện tại
         currentDayCutoff,

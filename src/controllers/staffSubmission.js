@@ -280,7 +280,7 @@ const submitBatchFromStaff = async (req, res, next) => {
             finalFileUrl = uploadRes.secure_url || uploadRes.url;
             // Đã lên đám mây an toàn -> xóa ngay file tạm trên ổ đĩa máy chủ để chống đầy bộ nhớ
             if (savedFilePath && fs.existsSync(savedFilePath)) {
-              await fs.promises.unlink(savedFilePath).catch(() => {});
+              await fs.promises.unlink(savedFilePath).catch(() => { });
               savedFilePath = null;
             }
           }
@@ -492,7 +492,7 @@ const getStaffSubmissions = async (req, res, next) => {
         try {
           const parsedAi = JSON.parse(sub.rawAiResponse);
           if (Array.isArray(parsedAi?.items)) parsedAiItems = parsedAi.items;
-        } catch {}
+        } catch { }
       }
 
       const enrichedItems = (sub.items || []).map((it, idx) => {
@@ -616,7 +616,7 @@ const updateStaffSubmission = async (req, res, next) => {
         try {
           const parsedAi = JSON.parse(submission.rawAiResponse);
           if (Array.isArray(parsedAi?.items)) parsedAiItemsForLearn = parsedAi.items;
-        } catch {}
+        } catch { }
       }
       const origItemsForLearn = submission.items || [];
       for (let idx = 0; idx < items.length; idx++) {
@@ -734,7 +734,9 @@ const approveStaffSubmission = async (req, res, next) => {
     }
 
     const finalDate = date ? new Date(date) : submission.date;
-    const finalNote = note !== undefined ? String(note).trim() : (submission.note || '');
+    const finalNote = (note !== undefined ? String(note) : (submission.note || ''))
+      .replace(/[-–—:\s]*\[[^\]]*(?:dọn dẹp|cloudinary|không xem được|ảnh\/video đã tự động)[^\]]*\]/gi, '')
+      .trim();
 
     // ─── SYNC CLOUDINARY TRƯỚC KHI APPROVE ───────────────────────────────────
     // Nếu fileUrl vẫn còn là link /uploads/ cục bộ (Cloudinary chưa kịp upload xong
@@ -895,7 +897,7 @@ const approveStaffSubmission = async (req, res, next) => {
               supplierId: finalSupplierId,
               createdBy: currentUserId,
               totalAmount,
-                note: finalNote || 'Nhập hàng',
+              note: finalNote || 'Nhập hàng',
               date: finalDate,
               items: itemsStr,
               mediaUrls: mediaUrlsStr,
@@ -1364,7 +1366,7 @@ const approveStaffSubmission = async (req, res, next) => {
         try {
           const parsedAi = JSON.parse(submission.rawAiResponse);
           if (Array.isArray(parsedAi?.items)) parsedAiItems = parsedAi.items;
-        } catch {}
+        } catch { }
       }
       const origItems = submission.items || [];
       const learnedProducts = [];
@@ -1735,7 +1737,7 @@ const reparseStaffSubmission = async (req, res, next) => {
               where: { id },
               data: { fileUrl: uploadRes.secure_url || uploadRes.url },
             });
-            await fs.promises.unlink(diskPath).catch(() => {});
+            await fs.promises.unlink(diskPath).catch(() => { });
           }
         } catch (reuploadErr) {
           console.warn('[REPARSE_UPLOAD_WARN] Không thể đồng bộ lên đám mây khi quét lại:', reuploadErr.message);
