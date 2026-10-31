@@ -935,7 +935,7 @@ I. XÁC ĐỊNH TÊN KHÁCH HÀNG (customer_name) TỪ GIỌNG NÓI:
 - "Tài" / "lai" / "lại" / "tai" => "Tài".
 - "Gia Hưng CS2" => "Gia Hưng cs2".
 - "Giảng Võ" / "Giang Võ" => "Giảng võ".
-- "794" / "794 Láng Hạ" / "The Industree" => "794 láng hạ".
+- "794" / "794 Láng Hạ" / "The Industree" / "Industree" => "794 láng hạ".
 - "Cuốn An Khánh" / "An Khang" => "Cuốn an khánh".
 - "Phùng Khoang" / "Phung Khoang" / "Phùng Khong" / "Phung Khong" / "Phùng Khơng" / "Phung Khơng" / "Phùng Khang" / "Phung Khang" => "lk01 phùng khoang".
 - "Sành CS1" / "Sách CS1" / "Sành lẩu CS1" / "Sành 1" => "sành lẩu cs1".
@@ -953,13 +953,14 @@ II. BÓC TÁCH MÓN THỊT (items):
   + Khách Cồ Hải: auto món "Thịt lạm" (hoặc "Lạm gầu").
   + Khách Phở Tưởng: auto món "Gầu Bò" (hoặc "Thịt lạm").
   + Khách Thăn Bình Đà: auto món "Thăn".
+  + Khách "794 láng hạ" / "the industree": Hiện tại TUYỆT ĐỐI KHÔNG lấy "Bê ba chỉ". Khách chỉ lấy "Bê sữa", "Bắp bò", "Bê thăn", "Xg bò"... Nếu đọc món "bê" thì BẮT BUỘC ĐÓ LÀ "Bê sữa" (hoặc "Bê thăn"), TUYỆT ĐỐI CẤM gán món "Bê ba chỉ".
   + Khách khác: Chọn món phù hợp nhất trong danh mục món thịt thường bán.
 3. Chuẩn hóa tên món thịt:
 - "vai" / "lạc vai" => "Lạc vai".
 - "chín" / "thịt chín" => "Thịt chín" (từ "chín" là tên món thịt chín, KHÔNG phải số 9).
 - "lạm" => "Thịt lạm"; "lạm gầu" => "Lạm gầu".
 - "gầu" / "gàu" / "gâu" => "Gầu Bò".
-- "bê" / "thịt bê" => "Bê ba chỉ".
+- "bê" / "thịt bê" => "Bê ba chỉ" (LƯU Ý ĐẶC BIỆT: Riêng khách "794 láng hạ" / "The Industree" hiện tại TUYỆT ĐỐI KHÔNG lấy "Bê ba chỉ". Nếu là khách này mà có món bê thì BẮT BUỘC ĐÓ LÀ "Bê sữa" (hoặc "Bê thăn"), TUYỆT ĐỐI CẤM trả về "Bê ba chỉ").
 - "diềm" / "diềm thăn" => "Diềm bò" ("diềm thái" => "Diềm bò thái"). TUYỆT ĐỐI CẤM trả về "Thăn bò".
 - "lá" / "la" / "lá vai" => "Lá vai".
 - "bò xay" / "vai xay" / "xay" => "bò xay".
@@ -1011,7 +1012,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
   + "Sườn" => "Sườn".
   + "Sườn xg" (kể cả chữ viết xG/KG/kg có gạch chân dễ nhầm đơn vị) => "Sườn xg".
   + "bò xay" / "vai xay" => "bò xay".
-  + "bê" / "bê ba chỉ" => "Bê ba chỉ".
+  + "bê" / "bê ba chỉ" => "Bê ba chỉ" (LƯU Ý ĐẶC BIỆT: Riêng khách "794 láng hạ" / "the industree" hiện tại TUYỆT ĐỐI KHÔNG lấy "Bê ba chỉ". Nếu hóa đơn/tích kê của khách này có chữ "bê", "bê sữa", "thịt bê", hoặc chữ viết ngoáy dễ nhầm thì BẮT BUỘC ĐÓ LÀ "Bê sữa" (hoặc "Bê thăn"), TUYỆT ĐỐI CẤM nhận diện thành "Bê ba chỉ").
   + "chín" / "thịt chín" => "Thịt chín".
 
 2. QUY TẮC ĐƠN NỢ NHANH & SỐ TIỀN:
@@ -1055,7 +1056,8 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
 - "Xã Pan" / "Xa Pan" / "Xã pan" / "xa pan" / "Xã Ban" / "Xa Ban" / "Xã Đàn" / "Xa Dan" / "236 Xã Đàn" / "236 Xã Pan" / "236 xa dan" / "236 xa pan" (chữ viết tay tên khách hàng "Xã Đàn" hoặc "236 Xã Đàn", chữ "Đàn" viết ngoáy/thảo nét chữ Đ và à-n hay bị AI nhìn nhầm thành chữ P-a-n => "Xã Pan" / "Xa Pan") => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "236 xã đàn".
 - "Tài" / "lai" / "lại" / "tai" / "tài" (chữ viết tay "Tài" chữ T hoa viết thảo hay bị nhìn nhầm thành chữ "l" => "lai") => "Tài".
 - "Phùng Khoang" / "Phung Khoang" / "Phùng Khong" / "Phung Khong" / "Phùng Khơng" / "Phung Khơng" / "Phùng Khang" / "Phung Khang" / "lk01 phùng khoang" (chữ viết tay tên khách hàng "Phùng Khoang", chữ "Khoang" viết thảo nét nối o-a-n-g hay bị AI nhìn nhầm thành "Phùng Khong" hoặc "Phung Khong") => BẮT BUỘC ĐÓ LÀ KHÁCH HÀNG "lk01 phùng khoang" (hoặc khách hàng có chứa "Phùng Khoang" trong danh bạ).
-- Có 3 chữ số "794" (794 lang ha / 794 láng hạ) => "794 láng hạ" (TUYỆT ĐỐI CẤM nhận diện thành "Cuốn láng hạ").
+- Có 3 chữ số "794" (794 lang ha / 794 láng hạ) / "The Industree" / "Industree" => "794 láng hạ" (TUYỆT ĐỐI CẤM nhận diện thành "Cuốn láng hạ").
+  * ĐẶC BIỆT VỀ MÓN THỊT CỦA KHÁCH "794 LÁNG HẠ" / "THE INDUSTREE": Khách hàng này hiện tại TUYỆT ĐỐI KHÔNG lấy "Bê ba chỉ" (chỉ lấy "Bắp bò", "Bê sữa", "Bê thăn", "Xg bò"...). Nếu trên tích kê/hóa đơn có chữ "bê" hoặc nét chữ tương tự thì BẮT BUỘC bóc tách là "Bê sữa" (hoặc "Bê thăn"), TUYỆT ĐỐI KHÔNG ĐƯỢC NHẬN DIỆN THÀNH "Bê ba chỉ".
 - Tiêu đề "LÒ MỔ MINH THUẤN" / "LÒ MỔ MINH THUẦN" => Nhà cung cấp "Minh thuần" (viết tắt B: Bắp bò, sx/sn: Sườn).
 - ĐẶC BIỆT CHÚ Ý CHỮ KÝ Ở CHÂN TRANG / ĐÁY HÓA ĐƠN:
   + Quan sát kỹ khu vực đáy hóa đơn (cuối trang): Thường có chữ ký người nhận / người giao hàng kèm tên viết tay bên dưới chữ ký.
@@ -2559,6 +2561,23 @@ if (!matchedCustomerId) {
       });
     }
 
+    // Xử lý đặc thù cho khách "794 Láng Hạ" / "The Industree": hiện tại không lấy Bê ba chỉ
+    const isIndustreeCustomerEarly = cleanCustDetected.includes('794') ||
+      cleanCustDetected.includes('industree') ||
+      (matchedCustomerId && customers.some((c) => c.id === matchedCustomerId && (
+        removeDiacritics(c.name.toLowerCase()).includes('794') ||
+        removeDiacritics(c.name.toLowerCase()).includes('industree')
+      )));
+
+    if (isVideo && isIndustreeCustomerEarly) {
+      rawItems.forEach((item) => {
+        const itemClean = removeDiacritics((item.name || '').toLowerCase().trim());
+        if (itemClean.includes('be ba chi') || itemClean === 'be' || itemClean === 'thit be') {
+          item.name = 'Bê sữa';
+        }
+      });
+    }
+
     // Fallback thông minh cho video: Nếu có số kg nhưng tên thịt bị bỏ trống hoặc chung chung
     if (isVideo) {
       rawItems.forEach((item) => {
@@ -2910,6 +2929,37 @@ if (!matchedCustomerId) {
 
       if (isTuyetCustomer && (isLargeQtyForTuyet || isNoMeatNameForTuyet || isReturnOrder)) {
         normalizedName = 'Thịt chín';
+      }
+
+      // QUY TẮC ĐẶC THÙ CHO KHÁCH "794 LÁNG HẠ" / "THE INDUSTREE":
+      // Khách hàng này hiện tại TUYỆT ĐỐI KHÔNG lấy "Bê ba chỉ" (chỉ lấy "Bê sữa", "Bắp bò", "Bê thăn", "Xg bò"...).
+      // Nếu AI nhận diện ra món "Bê ba chỉ" hoặc có chữ "be ba chi" / "be", tự động chuẩn hóa sang "Bê sữa".
+      const isIndustreeCustomer = Boolean(
+        (customerNameToMatch && (
+          removeDiacritics(customerNameToMatch.toLowerCase()).includes('794') ||
+          removeDiacritics(customerNameToMatch.toLowerCase()).includes('industree')
+        )) ||
+        (matchedCustomer && (
+          removeDiacritics(matchedCustomer.name.toLowerCase()).includes('794') ||
+          removeDiacritics(matchedCustomer.name.toLowerCase()).includes('industree')
+        )) ||
+        (cleanCustDetected && (
+          cleanCustDetected.includes('794') ||
+          cleanCustDetected.includes('industree')
+        ))
+      );
+
+      if (isIndustreeCustomer) {
+        const itemClean = removeDiacritics(normalizedName.toLowerCase());
+        if (
+          itemClean === 'be ba chi' ||
+          itemClean.includes('be ba chi') ||
+          cleanLower === 'be ba chi' ||
+          cleanLower === 'be' ||
+          cleanLower === 'thit be'
+        ) {
+          normalizedName = 'Bê sữa';
+        }
       }
 
       const cleanItemName = removeDiacritics(normalizedName.toLowerCase());

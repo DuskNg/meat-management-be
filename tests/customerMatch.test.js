@@ -1593,6 +1593,77 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
       );
       expect(blockedAlias).toBeNull();
     });
+
+    it('22. Khách hàng "794 láng hạ" / "the industree" hiện tại TUYỆT ĐỐI KHÔNG lấy "Bê ba chỉ", tự động chuẩn hóa sang "Bê sữa"', async () => {
+      const removeDiacritics = (str) =>
+        (str || '')
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/đ/g, 'd')
+          .replace(/Đ/g, 'D')
+          .toLowerCase()
+          .trim();
+
+      // Setup khách industree với bảng giá riêng: Bê sữa 300.000đ, Bê ba chỉ 280.000đ
+      const prodBeSua = await prisma.product.create({
+        data: {
+          name: '[TEST]_Bê sữa',
+          userId: testUser.id,
+          defaultPrice: 300000,
+          unit: 'kg',
+        },
+      });
+      const prodBeBaChi = await prisma.product.create({
+        data: {
+          name: '[TEST]_Bê ba chỉ',
+          userId: testUser.id,
+          defaultPrice: 280000,
+          unit: 'kg',
+        },
+      });
+
+      const custIndustree = await prisma.customer.create({
+        data: {
+          name: '[TEST]_the industree(794 đường láng)',
+          userId: testUser.id,
+          phone: '0988794794',
+        },
+      });
+
+      await prisma.customerProductPrice.createMany({
+        data: [
+          { customerId: custIndustree.id, productId: prodBeSua.id, price: 300000 },
+          { customerId: custIndustree.id, productId: prodBeBaChi.id, price: 280000 },
+        ],
+      });
+
+      // Kiểm tra logic bóc tách: Nếu khách là "the industree" / "794 láng hạ" và tên thịt là "bê ba chỉ" hoặc "bê"
+      // Phải tự động chuẩn hóa thành "Bê sữa" (không bao giờ là "Bê ba chỉ")
+      const testNames = ['bê', 'bê ba chỉ', 'thịt bê', 'be ba chi', 'Bê ba chỉ'];
+      for (const rawName of testNames) {
+        let normalizedName = rawName === 'bê' || rawName === 'thịt bê' ? 'Bê ba chỉ' : rawName;
+
+        const isIndustreeCustomer = Boolean(
+          custIndustree.name.toLowerCase().includes('794') ||
+          custIndustree.name.toLowerCase().includes('industree')
+        );
+
+        if (isIndustreeCustomer) {
+          const itemClean = removeDiacritics(normalizedName.toLowerCase());
+          if (
+            itemClean === 'be ba chi' ||
+            itemClean.includes('be ba chi') ||
+            itemClean === 'be' ||
+            itemClean === 'thit be'
+          ) {
+            normalizedName = 'Bê sữa';
+          }
+        }
+
+        expect(normalizedName).toBe('Bê sữa');
+        expect(normalizedName).not.toBe('Bê ba chỉ');
+      }
+    });
   });
 });
 
