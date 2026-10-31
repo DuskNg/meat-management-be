@@ -249,4 +249,86 @@ describe('Luồng Nghiệp Vụ: Tra Cứu Lương & Chấm Công Nhân Viên Qu
     expect(correctPinRes.body.data.employee.name).toBe('NV_NguyenVanTest');
     expect(correctPinRes.body.data.salary.finalAmount).toBeGreaterThan(0);
   });
+
+  it('8. Phát hành mã xác thực riêng cho từng nhân viên & mã Chủ cơ sở: Nhập mã nhân viên hiện lương người đó, nhập mã chủ hiện tất cả nhân viên', async () => {
+    // Tạo thêm 1 nhân viên thứ 2 để kiểm tra nhiều mã
+    const secondEmp = await prisma.employee.create({
+      data: {
+        userId: testUser.id,
+        name: 'NV_HoangBoTest',
+        baseSalary: 13000000,
+        role: 'Giao hàng',
+        isActive: true,
+      },
+    });
+
+    try {
+      // 1. Lấy link chung kèm mã xác thực của Chủ và danh sách mã của từng nhân viên
+      const linkRes = await request(app)
+        .get('/api/v1/employees/general-share-link')
+        .set('Authorization', `Bearer ${testToken}`);
+
+      expect(linkRes.status).toBe(200);
+      const { token: generalToken, ownerCode, employees } = linkRes.body.data;
+      expect(ownerCode).toBeDefined();
+      expect(ownerCode.length).toBeGreaterThanOrEqual(4);
+      expect(employees.length).toBe(2);
+
+      const emp1Code = employees.find((e) => e.id === testEmployee.id)?.accessCode;
+      const emp2Code = employees.find((e) => e.id === secondEmp.id)?.accessCode;
+      expect(emp1Code).toBeDefined();
+      expect(emp2Code).toBeDefined();
+      expect(emp1Code).not.toBe(emp2Code);
+      expect(emp1Code).not.toBe(ownerCode);
+      expect(emp2Code).not.toBe(ownerCode);
+
+      // 2. Nhân viên 1 chỉ nhập mã của mình (không cần chọn tên / employeeId) -> Hiển thị đúng lương của Nhân viên 1
+      const emp1Res = await request(app)
+        .get(`/api/v1/portal/staff/salary/${generalToken}?monthKey=10/2026&pin=${emp1Code}`);
+
+      expect(emp1Res.status).toBe(200);
+      expect(emp1Res.body.data.isOwnerView).toBe(false);
+      expect(emp1Res.body.data.employee.id).toBe(testEmployee.id);
+      expect(emp1Res.body.data.employee.name).toBe('NV_NguyenVanTest');
+
+      // 3. Nhân viên 2 chỉ nhập mã của mình -> Hiển thị đúng lương của Nhân viên 2
+      const emp2Res = await request(app)
+        .get(`/api/v1/portal/staff/salary/${generalToken}?monthKey=10/2026&pin=${emp2Code}`);
+
+      expect(emp2Res.status).toBe(200);
+      expect(emp2Res.body.data.isOwnerView).toBe(false);
+      expect(emp2Res.body.data.employee.id).toBe(secondEmp.id);
+      expect(emp2Res.body.data.employee.name).toBe('NV_HoangBoTest');
+
+      // 4. Chủ cơ sở nhập mã dành cho Chủ (ownerCode) -> Quan sát được tất cả thông tin và trạng thái lương của toàn bộ nhân viên
+      const ownerRes = await request(app)
+        .get(`/api/v1/portal/staff/salary/${generalToken}?monthKey=10/2026&pin=${ownerCode}`);
+
+      expect(ownerRes.status).toBe(200);
+      expect(ownerRes.body.data.isOwnerView).toBe(true);
+      expect(ownerRes.body.data.summary.totalEmployees).toBe(2);
+      expect(ownerRes.body.data.employeesSalary.length).toBe(2);
+      expect(ownerRes.body.data.employeesSalary.some((item) => item.employee.id === testEmployee.id)).toBe(true);
+      expect(ownerRes.body.data.employeesSalary.some((item) => item.employee.id === secondEmp.id)).toBe(true);
+
+      // 5. Chủ cơ sở cấp lại mã mới cho Nhân viên 2 qua POST /api/v1/employees/access-code
+      const regenRes = await request(app)
+        .post('/api/v1/employees/access-code')
+        .set('Authorization', `Bearer ${testToken}`)
+        .send({ targetType: 'EMPLOYEE', employeeId: secondEmp.id });
+
+      expect(regenRes.status).toBe(200);
+      const newEmp2Code = regenRes.body.data.newCode;
+      expect(newEmp2Code).toBeDefined();
+
+      // Dùng mã mới mở khóa thành công
+      const verifyNewCodeRes = await request(app)
+        .get(`/api/v1/portal/staff/salary/${generalToken}?monthKey=10/2026&pin=${newEmp2Code}`);
+
+      expect(verifyNewCodeRes.status).toBe(200);
+      expect(verifyNewCodeRes.body.data.employee.id).toBe(secondEmp.id);
+    } finally {
+      await prisma.employee.delete({ where: { id: secondEmp.id } });
+    }
+  });
 });

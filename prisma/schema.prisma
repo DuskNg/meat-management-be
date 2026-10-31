@@ -34,6 +34,7 @@ model User {
   isActive           Boolean  @default(true)  // Trạng thái hoạt động (cho phép xóa mềm)
   deletedAt          DateTime?                // Thời điểm xóa tài khoản tạm thời
   isWorkspaceOwner   Boolean  @default(false) // Admin đánh dấu tài khoản này được phép tạo Workspace
+  salaryPortalOwnerCode String?               // Mã xác thực dành riêng cho chủ cơ sở trên cổng kiểm tra lương nhân viên
 
   createdAt DateTime @default(now()) // Thời gian tạo tài khoản
   updatedAt DateTime @updatedAt // Thời gian tự động cập nhật mỗi khi thay đổi thông tin
@@ -298,6 +299,7 @@ model Employee {
   role        String?  // Vị trí công việc (ví dụ: Giao hàng, Lọc thịt, Bán sạp)
   baseSalary  Decimal  @db.Decimal(12, 2) // Lương cơ bản tháng (VND)
   startDate   DateTime? // Ngày bắt đầu vào làm việc (nếu null là nhân viên cũ làm tròn tháng)
+  accessCode  String?  // Mã xác thực riêng của từng nhân viên để tra cứu lương trên link portal
   isActive    Boolean  @default(true) // Trạng thái hoạt động (cho phép xóa mềm)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

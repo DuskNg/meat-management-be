@@ -32,8 +32,9 @@ router.post('/salary/pay', employeeController.paySalary);
 // Lịch sử của nhân viên
 router.get('/:id/history', employeeController.getEmployeeHistory);
 
-// Đường dẫn chia sẻ Zalo tra cứu lương, chấm công
+// Đường dẫn chia sẻ Zalo tra cứu lương, chấm công & cấp mã xác thực
 router.get('/general-share-link', employeeController.getGeneralEmployeeShareLink);
+router.post('/access-code', employeeController.regenerateSalaryAccessCode);
 router.get('/:id/share-link', employeeController.getEmployeeShareLink);
 
 module.exports = router;

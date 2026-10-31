@@ -9,7 +9,7 @@ const { BadRequestError, NotFoundError, ForbiddenError, UnauthorizedError } = re
 const { emitWorkspaceEvent } = require('../utils/socket');
 const { logActivity } = require('../utils/activityLogger');
 const { syncGroupCustomPricesToNewCustomers } = require('../services/groupPriceSyncService');
-const { getEligibleDaysForEmployee } = require('./employee');
+const { getEligibleDaysForEmployee, calculateCarryOver, ensureSalaryPortalCodes } = require('./employee');
 const { uploadToCloudinary, isCloudinaryConfigured } = require('../utils/cloudinary');
 
 // Thư mục lưu trữ ảnh hóa đơn cục bộ
@@ -2290,12 +2290,19 @@ const getEmployeeSalaryPortalData = async (req, res, next) => {
       throw new NotFoundError('Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
     }
 
+    const { ownerCode, employees: allActiveEmps } = await ensureSalaryPortalCodes(employee.userId);
+    const matchedEmpInStore = allActiveEmps.find((e) => e.id === employee.id);
+    const empAccessCode = matchedEmpInStore?.accessCode || employee.accessCode;
     const cleanPhone = (employee.phone || '').replace(/[^0-9]/g, '');
-    if (cleanPhone.length >= 4) {
-      const correctPin = cleanPhone.slice(-4);
-      if (clientPin !== correctPin) {
-        throw new ForbiddenError('Mã PIN không chính xác. Vui lòng nhập 4 số cuối số điện thoại của bạn.');
-      }
+    const phoneLast4 = cleanPhone.length >= 4 ? cleanPhone.slice(-4) : null;
+
+    const isValidPin =
+      (empAccessCode && clientPin === empAccessCode) ||
+      (phoneLast4 && clientPin === phoneLast4) ||
+      (ownerCode && clientPin === ownerCode);
+
+    if ((empAccessCode || phoneLast4) && !isValidPin) {
+      throw new ForbiddenError('Mã xác thực không chính xác. Vui lòng kiểm tra lại mã được cấp.');
     }
 
     // Xác định tháng xem
@@ -2456,8 +2463,153 @@ const getEmployeeSalaryPortalData = async (req, res, next) => {
   }
 };
 
+// Helper tính toán dữ liệu bảng lương chi tiết cho 1 nhân viên trên Portal
+const buildEmployeePortalSalaryDetail = async ({
+  employee,
+  year,
+  month,
+  totalDaysInMonth,
+  targetMonthKey,
+  attendances = [],
+  advances = [],
+  payments = [],
+}) => {
+  const { eligibleDays, joinedMidMonth, startDayInMonth, isBeforeJoined } = getEligibleDaysForEmployee(
+    employee.startDate,
+    year,
+    month,
+    totalDaysInMonth
+  );
+
+  const startDayText =
+    joinedMidMonth && startDayInMonth > 1
+      ? `(từ ${startDayInMonth.toString().padStart(2, '0')}/${month.toString().padStart(2, '0')})`
+      : '';
+
+  let leaveDays = 0;
+  let absentDaysCount = 0;
+  let halfDaysCount = 0;
+  let fullDaysCount = 0;
+
+  attendances.forEach((att) => {
+    const attD = new Date(att.date);
+    if (attD.getDate() >= startDayInMonth) {
+      if (att.status === 'ABSENT') {
+        leaveDays += att.shift === 'HALF' ? 0.5 : 1.0;
+        absentDaysCount += 1;
+      } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
+        leaveDays += 0.5;
+        halfDaysCount += 1;
+      } else if (att.status === 'PRESENT') {
+        fullDaysCount += 1;
+      }
+    }
+  });
+
+  const workingDays = Math.max(0, eligibleDays - leaveDays);
+  const baseSalary = parseFloat(employee.baseSalary) || 0;
+  const dailySalary = Math.round(baseSalary / totalDaysInMonth);
+  const leaveDeduction = Math.round(leaveDays * dailySalary);
+
+  let calculatedSalary = 0;
+  if (eligibleDays > 0) {
+    if (joinedMidMonth) {
+      calculatedSalary = Math.max(0, Math.round((baseSalary / totalDaysInMonth) * workingDays));
+    } else {
+      calculatedSalary = Math.max(0, baseSalary - leaveDeduction);
+    }
+  }
+
+  const totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount || 0), 0);
+  const paidPayments = (payments || []).filter((p) => p.status === 'PAID');
+  const totalPaidSalary = paidPayments.reduce((sum, p) => sum + parseFloat(p.finalAmount || 0), 0);
+
+  const carryOver = await calculateCarryOver(employee.id, baseSalary, targetMonthKey, employee.startDate);
+  const monthNetSalary = Math.max(0, calculatedSalary - totalAdvances + carryOver);
+  const remainingSalary = Math.max(0, monthNetSalary - totalPaidSalary);
+
+  const isPaid = totalPaidSalary > 0 && remainingSalary <= 0;
+  const isPartiallyPaid = totalPaidSalary > 0 && remainingSalary > 0;
+  const finalAmount = isPartiallyPaid ? remainingSalary : monthNetSalary;
+  const latestPayment = paidPayments.length > 0 ? paidPayments[0] : null;
+
+  const leaves = attendances
+    .filter((att) => {
+      const attD = new Date(att.date);
+      return (
+        attD.getDate() >= startDayInMonth &&
+        (att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'))
+      );
+    })
+    .map((att) => ({
+      id: att.id,
+      date: att.date instanceof Date ? att.date.toISOString().split('T')[0] : att.date,
+      status: att.status,
+      shift: att.shift,
+      note: att.note || '',
+    }));
+
+  const formattedAdvances = advances.map((adv) => ({
+    id: adv.id,
+    date: adv.date instanceof Date ? adv.date.toISOString().split('T')[0] : adv.date,
+    amount: parseFloat(adv.amount || 0),
+    note: adv.note || '',
+  }));
+
+  return {
+    employee: {
+      id: employee.id,
+      name: employee.name,
+      phone: employee.phone,
+      role: employee.role || 'Nhân viên',
+      accessCode: employee.accessCode || null,
+      startDate: employee.startDate || null,
+    },
+    monthKey: targetMonthKey,
+    totalDaysInMonth,
+    eligibleDays,
+    workingDays,
+    joinedMidMonth,
+    startDayInMonth,
+    startDayText,
+    isBeforeJoined,
+    stats: {
+      leaveDays,
+      leaveDeduction,
+      totalAdvances,
+      totalPaidSalary,
+      absentDaysCount,
+      halfDaysCount,
+      fullDaysCount,
+    },
+    salary: {
+      baseSalary,
+      dailySalary,
+      calculatedSalary,
+      totalAdvances,
+      totalPaidSalary,
+      monthNetSalary,
+      remainingSalary,
+      finalAmount,
+      carryOver,
+      isPaid,
+      isPartiallyPaid,
+    },
+    payment: {
+      isPaid,
+      isPartiallyPaid,
+      totalPaidSalary,
+      paidAt: latestPayment ? latestPayment.paidAt : null,
+      finalAmount: isPaid ? totalPaidSalary : finalAmount,
+      note: latestPayment ? latestPayment.note : null,
+    },
+    advances: formattedAdvances,
+    leaves,
+  };
+};
+
 // [GET] /api/v1/portal/staff/info/:token
-// Lấy thông tin cổng nhân sự chung hoặc riêng (danh sách nhân viên để chọn tra cứu & tên cửa hàng)
+// Lấy thông tin cổng nhân sự chung hoặc riêng (yêu cầu mã xác thực cá nhân hoặc mã chủ cơ sở)
 const getStaffPortalInfo = async (req, res, next) => {
   try {
     const { token } = req.params;
@@ -2469,39 +2621,28 @@ const getStaffPortalInfo = async (req, res, next) => {
     }
 
     if (decoded.type === 'STAFF_PORTAL') {
-      const user = await prisma.user.findUnique({
-        where: { id: decoded.userId },
-        select: { id: true, name: true, phone: true },
-      });
+      const { user, employees } = await ensureSalaryPortalCodes(decoded.userId);
 
       if (!user) {
         throw new NotFoundError('Không tìm thấy thông tin cửa hàng.');
       }
-
-      const employees = await prisma.employee.findMany({
-        where: { userId: decoded.userId, isActive: true },
-        select: { id: true, name: true, role: true, phone: true },
-        orderBy: { name: 'asc' },
-      });
 
       return res.status(200).json({
         success: true,
         data: {
           isGeneral: true,
           merchantName: user.name || 'Cửa hàng',
-          employees: employees.map((e) => {
-            const cleanPhone = (e.phone || '').replace(/[^0-9]/g, '');
-            return {
-              id: e.id,
-              name: e.name,
-              role: e.role || 'Nhân viên',
-              hasPin: cleanPhone.length >= 4,
-            };
-          }),
+          requireAccessCode: true,
+          rulesDisabled: true,
+          employees: employees.map((e) => ({
+            id: e.id,
+            name: e.name,
+            role: e.role || 'Nhân viên',
+            hasPin: true,
+          })),
         },
       });
     } else if (decoded.type === 'EMPLOYEE_SALARY') {
-      // Tương thích ngược với link cũ của 1 nhân viên
       const employee = await prisma.employee.findUnique({
         where: { id: decoded.employeeId },
         include: { user: { select: { id: true, name: true, phone: true } } },
@@ -2511,8 +2652,8 @@ const getStaffPortalInfo = async (req, res, next) => {
         throw new NotFoundError('Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
       }
 
+      await ensureSalaryPortalCodes(employee.userId);
       const cleanPhone = (employee.phone || '').replace(/[^0-9]/g, '');
-      const hasPin = cleanPhone.length >= 4;
 
       return res.status(200).json({
         success: true,
@@ -2522,8 +2663,12 @@ const getStaffPortalInfo = async (req, res, next) => {
           employeeName: employee.name,
           role: employee.role || 'Nhân viên',
           merchantName: employee.user?.name || 'Cửa hàng',
-          hasPin,
-          pinHint: hasPin ? `Nhập 4 số cuối số điện thoại (...${cleanPhone.slice(-4)})` : null,
+          hasPin: true,
+          requireAccessCode: true,
+          rulesDisabled: true,
+          pinHint: cleanPhone.length >= 4
+            ? `Nhập mã xác thực hoặc 4 số cuối SĐT (...${cleanPhone.slice(-4)})`
+            : 'Nhập mã xác thực cá nhân do cửa hàng cấp',
         },
       });
     }
@@ -2535,13 +2680,15 @@ const getStaffPortalInfo = async (req, res, next) => {
 };
 
 // [GET] /api/v1/portal/staff/salary/:token
-// Tra cứu bảng lương của nhân viên (có xác thực PIN cá nhân)
+// Tra cứu bảng lương bằng mã xác thực:
+// - Nhập mã của nhân viên -> Trả về thông tin lương của riêng nhân viên đó (isOwnerView: false)
+// - Nhập mã của người chủ -> Trả về toàn bộ thông tin & trạng thái lương của tất cả nhân viên (isOwnerView: true)
 const getStaffPortalSalaryData = async (req, res, next) => {
   try {
     const { token } = req.params;
-    const { employeeId, monthKey, pin } = req.query;
+    const { employeeId, monthKey, pin, code } = req.query;
     const headerPin = req.headers['x-portal-pin'];
-    const clientPin = (headerPin || pin || '').toString().trim();
+    const clientPin = (headerPin || code || pin || '').toString().trim();
 
     let decoded;
     try {
@@ -2550,40 +2697,30 @@ const getStaffPortalSalaryData = async (req, res, next) => {
       throw new NotFoundError('Đường dẫn tra cứu không hợp lệ hoặc đã hết hạn.');
     }
 
-    let targetEmployeeId = employeeId;
-    if (decoded.type === 'EMPLOYEE_SALARY') {
-      targetEmployeeId = decoded.employeeId;
-    } else if (decoded.type !== 'STAFF_PORTAL') {
+    let ownerUserId = null;
+    if (decoded.type === 'STAFF_PORTAL') {
+      ownerUserId = decoded.userId;
+    } else if (decoded.type === 'EMPLOYEE_SALARY') {
+      const tokenEmp = await prisma.employee.findUnique({
+        where: { id: decoded.employeeId },
+        select: { id: true, userId: true },
+      });
+      if (!tokenEmp) {
+        throw new NotFoundError('Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
+      }
+      ownerUserId = tokenEmp.userId;
+    } else {
       throw new BadRequestError('Loại đường dẫn tra cứu không hợp lệ.');
     }
 
-    if (!targetEmployeeId) {
-      throw new BadRequestError('Vui lòng chọn nhân viên cần tra cứu.');
+    if (!clientPin) {
+      throw new ForbiddenError('Vui lòng nhập mã xác thực để kiểm tra thông tin lương.');
     }
 
-    const employee = await prisma.employee.findUnique({
-      where: { id: targetEmployeeId },
-      include: {
-        user: { select: { id: true, name: true, phone: true } },
-      },
-    });
-
-    if (!employee || !employee.isActive) {
-      throw new NotFoundError('Nhân viên không tồn tại hoặc đã ngừng hoạt động.');
-    }
-
-    // Nếu token chung, kiểm tra nhân viên phải thuộc cửa hàng của token
-    if (decoded.type === 'STAFF_PORTAL' && employee.userId !== decoded.userId) {
-      throw new ForbiddenError('Nhân viên không thuộc cửa hàng này.');
-    }
-
-    // Xác thực PIN (4 số cuối SĐT)
-    const cleanPhone = (employee.phone || '').replace(/[^0-9]/g, '');
-    if (cleanPhone.length >= 4) {
-      const correctPin = cleanPhone.slice(-4);
-      if (clientPin !== correctPin) {
-        throw new ForbiddenError('Mã PIN không chính xác. Vui lòng nhập 4 số cuối số điện thoại của bạn.');
-      }
+    // Đảm bảo mã xác thực của Chủ cơ sở và toàn bộ Nhân viên đã được khởi tạo
+    const { user, ownerCode, employees: activeEmployees } = await ensureSalaryPortalCodes(ownerUserId);
+    if (!user) {
+      throw new NotFoundError('Không tìm thấy thông tin cửa hàng.');
     }
 
     // Xác định tháng xem
@@ -2603,123 +2740,177 @@ const getStaffPortalSalaryData = async (req, res, next) => {
     const startOfMonth = new Date(year, month - 1, 1);
     const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
 
-    // 1. Ngày nghỉ trong tháng
-    const attendances = await prisma.attendance.findMany({
-      where: {
-        employeeId: employee.id,
-        date: { gte: startOfMonth, lte: endOfMonth },
-      },
-      orderBy: { date: 'asc' },
-    });
+    // ─── TRƯỜNG HỢP 1: MÃ XÁC THỰC DÀNH CHO NGƯỜI CHỦ (OWNER CODE) ───
+    if (ownerCode && clientPin === ownerCode) {
+      const empIds = activeEmployees.map((e) => e.id);
 
-    const { eligibleDays, joinedMidMonth, startDayInMonth } = getEligibleDaysForEmployee(
-      employee.startDate,
-      year,
-      month,
-      totalDaysInMonth
-    );
+      const [allAttendances, allAdvances, allPayments] = await Promise.all([
+        prisma.attendance.findMany({
+          where: {
+            employeeId: { in: empIds },
+            date: { gte: startOfMonth, lte: endOfMonth },
+          },
+          orderBy: { date: 'asc' },
+        }),
+        prisma.salaryAdvance.findMany({
+          where: {
+            employeeId: { in: empIds },
+            date: { gte: startOfMonth, lte: endOfMonth },
+          },
+          orderBy: { date: 'asc' },
+        }),
+        prisma.salaryPayment.findMany({
+          where: {
+            employeeId: { in: empIds },
+            monthKey: targetMonthKey,
+          },
+          orderBy: { paidAt: 'desc' },
+        }),
+      ]);
 
-    let leaveDays = 0;
-    attendances.forEach((att) => {
-      const attD = new Date(att.date);
-      if (attD.getDate() >= startDayInMonth) {
-        if (att.status === 'ABSENT') {
-          leaveDays += (att.shift === 'HALF' ? 0.5 : 1.0);
-        } else if (att.status === 'PRESENT' && att.shift === 'HALF') {
-          leaveDays += 0.5;
+      const employeesSalary = await Promise.all(
+        activeEmployees.map((emp) => {
+          const empAtts = allAttendances.filter((a) => a.employeeId === emp.id);
+          const empAdvs = allAdvances.filter((a) => a.employeeId === emp.id);
+          const empPays = allPayments.filter((p) => p.employeeId === emp.id);
+
+          return buildEmployeePortalSalaryDetail({
+            employee: emp,
+            year,
+            month,
+            totalDaysInMonth,
+            targetMonthKey,
+            attendances: empAtts,
+            advances: empAdvs,
+            payments: empPays,
+          });
+        })
+      );
+
+      const summary = employeesSalary.reduce(
+        (acc, item) => {
+          acc.totalEmployees += 1;
+          acc.totalBaseSalary += Number(item.salary.baseSalary) || 0;
+          acc.totalWorkingDays += Number(item.workingDays) || 0;
+          acc.totalCalculatedSalary += Number(item.salary.calculatedSalary) || 0;
+          acc.totalAdvances += Number(item.salary.totalAdvances) || 0;
+          acc.totalPaidSalary += Number(item.salary.totalPaidSalary) || 0;
+          acc.totalNetSalary += Number(item.salary.monthNetSalary) || 0;
+          acc.totalRemainingSalary += Number(item.salary.remainingSalary) || 0;
+
+          if (item.payment.isPaid) {
+            acc.paidCount += 1;
+          } else if (item.payment.isPartiallyPaid) {
+            acc.partialCount += 1;
+          } else {
+            acc.unpaidCount += 1;
+          }
+          return acc;
+        },
+        {
+          totalEmployees: 0,
+          totalBaseSalary: 0,
+          totalWorkingDays: 0,
+          totalCalculatedSalary: 0,
+          totalAdvances: 0,
+          totalPaidSalary: 0,
+          totalNetSalary: 0,
+          totalRemainingSalary: 0,
+          paidCount: 0,
+          partialCount: 0,
+          unpaidCount: 0,
         }
-      }
-    });
+      );
 
-    const workingDays = Math.max(0, eligibleDays - leaveDays);
+      return res.status(200).json({
+        success: true,
+        data: {
+          isOwnerView: true,
+          merchantName: user.name || 'Cửa hàng',
+          ownerCode,
+          monthKey: targetMonthKey,
+          totalDaysInMonth,
+          summary,
+          employeesSalary,
+        },
+      });
+    }
 
-    // 2. Lương 1 ngày và tổng lương sau khi trừ ngày nghỉ
-    const baseSalary = parseFloat(employee.baseSalary);
-    const dailySalary = Math.round(baseSalary / totalDaysInMonth);
-    const leaveDeduction = Math.round(leaveDays * dailySalary);
-    let calculatedSalary = 0;
-    if (eligibleDays > 0) {
-      if (joinedMidMonth) {
-        calculatedSalary = Math.round(dailySalary * workingDays);
-      } else {
-        calculatedSalary = Math.max(0, baseSalary - leaveDeduction);
+    // ─── TRƯỜNG HỢP 2: MÃ XÁC THỰC CỦA TỪNG NHÂN VIÊN ───
+    // 1. Ưu tiên khớp trực tiếp theo accessCode riêng của nhân viên
+    let matchedEmployee = activeEmployees.find((e) => e.accessCode && e.accessCode === clientPin);
+
+    // 2. Hỗ trợ tương thích ngược: Nếu truyền employeeId (hoặc link riêng EMPLOYEE_SALARY) và nhập 4 số cuối SĐT
+    if (!matchedEmployee) {
+      const fallbackEmpId = employeeId || (decoded.type === 'EMPLOYEE_SALARY' ? decoded.employeeId : null);
+      if (fallbackEmpId) {
+        const candidate = activeEmployees.find((e) => e.id === fallbackEmpId);
+        if (candidate) {
+          const cleanPhone = (candidate.phone || '').replace(/[^0-9]/g, '');
+          const phoneLast4 = cleanPhone.length >= 4 ? cleanPhone.slice(-4) : null;
+          if ((candidate.accessCode && clientPin === candidate.accessCode) || (phoneLast4 && clientPin === phoneLast4)) {
+            matchedEmployee = candidate;
+          }
+        }
       }
     }
 
-    // 3. Tạm ứng trong tháng
-    const advances = await prisma.salaryAdvance.findMany({
-      where: {
-        employeeId: employee.id,
-        date: { gte: startOfMonth, lte: endOfMonth },
-      },
-      orderBy: { date: 'asc' },
+    // 3. Nếu không truyền employeeId nhưng nhân viên nhập 4 số cuối SĐT duy nhất trong cửa hàng
+    if (!matchedEmployee) {
+      const phoneMatches = activeEmployees.filter((e) => {
+        const cleanPhone = (e.phone || '').replace(/[^0-9]/g, '');
+        return cleanPhone.length >= 4 && cleanPhone.slice(-4) === clientPin;
+      });
+      if (phoneMatches.length === 1) {
+        matchedEmployee = phoneMatches[0];
+      }
+    }
+
+    if (!matchedEmployee) {
+      throw new ForbiddenError('Mã xác thực không chính xác. Vui lòng kiểm tra lại mã được cấp.');
+    }
+
+    const [attendances, advances, payments] = await Promise.all([
+      prisma.attendance.findMany({
+        where: {
+          employeeId: matchedEmployee.id,
+          date: { gte: startOfMonth, lte: endOfMonth },
+        },
+        orderBy: { date: 'asc' },
+      }),
+      prisma.salaryAdvance.findMany({
+        where: {
+          employeeId: matchedEmployee.id,
+          date: { gte: startOfMonth, lte: endOfMonth },
+        },
+        orderBy: { date: 'asc' },
+      }),
+      prisma.salaryPayment.findMany({
+        where: {
+          employeeId: matchedEmployee.id,
+          monthKey: targetMonthKey,
+        },
+        orderBy: { paidAt: 'desc' },
+      }),
+    ]);
+
+    const detail = await buildEmployeePortalSalaryDetail({
+      employee: matchedEmployee,
+      year,
+      month,
+      totalDaysInMonth,
+      targetMonthKey,
+      attendances,
+      advances,
+      payments,
     });
-    const totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
 
-    // 4. Lương thực lĩnh
-    const finalAmount = Math.max(0, calculatedSalary - totalAdvances);
-
-    // 5. Kiểm tra chốt lương
-    const payment = await prisma.salaryPayment.findFirst({
-      where: {
-        employeeId: employee.id,
-        monthKey: targetMonthKey,
-      },
-    });
-
-    const leaves = attendances
-      .filter((att) => {
-        const attD = new Date(att.date);
-        return attD.getDate() >= startDayInMonth && (att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'));
-      })
-      .map((att) => ({
-        id: att.id,
-        date: att.date.toISOString().split('T')[0],
-        status: att.status,
-        shift: att.shift,
-        note: att.note || '',
-      }));
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: {
-        employee: {
-          id: employee.id,
-          name: employee.name,
-          phone: employee.phone,
-          role: employee.role,
-        },
-        merchantName: employee.user?.name || 'Cửa hàng',
-        monthKey: targetMonthKey,
-        totalDaysInMonth,
-        workingDays,
-        stats: {
-          leaveDays,
-          leaveDeduction,
-          totalAdvances,
-        },
-        salary: {
-          baseSalary,
-          dailySalary,
-          calculatedSalary,
-          totalAdvances,
-          finalAmount,
-        },
-        payment: payment
-          ? {
-              isPaid: true,
-              paidAt: payment.paidAt,
-              finalAmount: parseFloat(payment.finalAmount),
-              note: payment.note,
-            }
-          : { isPaid: false },
-        advances: advances.map((adv) => ({
-          id: adv.id,
-          date: adv.date.toISOString().split('T')[0],
-          amount: parseFloat(adv.amount),
-          note: adv.note || '',
-        })),
-        leaves,
+        isOwnerView: false,
+        merchantName: user.name || 'Cửa hàng',
+        ...detail,
       },
     });
   } catch (err) {

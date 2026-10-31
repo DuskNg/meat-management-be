@@ -165,6 +165,86 @@ const calculateCarryOver = async (employeeId, baseSalary, targetMonthKey, empSta
   return carryOver;
 };
 
+// Helper sinh mã xác thực 4 chữ số ngẫu nhiên không trùng lặp
+const generateUnique4DigitCode = (usedCodesSet = new Set()) => {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const code = Math.floor(1000 + Math.random() * 9000).toString();
+    if (!usedCodesSet.has(code)) {
+      usedCodesSet.add(code);
+      return code;
+    }
+  }
+  const fallback = Math.floor(100000 + Math.random() * 900000).toString();
+  usedCodesSet.add(fallback);
+  return fallback;
+};
+
+// Helper đảm bảo Chủ cơ sở và toàn bộ Nhân viên đang hoạt động đều có mã xác thực riêng biệt
+const ensureSalaryPortalCodes = async (userId) => {
+  if (!userId) return { user: null, ownerCode: null, employees: [] };
+
+  const [user, employees] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, phone: true, salaryPortalOwnerCode: true },
+    }),
+    prisma.employee.findMany({
+      where: { userId, isActive: true },
+      orderBy: { name: 'asc' },
+    }),
+  ]);
+
+  if (!user) return { user: null, ownerCode: null, employees: [] };
+
+  const usedCodes = new Set();
+  if (user.salaryPortalOwnerCode && user.salaryPortalOwnerCode.trim()) {
+    usedCodes.add(user.salaryPortalOwnerCode.trim());
+  }
+  employees.forEach((emp) => {
+    if (emp.accessCode && emp.accessCode.trim()) {
+      usedCodes.add(emp.accessCode.trim());
+    }
+    const cleanPhone = (emp.phone || '').replace(/[^0-9]/g, '');
+    if (cleanPhone.length >= 4) {
+      usedCodes.add(cleanPhone.slice(-4));
+    }
+  });
+
+  let ownerCode = user.salaryPortalOwnerCode ? user.salaryPortalOwnerCode.trim() : null;
+  if (!ownerCode) {
+    ownerCode = generateUnique4DigitCode(usedCodes);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { salaryPortalOwnerCode: ownerCode },
+    });
+  }
+
+  const seenCodes = new Set([ownerCode]);
+  const updatedEmployees = [];
+
+  for (const emp of employees) {
+    let empCode = emp.accessCode ? emp.accessCode.trim() : null;
+    if (!empCode || seenCodes.has(empCode)) {
+      empCode = generateUnique4DigitCode(usedCodes);
+      await prisma.employee.update({
+        where: { id: emp.id },
+        data: { accessCode: empCode },
+      });
+    }
+    seenCodes.add(empCode);
+    updatedEmployees.push({
+      ...emp,
+      accessCode: empCode,
+    });
+  }
+
+  return {
+    user,
+    ownerCode,
+    employees: updatedEmployees,
+  };
+};
+
 // 1. Lấy toàn bộ danh sách nhân viên (hỗ trợ tính toán tạm ứng, ngày nghỉ và trạng thái trả lương theo tháng)
 const getEmployees = async (req, res, next) => {
   try {
@@ -187,6 +267,9 @@ const getEmployees = async (req, res, next) => {
       startOfMonth = new Date(year, month - 1, 1);
       endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
     }
+
+    // Đảm bảo toàn bộ nhân viên và chủ cơ sở đã được phát hành mã xác thực
+    await ensureSalaryPortalCodes(userId);
 
     const employees = await prisma.employee.findMany({
       where: {
@@ -425,6 +508,14 @@ const createEmployee = async (req, res, next) => {
       }
     }
 
+    const { ownerCode, employees: existingEmps } = await ensureSalaryPortalCodes(userId);
+    const usedSet = new Set();
+    if (ownerCode) usedSet.add(ownerCode);
+    existingEmps.forEach((e) => {
+      if (e.accessCode) usedSet.add(e.accessCode);
+    });
+    const newAccessCode = generateUnique4DigitCode(usedSet);
+
     const employee = await prisma.employee.create({
       data: {
         userId,
@@ -434,6 +525,7 @@ const createEmployee = async (req, res, next) => {
         role: role ? role.trim() : null,
         baseSalary: parseFloat(baseSalary),
         startDate: parsedStartDate,
+        accessCode: newAccessCode,
       },
     });
 
@@ -1338,8 +1430,12 @@ const getEmployeeShareLink = async (req, res, next) => {
       { expiresIn: '365d' }
     );
 
+    const { ownerCode, employees: allEmps } = await ensureSalaryPortalCodes(userId);
+    const matchedEmp = allEmps.find((e) => e.id === employee.id);
+    const accessCode = matchedEmp?.accessCode || employee.accessCode;
+
     const cleanPhone = (employee.phone || '').replace(/[^0-9]/g, '');
-    const suggestedPin = cleanPhone.length >= 4 ? cleanPhone.slice(-4) : null;
+    const suggestedPin = cleanPhone.length >= 4 ? cleanPhone.slice(-4) : accessCode;
 
     res.status(200).json({
       success: true,
@@ -1349,6 +1445,8 @@ const getEmployeeShareLink = async (req, res, next) => {
         name: employee.name,
         phone: employee.phone,
         role: employee.role,
+        accessCode,
+        ownerCode,
         suggestedPin,
         merchantName: employee.user?.name || 'Cửa hàng',
       },
@@ -1464,23 +1562,16 @@ const deleteLeave = async (req, res, next) => {
   }
 };
 
-// 14. Tạo đường dẫn chung cho toàn bộ nhân sự (tra cứu lương cá nhân & xem nội quy quy định cửa hàng)
+// 14. Tạo đường dẫn chung cho toàn bộ nhân sự (kèm mã xác thực riêng cho từng nhân viên & mã Chủ cơ sở)
 const getGeneralEmployeeShareLink = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, name: true, phone: true },
-    });
+    const { user, ownerCode, employees } = await ensureSalaryPortalCodes(userId);
 
     if (!user) {
       throw new NotFoundError('Không tìm thấy thông tin cửa hàng.');
     }
-
-    const totalEmployees = await prisma.employee.count({
-      where: { userId, isActive: true },
-    });
 
     // Tạo token chung cho cửa hàng/chủ buôn
     const token = jwt.sign(
@@ -1497,7 +1588,87 @@ const getGeneralEmployeeShareLink = async (req, res, next) => {
       data: {
         token,
         merchantName: user.name || 'Cửa hàng',
-        totalEmployees,
+        totalEmployees: employees.length,
+        ownerCode,
+        employees: employees.map((e) => ({
+          id: e.id,
+          name: e.name,
+          role: e.role || 'Nhân viên',
+          phone: e.phone,
+          accessCode: e.accessCode,
+        })),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 15. Cấp lại hoặc cập nhật mã xác thực tra cứu lương (cho Chủ cơ sở hoặc cho từng Nhân viên)
+const regenerateSalaryAccessCode = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { targetType = 'EMPLOYEE', employeeId, customCode } = req.body;
+
+    const { ownerCode: currentOwnerCode, employees } = await ensureSalaryPortalCodes(userId);
+    const usedCodes = new Set();
+    if (currentOwnerCode) usedCodes.add(currentOwnerCode);
+    employees.forEach((e) => {
+      if (e.accessCode) usedCodes.add(e.accessCode);
+    });
+
+    const cleanCustom = customCode ? customCode.toString().trim() : '';
+    if (cleanCustom) {
+      if (cleanCustom.length < 4 || cleanCustom.length > 10) {
+        throw new BadRequestError('Mã xác thực phải có từ 4 đến 10 ký tự.');
+      }
+      const isDuplicateOwner = targetType !== 'OWNER' && cleanCustom === currentOwnerCode;
+      const isDuplicateEmp = employees.some(
+        (e) => e.accessCode === cleanCustom && (targetType === 'OWNER' || e.id !== employeeId)
+      );
+      if (isDuplicateOwner || isDuplicateEmp) {
+        throw new BadRequestError('Mã xác thực này đã được sử dụng cho người khác. Vui lòng chọn mã khác.');
+      }
+    }
+
+    const newCode = cleanCustom || generateUnique4DigitCode(usedCodes);
+
+    if (targetType === 'OWNER') {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { salaryPortalOwnerCode: newCode },
+      });
+    } else {
+      if (!employeeId) {
+        throw new BadRequestError('Vui lòng chọn nhân viên cần cấp lại mã.');
+      }
+      const targetEmp = employees.find((e) => e.id === employeeId);
+      if (!targetEmp) {
+        throw new NotFoundError('Không tìm thấy nhân viên.');
+      }
+      await prisma.employee.update({
+        where: { id: employeeId },
+        data: { accessCode: newCode },
+      });
+    }
+
+    const updatedData = await ensureSalaryPortalCodes(userId);
+
+    res.status(200).json({
+      success: true,
+      message: targetType === 'OWNER'
+        ? `Đã đổi mã xác thực của Chủ cơ sở thành: ${newCode}`
+        : `Đã cấp mã xác thực mới: ${newCode}`,
+      data: {
+        newCode,
+        ownerCode: updatedData.ownerCode,
+        employees: updatedData.employees.map((e) => ({
+          id: e.id,
+          name: e.name,
+          role: e.role || 'Nhân viên',
+          phone: e.phone,
+          accessCode: e.accessCode,
+        })),
       },
     });
   } catch (error) {
@@ -1507,6 +1678,8 @@ const getGeneralEmployeeShareLink = async (req, res, next) => {
 
 module.exports = {
   getEligibleDaysForEmployee,
+  calculateCarryOver,
+  ensureSalaryPortalCodes,
   getEmployees,
   createEmployee,
   updateEmployee,
@@ -1522,4 +1695,5 @@ module.exports = {
   getEmployeeHistory,
   getEmployeeShareLink,
   getGeneralEmployeeShareLink,
+  regenerateSalaryAccessCode,
 };
