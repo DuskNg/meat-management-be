@@ -358,6 +358,7 @@ const getEmployees = async (req, res, next) => {
 
       return {
         ...rest,
+        baseSalary,
         advances: formattedAdvances,
         totalAdvances,
         totalPaidSalary,
