@@ -451,13 +451,33 @@ const getEmployees = async (req, res, next) => {
         note: adv.note || null,
       }));
 
-      // Loại bỏ attendances và payments, giữ lại danh sách advances để tách từng lần ứng
+      // Chuẩn hóa danh sách chi tiết các ngày nghỉ trong tháng
+      const formattedLeaves = (emp.attendances || [])
+        .filter((att) => {
+          const attD = new Date(att.date);
+          const attDay = attD.getDate();
+          return (
+            attDay >= startDayInMonth &&
+            (att.status === 'ABSENT' || (att.status === 'PRESENT' && att.shift === 'HALF'))
+          );
+        })
+        .map((att) => ({
+          id: att.id,
+          date: att.date,
+          status: att.status,
+          shift: att.shift,
+          note: att.note || null,
+        }))
+        .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      // Loại bỏ attendances và payments, giữ lại danh sách advances và leaves để tách từng lần ứng và ngày nghỉ
       const { attendances, payments, ...rest } = emp;
 
       return {
         ...rest,
         baseSalary,
         advances: formattedAdvances,
+        leaves: formattedLeaves,
         totalAdvances,
         totalPaidSalary,
         monthNetSalary,
