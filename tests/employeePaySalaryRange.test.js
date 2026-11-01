@@ -233,5 +233,44 @@ describe('Luồng Nghiệp Vụ: Xem Trước & Chi Trả Lương Theo Khoảng 
     await prisma.salaryPayment.deleteMany({ where: { employeeId: emp3.id } });
     await prisma.employee.delete({ where: { id: emp3.id } });
   });
+
+  it('7. POST /api/v1/employees/leave: Chấp nhận cả định dạng ngày DD/MM/YYYY lẫn YYYY-MM-DD, không bị lỗi máy chủ 500', async () => {
+    // Ghi nhận xin nghỉ ngày 31/10/2026 dạng DD/MM/YYYY
+    const res1 = await request(app)
+      .post('/api/v1/employees/leave')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        employeeId: testEmployee.id,
+        date: '31/10/2026',
+        shift: 'FULL',
+        note: 'Nghỉ việc gia đình cuối tháng (DD/MM/YYYY)',
+      });
+
+    expect(res1.status).toBe(200);
+    expect(res1.body.success).toBe(true);
+    expect(res1.body.data).toBeDefined();
+
+    // Ghi nhận xin nghỉ ngày 30/10/2026 dạng YYYY-MM-DD (nửa ngày)
+    const res2 = await request(app)
+      .post('/api/v1/employees/leave')
+      .set('Authorization', `Bearer ${testToken}`)
+      .send({
+        employeeId: testEmployee.id,
+        date: '2026-10-30',
+        shift: 'HALF',
+        note: 'Nghỉ nửa buổi (YYYY-MM-DD)',
+      });
+
+    expect(res2.status).toBe(200);
+    expect(res2.body.success).toBe(true);
+    expect(res2.body.data.shift).toBe('HALF');
+
+    // Hủy ngày nghỉ
+    const delRes = await request(app)
+      .delete(`/api/v1/employees/leave/${res1.body.data.id}`)
+      .set('Authorization', `Bearer ${testToken}`);
+    expect(delRes.status).toBe(200);
+    expect(delRes.body.success).toBe(true);
+  });
 });
 

@@ -24,17 +24,32 @@ const parseMonthKey = (monthKey) => {
 // Helper parse chuỗi ngày linh hoạt (hỗ trợ cả DD/MM/YYYY lẫn YYYY-MM-DD)
 const parseFlexibleDate = (dateStr) => {
   if (!dateStr) return null;
-  if (dateStr instanceof Date) return dateStr;
-  if (typeof dateStr === 'string' && dateStr.includes('/')) {
-    const parts = dateStr.split('/');
-    if (parts.length === 3) {
-      const d = parseInt(parts[0], 10);
-      const m = parseInt(parts[1], 10);
-      const y = parseInt(parts[2], 10);
-      return new Date(y, m - 1, d);
+  if (dateStr instanceof Date) return isNaN(dateStr.getTime()) ? null : dateStr;
+  if (typeof dateStr === 'string') {
+    const trimmed = dateStr.trim();
+    if (trimmed.includes('/')) {
+      const parts = trimmed.split('/');
+      if (parts.length === 3) {
+        const d = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const y = parseInt(parts[2], 10);
+        const parsed = new Date(y, m - 1, d);
+        return isNaN(parsed.getTime()) ? null : parsed;
+      }
+    }
+    if (trimmed.includes('-')) {
+      const parts = trimmed.split('-');
+      if (parts.length === 3) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const d = parseInt(parts[2], 10);
+        const parsed = new Date(y, m - 1, d);
+        return isNaN(parsed.getTime()) ? null : parsed;
+      }
     }
   }
-  return new Date(dateStr);
+  const parsed = new Date(dateStr);
+  return isNaN(parsed.getTime()) ? null : parsed;
 };
 
 // Helper tính số ngày công hợp lệ trong tháng dựa vào ngày bắt đầu vào làm (startDate)
@@ -642,9 +657,14 @@ const getAttendances = async (req, res, next) => {
       throw new BadRequestError('date là tham số bắt buộc.');
     }
 
-    const startOfDay = new Date(date);
+    const targetDate = parseFlexibleDate(date);
+    if (!targetDate || isNaN(targetDate.getTime())) {
+      throw new BadRequestError('Định dạng ngày không hợp lệ.');
+    }
+
+    const startOfDay = new Date(targetDate);
     startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(date);
+    const endOfDay = new Date(targetDate);
     endOfDay.setHours(23, 59, 59, 999);
 
     // Lấy tất cả nhân viên của chủ sạp
@@ -700,7 +720,10 @@ const saveAttendance = async (req, res, next) => {
       throw new BadRequestError('Tham số date và list là bắt buộc.');
     }
 
-    const targetDate = new Date(date);
+    const targetDate = parseFlexibleDate(date);
+    if (!targetDate || isNaN(targetDate.getTime())) {
+      throw new BadRequestError('Định dạng ngày chấm công không hợp lệ.');
+    }
     targetDate.setHours(0, 0, 0, 0);
 
     // Lưu từng dòng chấm công
@@ -783,7 +806,10 @@ const createSalaryAdvance = async (req, res, next) => {
     }
 
     // 1. Xác định thời gian đầu tháng và cuối tháng của ngày tạm ứng
-    const targetDate = date ? new Date(date) : new Date();
+    const targetDate = date ? parseFlexibleDate(date) : new Date();
+    if (!targetDate || isNaN(targetDate.getTime())) {
+      throw new BadRequestError('Định dạng ngày tạm ứng không hợp lệ.');
+    }
     const year = targetDate.getFullYear();
     const month = targetDate.getMonth();
     const startOfMonth = new Date(year, month, 1);
@@ -1474,7 +1500,10 @@ const recordLeave = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy nhân viên.');
     }
 
-    const targetDate = new Date(date);
+    const targetDate = parseFlexibleDate(date);
+    if (!targetDate || isNaN(targetDate.getTime())) {
+      throw new BadRequestError('Định dạng ngày xin nghỉ không hợp lệ.');
+    }
     targetDate.setHours(0, 0, 0, 0);
 
     const existing = await prisma.attendance.findFirst({
