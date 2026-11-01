@@ -868,6 +868,11 @@ const getBranchesDebtByMonth = async (req, res, next) => {
       where: { token },
       include: {
         customers: {
+          where: {
+            customer: {
+              isActive: true,
+            },
+          },
           include: { customer: true }
         }
       }
@@ -1694,6 +1699,11 @@ const submitDeliveryRequest = async (req, res, next) => {
       where: { token },
       include: {
         customers: {
+          where: {
+            customer: {
+              isActive: true,
+            },
+          },
           include: { customer: true }
         }
       }
@@ -3150,6 +3160,11 @@ const getPortalDebtActionBootstrap = async (req, res, next) => {
       where: { token },
       include: {
         customers: {
+          where: {
+            customer: {
+              isActive: true,
+            },
+          },
           include: {
             customer: true
           }
