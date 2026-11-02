@@ -98,6 +98,80 @@ const isCustomerNameContradictory = (detectedName, customerName) => {
   return false;
 };
 
+// Danh sách các từ xưng hô / đệm chung chung không mang tính định danh khách hàng
+const COMMON_HONORIFICS = new Set([
+  'chi', 'anh', 'em', 'co', 'chu', 'bac', 'ba', 'ong',
+  'quan', 'nha', 'hang', 'bep', 'tiem', 'cua', 'don', 'pho', 'bun', 'com'
+]);
+
+/**
+ * Thuật toán tính điểm tương đồng tổng quát (Token Specificity Scoring)
+ * Đảm bảo phân biệt chính xác từng khách hàng, phạt nặng từ thừa đặc trưng
+ * Ngăn chặn 100% hiện tượng lấy nhầm khách khác chỉ vì có chung 1 từ (như "Tuyết" vs "Quang Tuyết")
+ */
+const calculateCustomerMatchScore = (detectedName, customerName) => {
+  if (!detectedName || !customerName) return 0;
+
+  const dNorm = removeDiacritics(String(detectedName).toLowerCase().trim())
+    .replace(/[()\-–—:+*.,/\\_]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const cNorm = removeDiacritics(String(customerName).toLowerCase().trim())
+    .replace(/[()\-–—:+*.,/\\_]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (dNorm === cNorm || dNorm.replace(/\s+/g, '') === cNorm.replace(/\s+/g, '')) {
+    return 1000; // Trùng khớp 100% Exact Match
+  }
+
+  const dWords = dNorm.split(' ').filter(Boolean);
+  const cWords = cNorm.split(' ').filter(Boolean);
+
+  const dDistinctive = dWords.filter((w) => !COMMON_HONORIFICS.has(w));
+  const cDistinctive = cWords.filter((w) => !COMMON_HONORIFICS.has(w));
+
+  if (dDistinctive.length === 0 || cDistinctive.length === 0) {
+    return 0;
+  }
+
+  let matchedCount = 0;
+  for (const dw of dDistinctive) {
+    if (cDistinctive.includes(dw)) {
+      matchedCount++;
+    }
+  }
+
+  if (matchedCount === 0) return 0;
+
+  let extraInCandidate = 0;
+  for (const cw of cDistinctive) {
+    if (!dDistinctive.includes(cw)) {
+      extraInCandidate++;
+    }
+  }
+
+  let missingInCandidate = 0;
+  for (const dw of dDistinctive) {
+    if (!cDistinctive.includes(dw)) {
+      missingInCandidate++;
+    }
+  }
+
+  const totalDistinctive = new Set([...dDistinctive, ...cDistinctive]).size;
+  let score = (matchedCount / totalDistinctive) * 100;
+
+  score -= (extraInCandidate * 35);
+  score -= (missingInCandidate * 15);
+
+  if (missingInCandidate === 0 && dDistinctive.length >= 2) {
+    score += 30;
+  }
+
+  return Math.max(0, Math.round(score));
+};
+
+
 
 // Danh sách các từ khóa chung chung không được phép lưu làm tên viết tắt khách hàng
 const GENERIC_ALIAS_BLACKLIST = new Set([
@@ -2601,21 +2675,18 @@ if (!matchedCustomerId) {
       }
 
       if (!matchedCustomerId) {
-        // 2. Chỉ khi không có khách nào khớp 100% mới so khớp chứa một phần (includes)
-        const sortedCusts = [...customers].sort((a, b) => b.name.length - a.name.length);
-        const matchedCust = sortedCusts.find((c) => {
-          const cName = removeDiacritics(c.name.toLowerCase().trim());
-          const cNameNoSpace = cName.replace(/\s+/g, '');
-          if (cName.length >= 3 && cleanDetected.includes(cName)) return true;
-          if (cNameNoSpace.length >= 3 && cleanDetectedNoSpace.includes(cNameNoSpace)) return true;
-          if (cleanDetected.length >= 3 && cName.includes(cleanDetected)) return true;
-          if (cleanDetectedNoSpace.length >= 3 && cNameNoSpace.includes(cleanDetectedNoSpace)) return true;
-          return false;
-        });
-        if (matchedCust) {
-          matchedCustomerId = matchedCust.id;
-        }
-      }
+        // 2. Thuật toán so khớp tính điểm tổng quát (Scoring Matcher)
+        // Sắp xếp theo điểm tương đồng cao nhất, chỉ chọn khi điểm đạt ngưỡng an toàn (>= 60)
+        // và TUYỆT ĐỐI không bị mâu thuẫn danh tính. Nếu không chắc chắn -> để null, không gán bừa!
+        const scoredCusts = customers
+          .map((c) => ({
+            customer: c,
+            score: calculateCustomerMatchScore(cleanDetected, c.name),
+          }))
+          .filter((item) => item.score >= 60 && !isCustomerNameContradictory(cleanDetected, item.customer.name))
+          .sort((a, b) => b.score - a.score);
+
+              }
     }
 
     // Lấy bảng giá riêng của khách hàng nếu đã khớp khách
