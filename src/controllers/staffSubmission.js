@@ -1349,9 +1349,9 @@ const approveStaffSubmission = async (req, res, next) => {
     // Tự động dạy AI nhớ cặp từ khóa chữ viết tay khách hàng (detectedCustomerName => finalCustomerId) vĩnh viễn cho các lần sau
     if (!isSupplierTarget && finalCustomerId && submission.detectedCustomerName) {
       const learnedInfo = await learnCustomerAiAlias(userId, submission.detectedCustomerName, finalCustomerId, id);
-      if (learnedInfo) {
+      if (learnedInfo && learnedInfo.alias) {
         result.learnedAlias = {
-          rawAlias: learnedInfo.alias.rawAlias,
+          rawAlias: learnedInfo.alias?.rawAlias || '',
           customerId: learnedInfo.customer.id,
           customerName: learnedInfo.customer.name,
           autoUpdatedIds: learnedInfo.autoUpdatedIds || [],
@@ -1385,9 +1385,9 @@ const approveStaffSubmission = async (req, res, next) => {
 
         for (const rawCand of rawCandidates) {
           const learnedProdInfo = await learnProductAiAlias(userId, rawCand, targetProdId, id);
-          if (learnedProdInfo) {
+          if (learnedProdInfo && learnedProdInfo.alias) {
             learnedProducts.push({
-              rawAlias: learnedProdInfo.alias.rawAlias,
+              rawAlias: learnedProdInfo.alias?.rawAlias || '',
               productId: learnedProdInfo.product.id,
               productName: learnedProdInfo.product.name,
               autoUpdatedSubmissionIds: learnedProdInfo.autoUpdatedSubmissionIds || [],

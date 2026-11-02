@@ -963,6 +963,7 @@ const parseStaffSubmission = async (submissionId) => {
     const customerMapById = new Map(customers.map((c) => [c.id, c]));
     const learnedAliasesPromptList = (customerAiAliases || [])
       .map((a) => {
+        if (!a || !a.rawAlias) return null;
         const cust = customerMapById.get(a.customerId);
         if (!cust) return null;
         return `"${a.rawAlias}" => "${cust.name}"`;
@@ -973,6 +974,7 @@ const parseStaffSubmission = async (submissionId) => {
     const productMapById = new Map(products.map((p) => [p.id, p]));
     const learnedProductAliasesPromptList = (productAiAliases || [])
       .map((a) => {
+        if (!a || !a.rawAlias) return null;
         const prod = productMapById.get(a.productId);
         if (!prod) return null;
         return `"${a.rawAlias}" => "${prod.name}"`;
@@ -1395,8 +1397,8 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
       const learnedMatch = matchCustomerFromAiAliases(customerNameToMatch, customerAiAliases, customers);
       if (learnedMatch && learnedMatch.customer) {
         matchedCustomerId = learnedMatch.customer.id;
-        parsedJson.matched_by_ai_alias = true;
-        parsedJson.learned_alias = learnedMatch.alias.rawAlias;
+        parsedJson.matched_by_ai_alias = Boolean(learnedMatch.alias);
+        if (learnedMatch?.alias?.rawAlias) parsedJson.learned_alias = learnedMatch.alias.rawAlias; // Nhánh khớp chính xác tên khách thật trả về alias = null
       }
 
       // 0a. ĐẶC BIỆT: Khớp ưu tiên khách "Bếp trung kính" nếu AI nhận diện là "Trung kính", "trung kh", "tuy kh", "trungkinh"...
