@@ -71,10 +71,20 @@ const isCustomerNameContradictory = (detectedName, customerName) => {
   const isC126 = cClean.includes('126') || cClean.includes('khanh toan');
   if (isD126 && !isC126) return true;
 
-  // 10. Giảng võ
+    // 10. Giảng võ
   const isDGiangVo = dClean.includes('giang vo');
   const isCGiangVo = cClean.includes('giang vo');
   if (isDGiangVo && !isCGiangVo) return true;
+
+  // 11. Na sườn lẩu / Na sườn
+  const isDNaSuon = dClean.includes('na suon') || dNoSpace.includes('nasuon');
+  const isCNaSuon = cClean.includes('na suon') || cNoSpace.includes('nasuon');
+  if (isDNaSuon && !isCNaSuon) return true;
+
+  // 12. Hà trì
+  const isDHaTri = (dClean === 'ha tri' || dClean.includes('ha tri')) && !dClean.includes('san bong');
+  const isCHaTri = (cClean === 'ha tri' || cClean.includes('ha tri')) && !cClean.includes('san bong');
+  if (isDHaTri && !isCHaTri) return true;
 
   return false;
 };
@@ -145,6 +155,17 @@ const matchCustomerFromAiAliases = (rawDetectedName, aliases, customers) => {
   const norm = normalizeCustomerAliasText(rawDetectedName);
   if (!norm) return null;
 
+  // 0. BẮT BUỘC ƯU TIÊN SỐ 1: Nếu rawDetectedName khớp chính xác 100% với một khách hàng có thật trong DB,
+  // tuyệt đối lấy ngay khách đó, không cho bất kỳ alias lệch nào đè lên!
+  const exactCustomer = customers.find((c) => {
+    const cClean = removeDiacritics(c.name.toLowerCase().trim());
+    const cNoSpace = cClean.replace(/\s+/g, '');
+    return cClean === norm.normalizedAlias || cNoSpace === norm.compactAlias;
+  });
+  if (exactCustomer) {
+    return { customer: exactCustomer, alias: null, isExactMatch: true };
+  }
+
   // 1. Ưu tiên khớp chính xác 100% theo normalizedAlias hoặc compactAlias
   const exactAlias = aliases.find(
     (a) => a.normalizedAlias === norm.normalizedAlias || (a.compactAlias && a.compactAlias === norm.compactAlias)
@@ -194,6 +215,24 @@ const learnCustomerAiAlias = async (userId, rawDetectedName, customerId, exclude
     });
     if (!customer) return null;
     if (isCustomerNameContradictory(rawDetectedName, customer.name)) return null;
+
+    // CHẶN TUYỆT ĐỐI ĐẦU ĐỘC TỪ ĐIỂN: Nếu tên chữ viết tay (rawDetectedName) trùng khớp 100% với tên của một khách hàng có thật khác trong DB
+    // (ví dụ: bóc tách ra "Na sườn lẩu" nhưng người dùng bấm nhầm "Hà trì"),
+    // TUYỆT ĐỐI không được phép lưu vào bảng CustomerAiAlias vì sẽ làm hỏng dữ liệu của khách hàng thật đó!
+    const allUserCustomers = await prisma.customer.findMany({
+      where: { userId, isActive: true },
+      select: { id: true, name: true }
+    });
+    const exactOther = allUserCustomers.find((c) => {
+      if (c.id === customer.id) return false;
+      const cClean = removeDiacritics(c.name.toLowerCase().trim());
+      const cNoSpace = cClean.replace(/\s+/g, '');
+      return cClean === norm.normalizedAlias || cNoSpace === norm.compactAlias;
+    });
+    if (exactOther) {
+      console.warn(`[AI LEARN BLOCKED] Chặn không lưu alias '${rawDetectedName}' -> '${customer.name}' vì trùng khớp 100% với khách hàng thật '${exactOther.name}'!`);
+      return null;
+    }
 
     const savedAlias = await prisma.customerAiAlias.upsert({
       where: {
