@@ -86,6 +86,15 @@ const isCustomerNameContradictory = (detectedName, customerName) => {
   const isCHaTri = (cClean === 'ha tri' || cClean.includes('ha tri')) && !cClean.includes('san bong');
   if (isDHaTri && !isCHaTri) return true;
 
+  // 13. Phân biệt rõ "Chị Quang Tuyết" và "Chị tuyết(toan nga thái dũng)..."
+  const isDQuangTuyet = dClean.includes('quang tuyet') || (dClean.includes('quang') && dClean.includes('tuyet')) || dNoSpace.includes('quangtuyet');
+  const isCQuangTuyet = cClean.includes('quang tuyet') || (cClean.includes('quang') && cClean.includes('tuyet')) || cNoSpace.includes('quangtuyet');
+  if (isDQuangTuyet !== isCQuangTuyet) return true;
+
+  const isDToanNga = dClean.includes('toan nga') || dClean.includes('thai dung') || dNoSpace.includes('toannga') || dNoSpace.includes('thaidung');
+  const isCToanNga = cClean.includes('toan nga') || cClean.includes('thai dung') || cNoSpace.includes('toannga') || cNoSpace.includes('thaidung');
+  if (isDToanNga && !isCToanNga) return true;
+
   return false;
 };
 
@@ -158,9 +167,9 @@ const matchCustomerFromAiAliases = (rawDetectedName, aliases, customers) => {
   // 0. BẮT BUỘC ƯU TIÊN SỐ 1: Nếu rawDetectedName khớp chính xác 100% với một khách hàng có thật trong DB,
   // tuyệt đối lấy ngay khách đó, không cho bất kỳ alias lệch nào đè lên!
   const exactCustomer = customers.find((c) => {
-    const cClean = removeDiacritics(c.name.toLowerCase().trim());
-    const cNoSpace = cClean.replace(/\s+/g, '');
-    return cClean === norm.normalizedAlias || cNoSpace === norm.compactAlias;
+    const cNorm = normalizeCustomerAliasText(c.name);
+    if (!cNorm) return false;
+    return cNorm.normalizedAlias === norm.normalizedAlias || cNorm.compactAlias === norm.compactAlias;
   });
   if (exactCustomer) {
     return { customer: exactCustomer, alias: null, isExactMatch: true };
@@ -1789,10 +1798,22 @@ if (!matchedCustomerId) {
       if (!matchedCustomerId) {
         // Khớp ưu tiên khách Tuyết nếu AI nhận diện có chứa chữ "tuyet"
         if (cleanDetected.includes('tuyet') || cleanDetectedNoSpace.includes('tuyet')) {
-          const tuyetCust = customers.find((c) => {
-            const cClean = removeDiacritics(c.name.toLowerCase());
-            return cClean.includes('tuyet');
-          });
+          const isQuang = cleanDetected.includes('quang') || cleanDetectedNoSpace.includes('quang');
+          let tuyetCust = null;
+          if (isQuang) {
+            tuyetCust = customers.find((c) => {
+              const cClean = removeDiacritics(c.name.toLowerCase());
+              return cClean.includes('quang') && cClean.includes('tuyet');
+            });
+          } else {
+            tuyetCust = customers.find((c) => {
+              const cClean = removeDiacritics(c.name.toLowerCase());
+              return (cClean.includes('toan nga') || cClean.includes('thai dung')) && cClean.includes('tuyet');
+            }) || customers.find((c) => {
+              const cClean = removeDiacritics(c.name.toLowerCase());
+              return cClean.includes('tuyet') && !cClean.includes('quang');
+            });
+          }
           if (tuyetCust) {
             matchedCustomerId = tuyetCust.id;
           }
