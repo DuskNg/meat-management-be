@@ -583,6 +583,47 @@ const updateTransaction = async (req, res, next) => {
         });
       }
 
+      // Đồng bộ ngược lại vào StaffSubmission và StaffSubmissionItem nếu đơn nợ này được tạo từ hóa đơn nhân viên gửi
+      const linkedStaffSub = await tx.staffSubmission.findFirst({
+        where: { transactionId: id },
+      });
+      if (linkedStaffSub) {
+        await tx.staffSubmission.update({
+          where: { id: linkedStaffSub.id },
+          data: {
+            date: date ? new Date(date) : existingTransaction.date,
+            note: note !== undefined ? (note || null) : existingTransaction.note,
+            matchedCustomerId: existingTransaction.customerId,
+          },
+        });
+
+        // Xóa và tạo lại StaffSubmissionItem theo items mới đã sửa
+        await tx.staffSubmissionItem.deleteMany({
+          where: { submissionId: linkedStaffSub.id },
+        });
+
+        const baseItemTime = Date.now();
+        const subItemsToCreate = formattedItems.map((it, idx) => {
+          const matchedProd = productMap.get(it.productId) || allUserProducts.find((p) => p.id === it.productId);
+          return {
+            submissionId: linkedStaffSub.id,
+            rawName: matchedProd?.name || 'Thịt',
+            matchedProductId: it.productId,
+            quantity: it.quantity,
+            price: it.price,
+            amount: it.amount,
+            createdAt: new Date(baseItemTime + idx * 50),
+            updatedAt: new Date(baseItemTime + idx * 50),
+          };
+        });
+
+        if (subItemsToCreate.length > 0) {
+          await tx.staffSubmissionItem.createMany({
+            data: subItemsToCreate,
+          });
+        }
+      }
+
       // Cập nhật hoặc lưu mới đơn giá bán thực tế của loại thịt cho khách hàng này (kèm lý do đổi giá nếu có, nếu updateCustomPrice === false thì chỉ áp dụng cho đơn nợ này)
       if (updateCustomPrice !== false) {
         const customerId = existingTransaction.customerId;

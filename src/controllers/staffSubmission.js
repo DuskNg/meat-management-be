@@ -431,19 +431,48 @@ const getStaffSubmissions = async (req, res, next) => {
       orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
     });
 
-    // Đính kèm thông tin Nhà cung cấp nếu đơn đã được duyệt thành đơn nhập NCC
+    // Đính kèm thông tin giao dịch thực tế nếu đơn đã được duyệt (APPROVED)
     const approvedTxIds = submissions
       .filter((s) => s.status === 'APPROVED' && s.transactionId)
       .map((s) => s.transactionId);
 
     let supplierMap = {};
+    let transactionMap = {};
+    let paymentMap = {};
     if (approvedTxIds.length > 0) {
-      const supTxs = await prisma.supplierTransaction.findMany({
-        where: { id: { in: approvedTxIds } },
-        include: { supplier: { select: { id: true, name: true, phone: true } } },
-      });
+      const [supTxs, custTxs, payments] = await Promise.all([
+        prisma.supplierTransaction.findMany({
+          where: { id: { in: approvedTxIds } },
+          include: { supplier: { select: { id: true, name: true, phone: true } } },
+        }),
+        prisma.transaction.findMany({
+          where: { id: { in: approvedTxIds } },
+          include: {
+            customer: { select: { id: true, name: true, phone: true } },
+            items: {
+              include: {
+                product: { select: { id: true, name: true, unit: true, defaultPrice: true } },
+              },
+              orderBy: { id: 'asc' },
+            },
+          },
+        }),
+        prisma.payment.findMany({
+          where: { id: { in: approvedTxIds } },
+          include: {
+            customer: { select: { id: true, name: true, phone: true } },
+          },
+        }),
+      ]);
+
       supTxs.forEach((st) => {
         if (st.supplier) supplierMap[st.id] = st.supplier;
+      });
+      custTxs.forEach((tx) => {
+        transactionMap[tx.id] = tx;
+      });
+      payments.forEach((pm) => {
+        paymentMap[pm.id] = pm;
       });
     }
 
@@ -468,10 +497,56 @@ const getStaffSubmissions = async (req, res, next) => {
     ]);
 
     const dataWithSupplier = submissions.map((sub) => {
-      const matchedSupplier = (sub.transactionId && supplierMap[sub.transactionId]) || null;
+      const matchedSupplier = (sub.transactionId && supplierMap[sub.transactionId]?.supplier) || null;
       let matchedCustomer = sub.matchedCustomer;
       let matchedCustomerId = sub.matchedCustomerId;
       let matchedByAiAlias = false;
+      let finalNote = sub.note;
+      let finalDate = sub.date;
+      let currentItems = sub.items || [];
+
+      // NẾU ĐƠN ĐÃ DUYỆT (APPROVED): Ưu tiên 100% dữ liệu thực tế từ Transaction/Payment đã lưu mới nhất
+      if (sub.status === 'APPROVED' && sub.transactionId) {
+        const linkedTx = transactionMap[sub.transactionId];
+        const linkedPayment = paymentMap[sub.transactionId];
+
+        if (linkedTx) {
+          if (linkedTx.customer) {
+            matchedCustomer = linkedTx.customer;
+            matchedCustomerId = linkedTx.customerId;
+          }
+          if (linkedTx.note !== null && linkedTx.note !== undefined) {
+            finalNote = linkedTx.note;
+          }
+          if (linkedTx.date) {
+            finalDate = linkedTx.date;
+          }
+          if (linkedTx.items && linkedTx.items.length > 0) {
+            currentItems = linkedTx.items.map((ti) => ({
+              id: ti.id,
+              submissionId: sub.id,
+              matchedProductId: ti.productId,
+              rawName: ti.product?.name || 'Thịt',
+              quantity: ti.quantity != null ? String(ti.quantity) : null,
+              price: ti.price != null ? String(ti.price) : null,
+              amount: ti.amount != null ? String(ti.amount) : null,
+              createdAt: ti.createdAt,
+              updatedAt: ti.updatedAt,
+            }));
+          }
+        } else if (linkedPayment) {
+          if (linkedPayment.customer) {
+            matchedCustomer = linkedPayment.customer;
+            matchedCustomerId = linkedPayment.customerId;
+          }
+          if (linkedPayment.note) {
+            finalNote = linkedPayment.note;
+          }
+          if (linkedPayment.paidAt) {
+            finalDate = linkedPayment.paidAt;
+          }
+        }
+      }
 
       if (sub.rawAiResponse && sub.rawAiResponse.includes('"matched_by_ai_alias":true')) {
         matchedByAiAlias = true;
@@ -495,7 +570,7 @@ const getStaffSubmissions = async (req, res, next) => {
         } catch { }
       }
 
-      const enrichedItems = (sub.items || []).map((it, idx) => {
+      const enrichedItems = currentItems.map((it, idx) => {
         const aiRawName = parsedAiItems[idx]?.name || it.rawName || '';
         if (sub.status !== 'APPROVED' && productAiAliases.length > 0) {
           const learnedProd =
@@ -519,6 +594,8 @@ const getStaffSubmissions = async (req, res, next) => {
 
       return {
         ...sub,
+        note: finalNote,
+        date: finalDate,
         items: enrichedItems,
         matchedCustomerId,
         matchedCustomer,
