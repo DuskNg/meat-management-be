@@ -94,11 +94,11 @@ const notifyCustomerUpdate = (userId, action, payload = {}) => {
   });
 };
 
-// 1. Tạo nhật ký thu tiền trả nợ mới (Payment)
+// 1. Tạo nhật ký thu tiền trả nợ mới (Payment) - Hỗ trợ cấn trừ trực tiếp tài khoản nhà cung cấp
 const createPayment = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId;
-    const { customerId, amount, paidAt, note, imageUrl, mediaData, imageBase64, images } = req.body;
+    const { customerId, amount, paidAt, note, imageUrl, mediaData, imageBase64, images, supplierId } = req.body;
 
     if (!customerId || amount === undefined) {
       throw new BadRequestError('Khách hàng và số tiền thanh toán là bắt buộc.');
@@ -117,27 +117,109 @@ const createPayment = async (req, res, next) => {
       throw new NotFoundError('Khách hàng không tồn tại hoặc không thuộc quyền quản lý của bạn.');
     }
 
+    // Kiểm tra nếu có cấn trừ vào tài khoản nhà cung cấp
+    let supplier = null;
+    if (supplierId) {
+      supplier = await prisma.supplier.findFirst({
+        where: { id: supplierId, userId, isActive: true },
+      });
+      if (!supplier) {
+        throw new NotFoundError('Nhà cung cấp được chọn không tồn tại hoặc không thuộc quyền quản lý của bạn.');
+      }
+    }
+
     // Ngày thanh toán: ưu tiên ngày do client truyền (nếu người dùng chủ động chọn ngày), ngược lại mặc định là thời điểm hiện tại
     const paymentPaidAt = paidAt ? new Date(paidAt) : new Date();
 
-    // Lưu lượt trả nợ vào database
-    const payment = await prisma.payment.create({
-      data: {
-        customerId,
-        createdBy: req.user.id,
-        amount: payAmount,
-        paidAt: paymentPaidAt,
-        note: note || null,
-      },
-      include: {
-        customer: {
-          select: {
-            name: true,
-            phone: true,
+    let payment;
+    let supplierPayment = null;
+    const pairId = crypto.randomUUID();
+
+    if (supplier) {
+      // Thực hiện cấn trừ nợ 2 đầu trong 1 giao dịch nguyên tử (Atomic Transaction)
+      await prisma.$transaction(async (tx) => {
+        const baseNote = note ? note.trim() : '';
+        const paymentNotePrefix = `[Chuyển thẳng NCC: ${supplier.name}]`;
+        const initialPaymentNote = baseNote ? `${paymentNotePrefix} ${baseNote}` : paymentNotePrefix;
+
+        // 1. Tạo lượt thu tiền nợ từ khách hàng
+        payment = await tx.payment.create({
+          data: {
+            customerId,
+            createdBy: req.user.id,
+            amount: payAmount,
+            paidAt: paymentPaidAt,
+            note: `${initialPaymentNote} [offsetPairId:${pairId}]`,
+          },
+          include: {
+            customer: {
+              select: {
+                name: true,
+                phone: true,
+              },
+            },
+          },
+        });
+
+        // 2. Tạo lượt thanh toán tiền hàng cho nhà cung cấp
+        const supNotePrefix = `[Khách ${customer.name} chuyển]`;
+        const initialSupNote = baseNote ? `${supNotePrefix} ${baseNote}` : supNotePrefix;
+
+        supplierPayment = await tx.supplierPayment.create({
+          data: {
+            supplierId: supplier.id,
+            createdBy: req.user.id,
+            amount: payAmount,
+            paidAt: paymentPaidAt,
+            note: `${initialSupNote} [offsetPaymentId:${payment.id}] [offsetPairId:${pairId}]`,
+            mediaUrls: null,
+          },
+          include: {
+            supplier: {
+              select: {
+                name: true,
+                phone: true,
+              },
+            },
+          },
+        });
+
+        // 3. Cập nhật Payment khách hàng gắn offsetSupplierPaymentId để truy vết 2 chiều
+        payment = await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            note: `${initialPaymentNote} [offsetSupplierPaymentId:${supplierPayment.id}] [offsetPairId:${pairId}]`,
+          },
+          include: {
+            customer: {
+              select: {
+                name: true,
+                phone: true,
+              },
+            },
+          },
+        });
+      });
+    } else {
+      // Thu tiền khách thông thường
+      payment = await prisma.payment.create({
+        data: {
+          customerId,
+          createdBy: req.user.id,
+          amount: payAmount,
+          paidAt: paymentPaidAt,
+          note: note || null,
+        },
+        include: {
+          customer: {
+            select: {
+              name: true,
+              phone: true,
+            },
           },
         },
-      },
-    });
+      });
+    }
 
     // Lưu các ảnh / video hóa đơn / chứng từ trả hàng đính kèm nếu có
     const mediaInputs = [];
@@ -152,12 +234,13 @@ const createPayment = async (req, res, next) => {
     }
 
     const createdInvoices = [];
+    const mediaUrlsList = [];
     if (mediaInputs.length > 0) {
       for (const item of mediaInputs) {
         try {
           const finalUrl = await processMediaUpload(item, userId);
           if (finalUrl) {
-            const returnNote = `[paymentId:${payment.id}] ` + (note ? `${note}` : 'Đơn trả hàng');
+            const returnNote = `[paymentId:${payment.id}] ` + (note ? `${note}` : 'Chứng từ thanh toán');
             const inv = await prisma.transactionInvoice.create({
               data: {
                 userId,
@@ -174,18 +257,50 @@ const createPayment = async (req, res, next) => {
               note: inv.note.replace(/\[paymentId:[a-f0-9\-]+\]\s*/i, ''),
               date: inv.date,
             });
+            mediaUrlsList.push({
+              url: finalUrl,
+              fileType: finalUrl.includes('/videos/') || finalUrl.endsWith('.mp4') || finalUrl.endsWith('.mov') ? 'video' : 'image',
+              fileName: 'Hóa đơn / Bill chuyển khoản',
+            });
           }
         } catch (mediaErr) {
           console.warn('[CREATE_PAYMENT_MEDIA_ERR]', mediaErr.message);
         }
       }
+
+      // Nếu có cấn trừ nhà cung cấp, lưu đồng thời vào mediaUrls của SupplierPayment
+      if (supplierPayment && mediaUrlsList.length > 0) {
+        await prisma.supplierPayment.update({
+          where: { id: supplierPayment.id },
+          data: {
+            mediaUrls: JSON.stringify(mediaUrlsList),
+          },
+        }).catch((err) => console.warn('[CREATE_PAYMENT_SYNC_SUP_MEDIA_ERR]', err.message));
+      }
     }
 
-    await logActivity(
-      userId,
-      'CREATE_PAYMENT',
-      `Thu tiền trả nợ / trả hàng từ khách hàng ${customer.name}: Số tiền ${payAmount.toLocaleString('vi-VN')}đ`
-    );
+    if (supplier) {
+      await logActivity(
+        userId,
+        'CREATE_PAYMENT',
+        `Cấn trừ nợ 2 đầu: Khách ${customer.name} trả ${payAmount.toLocaleString('vi-VN')}đ chuyển thẳng vào TK nhà cung cấp ${supplier.name}`
+      );
+      await logActivity(
+        userId,
+        'CREATE_SUPPLIER_PAYMENT',
+        `Cấn trừ nợ 2 đầu: Nhà cung cấp ${supplier.name} nhận ${payAmount.toLocaleString('vi-VN')}đ chuyển trực tiếp từ khách ${customer.name}`
+      );
+      emitWorkspaceEvent(userId, 'SUPPLIER_PAYMENT_CREATED', {
+        supplierId: supplier.id,
+        supplierPaymentId: supplierPayment.id,
+      });
+    } else {
+      await logActivity(
+        userId,
+        'CREATE_PAYMENT',
+        `Thu tiền trả nợ / trả hàng từ khách hàng ${customer.name}: Số tiền ${payAmount.toLocaleString('vi-VN')}đ`
+      );
+    }
     notifyCustomerUpdate(userId, 'CREATE_PAYMENT', { customerId, paymentId: payment.id });
 
     res.status(201).json({
@@ -193,6 +308,7 @@ const createPayment = async (req, res, next) => {
       data: {
         ...payment,
         invoices: createdInvoices,
+        offsetSupplierPayment: supplierPayment,
       },
     });
   } catch (error) {
@@ -371,6 +487,38 @@ const updatePayment = async (req, res, next) => {
       include: { customer: { select: { name: true, phone: true } } },
     });
 
+    // Đồng bộ sang SupplierPayment nếu đây là giao dịch cấn trừ nợ 2 đầu
+    const offsetSupMatch = (existing.note || '').match(/\[offsetSupplierPaymentId:([a-f0-9\-]+)\]/i);
+    const linkedSupplierPaymentId = offsetSupMatch ? offsetSupMatch[1] : null;
+    if (linkedSupplierPaymentId) {
+      try {
+        const linkedSup = await prisma.supplierPayment.findUnique({
+          where: { id: linkedSupplierPaymentId },
+          include: { supplier: true },
+        });
+        if (linkedSup) {
+          await prisma.supplierPayment.update({
+            where: { id: linkedSupplierPaymentId },
+            data: {
+              amount: payAmount,
+              paidAt: newPaidAt,
+            },
+          });
+          await logActivity(
+            userId,
+            'UPDATE_SUPPLIER_PAYMENT',
+            `Tự động đồng bộ số tiền cấn trừ nợ NCC ${linkedSup.supplier?.name || ''}: ${Number(payAmount).toLocaleString('vi-VN')}đ`
+          );
+          emitWorkspaceEvent(userId, 'SUPPLIER_PAYMENT_UPDATED', {
+            supplierId: linkedSup.supplierId,
+            supplierPaymentId: linkedSupplierPaymentId,
+          });
+        }
+      } catch (syncErr) {
+        console.warn('[UPDATE_PAYMENT_SYNC_SUPPLIER_ERR]', syncErr.message);
+      }
+    }
+
     // 1. Xóa các hóa đơn bị người dùng gỡ bỏ
     if (Array.isArray(deletedInvoiceIds) && deletedInvoiceIds.length > 0) {
       await prisma.transactionInvoice.deleteMany({
@@ -492,6 +640,34 @@ const deletePayment = async (req, res, next) => {
         note: { contains: `[paymentId:${id}]` },
       },
     }).catch((delErr) => console.warn('[DELETE_PAYMENT_INVOICES_ERR]', delErr.message));
+
+    // Tự động xóa SupplierPayment liên kết nếu đây là giao dịch cấn trừ nợ 2 đầu
+    const offsetSupMatch = (existing.note || '').match(/\[offsetSupplierPaymentId:([a-f0-9\-]+)\]/i);
+    const linkedSupplierPaymentId = offsetSupMatch ? offsetSupMatch[1] : null;
+    if (linkedSupplierPaymentId) {
+      try {
+        const linkedSup = await prisma.supplierPayment.findUnique({
+          where: { id: linkedSupplierPaymentId },
+          include: { supplier: true },
+        });
+        if (linkedSup) {
+          await prisma.supplierPayment.delete({
+            where: { id: linkedSupplierPaymentId },
+          });
+          await logActivity(
+            userId,
+            'DELETE_SUPPLIER_PAYMENT',
+            `Tự động xóa khoản cấn trừ nợ NCC ${linkedSup.supplier?.name || ''} do xóa lượt thu tiền khách: -${Number(linkedSup.amount).toLocaleString('vi-VN')}đ`
+          );
+          emitWorkspaceEvent(userId, 'SUPPLIER_PAYMENT_DELETED', {
+            supplierId: linkedSup.supplierId,
+            supplierPaymentId: linkedSupplierPaymentId,
+          });
+        }
+      } catch (supDelErr) {
+        console.warn('[DELETE_PAYMENT_SYNC_SUPPLIER_ERR]', supDelErr.message);
+      }
+    }
 
     // Thực hiện xóa lượt trả nợ
     await prisma.payment.delete({
