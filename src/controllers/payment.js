@@ -453,6 +453,26 @@ const getPayments = async (req, res, next) => {
   }
 };
 
+// Helper bảo toàn các tag hệ thống cấn trừ nợ khi cập nhật ghi chú
+const preserveOffsetTags = (newNote, existingNote) => {
+  if (!existingNote) return newNote !== undefined ? (newNote || null) : null;
+  const sysTags = [];
+  const supMatch = existingNote.match(/\[offsetSupplierPaymentId:[a-f0-9\-]+\]/i);
+  const pairMatch = existingNote.match(/\[offsetPairId:[a-f0-9\-]+\]/i);
+  if (supMatch) sysTags.push(supMatch[0]);
+  if (pairMatch) sysTags.push(pairMatch[0]);
+
+  if (sysTags.length === 0) return newNote !== undefined ? (newNote || null) : existingNote;
+
+  let cleanInput = (newNote !== undefined ? (newNote || '') : (existingNote || '')).trim();
+  cleanInput = cleanInput
+    .replace(/\[offsetSupplierPaymentId:[a-f0-9\-]+\]/gi, '')
+    .replace(/\[offsetPairId:[a-f0-9\-]+\]/gi, '')
+    .trim();
+
+  return cleanInput ? `${cleanInput} ${sysTags.join(' ')}` : sysTags.join(' ');
+};
+
 // 3. Cập nhật lượt thu tiền (số tiền, ngày, ghi chú)
 const updatePayment = async (req, res, next) => {
   try {
@@ -482,7 +502,7 @@ const updatePayment = async (req, res, next) => {
       data: {
         amount: payAmount,
         paidAt: newPaidAt,
-        note: note !== undefined ? (note || null) : existing.note,
+        note: note !== undefined ? preserveOffsetTags(note, existing.note) : existing.note,
       },
       include: { customer: { select: { name: true, phone: true } } },
     });

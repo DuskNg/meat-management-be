@@ -165,7 +165,7 @@ const updateSupplier = async (req, res, next) => {
         name: name !== undefined ? name.trim() : undefined,
         phone: phone !== undefined ? (phone ? phone.trim() : null) : undefined,
         address: address !== undefined ? (address ? address.trim() : null) : undefined,
-        note: note !== undefined ? (note ? note.trim() : null) : undefined,
+        note: note !== undefined ? preserveSupplierOffsetTags(note, payment.note) : undefined,
       },
     });
 
@@ -706,6 +706,26 @@ const deleteSupplierTransaction = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+
+// Helper bảo toàn các tag hệ thống cấn trừ nợ khi cập nhật ghi chú
+const preserveSupplierOffsetTags = (newNote, existingNote) => {
+  if (!existingNote) return newNote !== undefined ? (newNote || null) : null;
+  const sysTags = [];
+  const payMatch = existingNote.match(/\[offsetPaymentId:[a-f0-9\-]+\]/i);
+  const pairMatch = existingNote.match(/\[offsetPairId:[a-f0-9\-]+\]/i);
+  if (payMatch) sysTags.push(payMatch[0]);
+  if (pairMatch) sysTags.push(pairMatch[0]);
+
+  if (sysTags.length === 0) return newNote !== undefined ? (newNote || null) : existingNote;
+
+  let cleanInput = (newNote !== undefined ? (newNote || '') : (existingNote || '')).trim();
+  cleanInput = cleanInput
+    .replace(/\[offsetPaymentId:[a-f0-9\-]+\]/gi, '')
+    .replace(/\[offsetPairId:[a-f0-9\-]+\]/gi, '')
+    .trim();
+
+  return cleanInput ? `${cleanInput} ${sysTags.join(' ')}` : sysTags.join(' ');
 };
 
 // 10. Cập nhật giao dịch thanh toán tiền hàng
