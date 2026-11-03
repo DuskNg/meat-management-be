@@ -4015,6 +4015,373 @@ const submitPortalDeletePayment = async (req, res, next) => {
   }
 };
 
+
+// [POST] /api/v1/portal/manage/create-zalo-daily-group
+// Tạo nhóm Zalo báo hàng cuốn chiếu siêu tốc (tự động tạo Customer type 'zalo_daily' + PortalLink)
+const createZaloDailyGroup = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { groupName, phone, note, pin } = req.body;
+
+    if (!groupName || !groupName.trim()) {
+      throw new BadRequestError('Vui lòng nhập tên nhóm Zalo (ví dụ: Phở Cống, Bún bò Bà Triệu).');
+    }
+
+    const cleanName = groupName.trim();
+    const token = generatePortalToken();
+
+    const result = await prisma.$transaction(async (tx) => {
+      const customer = await tx.customer.create({
+        data: {
+          userId,
+          name: cleanName.startsWith('[Zalo]') ? cleanName : `[Zalo] ${cleanName}`,
+          phone: phone ? phone.trim() : null,
+          note: note ? note.trim() : 'Nhóm Zalo báo hàng cuốn chiếu theo ngày',
+          type: 'zalo_daily',
+          isActive: true,
+        },
+      });
+
+      const portalLink = await tx.portalLink.create({
+        data: {
+          userId,
+          name: cleanName,
+          token,
+          type: 'customer',
+          pin: pin ? String(pin).trim() : null,
+          note: 'Nhóm Zalo báo hàng cuốn chiếu',
+          isActive: true,
+          customers: {
+            create: [
+              {
+                customerId: customer.id,
+              },
+            ],
+          },
+        },
+        include: {
+          customers: {
+            include: { customer: true },
+          },
+        },
+      });
+
+      return { customer, portalLink };
+    });
+
+    logActivity(
+      userId,
+      'CREATE_ZALO_DAILY_GROUP',
+      `Tạo nhóm Zalo báo hàng cuốn chiếu: ${cleanName} (Token: ${result.portalLink.token})`
+    );
+
+    res.json({
+      success: true,
+      message: `Đã tạo nhóm Zalo "${cleanName}" và đường link thành công!`,
+      data: {
+        customer: result.customer,
+        portalLink: result.portalLink,
+        portalUrl: `/portal/${result.portalLink.token}`,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [GET] /api/v1/portal/manage/zalo-daily-dashboard
+// Lấy bảng theo dõi kiểm soát dòng tiền các nhóm Zalo báo hàng trong ngày
+const getZaloDailyDashboard = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const targetDateStr = req.query.date || new Date().toISOString().slice(0, 10);
+    const startOfDay = new Date(`${targetDateStr}T00:00:00.000Z`);
+    const endOfDay = new Date(`${targetDateStr}T23:59:59.999Z`);
+
+    const zaloCustomers = await prisma.customer.findMany({
+      where: {
+        userId,
+        isActive: true,
+        type: 'zalo_daily',
+      },
+      include: {
+        portalLinkCustomers: {
+          include: {
+            portalLink: true,
+          },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    if (zaloCustomers.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          targetDate: targetDateStr,
+          summary: {
+            totalGroups: 0,
+            todayOrderSum: 0,
+            todayPaidSum: 0,
+            todayUnpaidSum: 0,
+            previousDebtSum: 0,
+          },
+          groups: [],
+        },
+      });
+    }
+
+    const customerIds = zaloCustomers.map((c) => c.id);
+
+    const [allTransactions, allPayments] = await Promise.all([
+      prisma.transaction.findMany({
+        where: { customerId: { in: customerIds } },
+        include: {
+          items: true,
+        },
+        orderBy: { date: 'desc' },
+      }),
+      prisma.payment.findMany({
+        where: { customerId: { in: customerIds } },
+        orderBy: { paidAt: 'desc' },
+      }),
+    ]);
+
+    let todayOrderSum = 0;
+    let todayPaidSum = 0;
+    let todayUnpaidSum = 0;
+    let previousDebtSum = 0;
+
+    const groups = zaloCustomers.map((c) => {
+      const custTxs = allTransactions.filter((tx) => tx.customerId === c.id);
+      const custPayments = allPayments.filter((pm) => pm.customerId === c.id);
+
+      const todayTxs = custTxs.filter((tx) => {
+        const txDate = new Date(tx.date);
+        return txDate >= startOfDay && txDate <= endOfDay;
+      });
+      const todayOrderAmount = todayTxs.reduce((sum, tx) => sum + Number(tx.totalAmount || 0), 0);
+
+      const todayPms = custPayments.filter((pm) => {
+        const pmDate = new Date(pm.paidAt);
+        return pmDate >= startOfDay && pmDate <= endOfDay;
+      });
+      const todayPaidAmount = todayPms.reduce((sum, pm) => sum + Number(pm.amount || 0), 0);
+
+      const pastTxs = custTxs.filter((tx) => new Date(tx.date) < startOfDay);
+      const pastPms = custPayments.filter((pm) => new Date(pm.paidAt) < startOfDay);
+      const pastOrderAmount = pastTxs.reduce((sum, tx) => sum + Number(tx.totalAmount || 0), 0);
+      const pastPaidAmount = pastPms.reduce((sum, pm) => sum + Number(pm.amount || 0), 0);
+      const previousDebt = Math.max(0, pastOrderAmount - pastPaidAmount);
+
+      let status = 'NO_ORDER';
+      let remainingToday = 0;
+      if (todayOrderAmount > 0) {
+        if (todayPaidAmount >= todayOrderAmount) {
+          status = 'PAID';
+        } else if (todayPaidAmount > 0) {
+          status = 'PARTIAL';
+          remainingToday = todayOrderAmount - todayPaidAmount;
+        } else {
+          status = 'UNPAID';
+          remainingToday = todayOrderAmount;
+        }
+      }
+
+      todayOrderSum += todayOrderAmount;
+      todayPaidSum += todayPaidAmount;
+      todayUnpaidSum += remainingToday;
+      previousDebtSum += previousDebt;
+
+      const primaryPortalLink = c.portalLinkCustomers?.[0]?.portalLink || null;
+
+      return {
+        customerId: c.id,
+        groupName: c.name.replace(/^\[Zalo\]\s*/i, ''),
+        fullName: c.name,
+        phone: c.phone,
+        note: c.note,
+        portalLinkId: primaryPortalLink?.id || null,
+        portalToken: primaryPortalLink?.token || null,
+        portalUrl: primaryPortalLink ? `/portal/${primaryPortalLink.token}` : null,
+        todayOrderAmount,
+        todayPaidAmount,
+        remainingToday,
+        status,
+        previousDebt,
+        hasPendingDebt: remainingToday > 0 || previousDebt > 0,
+        todayItemsCount: todayTxs.reduce((sum, tx) => sum + (tx.items?.length || 0), 0),
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        targetDate: targetDateStr,
+        summary: {
+          totalGroups: zaloCustomers.length,
+          todayOrderSum,
+          todayPaidSum,
+          todayUnpaidSum,
+          previousDebtSum,
+        },
+        groups,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// [POST] /api/v1/portal/manage/zalo-daily-quick-pay
+// Chốt tiền nhanh 1 chạm cho nhóm Zalo (ghi nhận thanh toán và đưa dòng tiền vào hệ thống)
+const submitZaloDailyQuickPay = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { customerId, amount, paidAt, note, supplierId } = req.body;
+
+    if (!customerId) {
+      throw new BadRequestError('Vui lòng chọn nhóm Zalo cần thanh toán.');
+    }
+
+    const customer = await prisma.customer.findFirst({
+      where: { id: customerId, userId, isActive: true },
+    });
+    if (!customer) {
+      throw new NotFoundError('Nhóm Zalo không tồn tại hoặc đã bị khóa.');
+    }
+
+    const payAmount = parseFloat(amount);
+    if (isNaN(payAmount) || payAmount <= 0) {
+      throw new BadRequestError('Số tiền thanh toán phải lớn hơn 0.');
+    }
+
+    let supplier = null;
+    if (supplierId) {
+      supplier = await prisma.supplier.findFirst({
+        where: { id: supplierId, userId, isActive: true },
+      });
+      if (!supplier) {
+        throw new NotFoundError('Nhà cung cấp được chọn không tồn tại.');
+      }
+    }
+
+    const paymentPaidAt = paidAt ? new Date(paidAt) : new Date();
+    let payment;
+    let supplierPayment = null;
+
+    if (supplier) {
+      const pairId = crypto.randomUUID();
+      await prisma.$transaction(async (tx) => {
+        const baseNote = note ? note.trim() : '';
+        const paymentNotePrefix = `[Chuyển thẳng NCC: ${supplier.name}]`;
+        const initialPaymentNote = baseNote ? `${paymentNotePrefix} ${baseNote}` : paymentNotePrefix;
+
+        payment = await tx.payment.create({
+          data: {
+            customerId,
+            createdBy: req.user.id,
+            amount: payAmount,
+            paidAt: paymentPaidAt,
+            note: `${initialPaymentNote} [offsetPairId:${pairId}]`,
+          },
+          include: {
+            customer: { select: { name: true, phone: true } },
+          },
+        });
+
+        const supNotePrefix = `[Nhóm ${customer.name} chuyển]`;
+        const initialSupNote = baseNote ? `${supNotePrefix} ${baseNote}` : supNotePrefix;
+        supplierPayment = await tx.supplierPayment.create({
+          data: {
+            supplierId: supplier.id,
+            createdBy: req.user.id,
+            amount: payAmount,
+            paidAt: paymentPaidAt,
+            note: `${initialSupNote} [offsetPaymentId:${payment.id}] [offsetPairId:${pairId}]`,
+            mediaUrls: null,
+          },
+          include: {
+            supplier: { select: { name: true, phone: true } },
+          },
+        });
+
+        payment = await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            note: `${initialPaymentNote} [offsetSupplierPaymentId:${supplierPayment.id}] [offsetPairId:${pairId}]`,
+          },
+          include: {
+            customer: { select: { name: true, phone: true } },
+          },
+        });
+      });
+    } else {
+      payment = await prisma.payment.create({
+        data: {
+          customerId,
+          createdBy: req.user.id,
+          amount: payAmount,
+          paidAt: paymentPaidAt,
+          note: note ? note.trim() : 'Nhận chuyển khoản nhóm Zalo trong ngày',
+        },
+        include: {
+          customer: { select: { name: true, phone: true } },
+        },
+      });
+    }
+
+    const links = await prisma.portalLinkCustomer.findMany({
+      where: { customerId },
+      select: { portalLinkId: true },
+    });
+    if (links.length > 0) {
+      await prisma.portalLink.updateMany({
+        where: { id: { in: links.map((l) => l.portalLinkId) } },
+        data: { lastPublishedAt: new Date() },
+      });
+    }
+
+    const formattedPay = new Intl.NumberFormat('vi-VN').format(payAmount);
+    logActivity(
+      userId,
+      'ZALO_DAILY_QUICK_PAY',
+      `Xác nhận nhận tiền nhóm Zalo: ${customer.name} - Số tiền: ${formattedPay}đ`
+    );
+
+    if (supplier && supplierPayment) {
+      logActivity(
+        userId,
+        'ZALO_DAILY_CREATE_SUPPLIER_PAYMENT',
+        `Cấn trừ thanh toán NCC ${supplier.name} từ tiền nhóm Zalo ${customer.name}: ${formattedPay}đ`
+      );
+      emitWorkspaceEvent(userId, 'SUPPLIER_PAYMENT_CREATED', {
+        supplierId: supplier.id,
+        supplierPaymentId: supplierPayment.id,
+      });
+    }
+
+    emitWorkspaceEvent(userId, 'CUSTOMER_UPDATED', {
+      action: 'ZALO_DAILY_QUICK_PAY',
+      userId,
+      customerId,
+      paymentId: payment.id,
+      amount: payAmount,
+    });
+
+    res.json({
+      success: true,
+      message: supplier
+        ? `Đã nhận ${formattedPay}đ và cấn trừ thanh toán NCC ${supplier.name} thành công!`
+        : `Đã xác nhận nhận ${formattedPay}đ thành công!`,
+      data: payment,
+      offsetSupplierPayment: supplierPayment,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   // Public
   getPublicPortalInfo,
@@ -4051,6 +4418,10 @@ module.exports = {
   publishAllPortalData,
   getAdminDeliveryRequests,
   confirmDeliveryRequest,
+  // Zalo Daily Tracking
+  createZaloDailyGroup,
+  getZaloDailyDashboard,
+  submitZaloDailyQuickPay,
   bulkConfirmDeliveryRequests,
   checkUnbilledDeliveryRequests,
   deleteAdminDeliveryRequest

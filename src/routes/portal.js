@@ -93,4 +93,9 @@ router.put('/manage/delivery-requests/bulk-confirm', authenticateToken, resolveW
 router.get('/manage/delivery-requests/unbilled', authenticateToken, resolveWorkspace, portalController.checkUnbilledDeliveryRequests);
 router.delete('/manage/delivery-requests/:id', authenticateToken, resolveWorkspace, portalController.deleteAdminDeliveryRequest);
 
+// Quản lý kiểm soát dòng tiền Nhóm Zalo Báo Hàng Cuốn Chiếu (Chốt theo ngày)
+router.get('/manage/zalo-daily-dashboard', authenticateToken, resolveWorkspace, portalController.getZaloDailyDashboard);
+router.post('/manage/create-zalo-daily-group', authenticateToken, resolveWorkspace, portalController.createZaloDailyGroup);
+router.post('/manage/zalo-daily-quick-pay', authenticateToken, resolveWorkspace, portalController.submitZaloDailyQuickPay);
+
 module.exports = router;
