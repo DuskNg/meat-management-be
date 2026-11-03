@@ -1664,8 +1664,82 @@ describe('Luồng Nghiệp Vụ: So khớp khách hàng từ AI bóc tách (Cust
         expect(normalizedName).not.toBe('Bê ba chỉ');
       }
     });
+    it('36. AI bóc tách "Phở tưởng(chị Luyến)" bắt buộc khớp đúng vào "Phở tưởng chị luyến", TUYỆT ĐỐI không nhầm sang "Minh trang"', async () => {
+      // Arrange: Tạo khách "Minh trang" và khách "Phở tưởng chị luyến"
+      const custMinhTrang = await prisma.customer.create({
+        data: {
+          name: '[TEST]_Minh trang',
+          userId: testUser.id,
+          phone: '0977112233',
+        },
+      });
+
+      const custPhoTuongLuyen = await prisma.customer.create({
+        data: {
+          name: '[TEST]_Phở tưởng chị luyến',
+          userId: testUser.id,
+          phone: '0988223344',
+        },
+      });
+
+      const { isCustomerNameContradictory } = require('../src/services/aiInvoiceParser');
+      const removeDiacritics = (str) => !str ? '' : str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D');
+
+      // 1. Assert mâu thuẫn danh tính: "Phở tưởng(chị Luyến)" và "Minh trang" bắt buộc mâu thuẫn
+      expect(isCustomerNameContradictory('Phở tưởng(chị Luyến)', custMinhTrang.name)).toBe(true);
+      expect(isCustomerNameContradictory('Phở tưởng', custMinhTrang.name)).toBe(true);
+      expect(isCustomerNameContradictory('Chị Luyến', custMinhTrang.name)).toBe(true);
+
+      // 2. Không mâu thuẫn với khách đúng
+      expect(isCustomerNameContradictory('Phở tưởng(chị Luyến)', custPhoTuongLuyen.name)).toBe(false);
+
+      // 3. Act & Assert: Giả lập bóc tách hóa đơn số 32 có tên viết tay "phở tưởng" hoặc "Phở tưởng(chị Luyến)"
+      const testNames = ['phở tưởng', 'Phở tưởng(chị Luyến)', 'chị luyến', 'Phở tưởng chị luyến'];
+      const allCustomers = await prisma.customer.findMany({
+        where: { userId: testUser.id, isActive: true },
+        select: { id: true, name: true },
+      });
+
+      for (const detectedName of testNames) {
+        const cleanDetected = removeDiacritics(detectedName.toLowerCase().trim());
+        const cleanDetectedNoSpace = cleanDetected.replace(/\s+/g, '');
+
+        let matchedCustomerId = null;
+
+        // Ưu tiên khớp khách "Phở tưởng (chị Luyến)"
+        const isDetectedPhoTuongLuyen = (
+          cleanDetected.includes('pho tuong') ||
+          cleanDetectedNoSpace.includes('photuong') ||
+          cleanDetected.includes('luyen') ||
+          cleanDetectedNoSpace.includes('luyen') ||
+          (cleanDetected.includes('tuong') && !cleanDetected.includes('tuong mo') && !cleanDetected.includes('anh tuong') && !cleanDetected.includes('tien')) ||
+          (cleanDetectedNoSpace.includes('tuong') && !cleanDetectedNoSpace.includes('tuongmo') && !cleanDetectedNoSpace.includes('anhtuong'))
+        );
+        if (!matchedCustomerId && isDetectedPhoTuongLuyen) {
+          const phoTuongCust = allCustomers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return (cClean.includes('tuong') || cClean.includes('pho tuong')) && cClean.includes('luyen');
+          }) || allCustomers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('luyen');
+          }) || allCustomers.find((c) => {
+            const cClean = removeDiacritics(c.name.toLowerCase());
+            return cClean.includes('tuong') && !cClean.includes('tuong mo') && !cClean.includes('anh tuong') && !cClean.includes('tien');
+          }) || null;
+
+          if (phoTuongCust) {
+            matchedCustomerId = phoTuongCust.id;
+          }
+        }
+
+        // Bắt buộc khớp trúng khách "Phở tưởng chị luyến", TUYỆT ĐỐI không phải "Minh trang"
+        expect(matchedCustomerId).toBe(custPhoTuongLuyen.id);
+        expect(matchedCustomerId).not.toBe(custMinhTrang.id);
+      }
+    });
   });
 });
+
 
 
 

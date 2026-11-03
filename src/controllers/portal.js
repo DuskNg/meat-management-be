@@ -1794,7 +1794,7 @@ const submitDeliveryRequest = async (req, res, next) => {
           deliveryDate: dateString,
           displayDate
         });
-      } catch (_) {}
+      } catch (_) { }
 
       results.push(itemResult);
     }
@@ -4105,14 +4105,14 @@ const getZaloDailyDashboard = async (req, res, next) => {
         type: 'zalo_daily',
       },
       include: {
-        portalLinkCustomers: {
-          include: {
-            portalLink: true,
+          portalLinkCustomers: {
+            include: {
+              portalLink: true,
+            },
           },
         },
-      },
-      orderBy: { name: 'asc' },
-    });
+        orderBy: { name: 'asc' },
+      });
 
     if (zaloCustomers.length === 0) {
       return res.json({

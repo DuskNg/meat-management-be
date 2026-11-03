@@ -95,6 +95,21 @@ const isCustomerNameContradictory = (detectedName, customerName) => {
   const isCToanNga = cClean.includes('toan nga') || cClean.includes('thai dung') || cNoSpace.includes('toannga') || cNoSpace.includes('thaidung');
   if (isDToanNga && !isCToanNga) return true;
 
+  // 14. Phở tưởng chị luyến (Phở tưởng, Chị luyến, Luyến)
+  // Tuyệt đối không để AI nhận diện là "Phở tưởng" hoặc "chị Luyến" bị gán nhầm sang khách hàng khác (như "Minh trang")!
+  const isDPhoTuong = dClean.includes('pho tuong') || dClean.includes('luyen') || dNoSpace.includes('photuong') || dNoSpace.includes('luyen') ||
+    (dClean.includes('tuong') && !dClean.includes('tuong mo') && !dClean.includes('anh tuong') && !dClean.includes('tien'));
+  const isCPhoTuong = cClean.includes('pho tuong') || cClean.includes('luyen') || cNoSpace.includes('photuong') || cNoSpace.includes('luyen') ||
+    (cClean.includes('tuong') && !cClean.includes('tuong mo') && !cClean.includes('anh tuong') && !cClean.includes('tien'));
+  if (isDPhoTuong && !isCPhoTuong) return true;
+  if (!isDPhoTuong && isCPhoTuong) return true;
+
+  // 15. Minh trang
+  const isDMinhTrang = (dClean.includes('minh') && dClean.includes('trang')) || dNoSpace.includes('minhtrang');
+  const isCMinhTrang = (cClean.includes('minh') && cClean.includes('trang')) || cNoSpace.includes('minhtrang');
+  if (isDMinhTrang && !isCMinhTrang) return true;
+  if (!isDMinhTrang && isCMinhTrang && (isDPhoTuong || dClean.includes('tuong') || dClean.includes('luyen'))) return true;
+
   return false;
 };
 
@@ -1484,6 +1499,33 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
         if (learnedMatch?.alias?.rawAlias) parsedJson.learned_alias = learnedMatch.alias.rawAlias; // Nhánh khớp chính xác tên khách thật trả về alias = null
       }
 
+      // 00b. ĐẶC BIỆT: Khớp ưu tiên khách "Phở tưởng (chị Luyến)" nếu AI nhận diện là "phở tưởng" hoặc "chị luyến" hoặc "luyến"
+      // LƯU Ý: TUYỆT ĐỐI không để "anh tường mỗ" bị nhầm vào rule này!
+      const isDetectedPhoTuongLuyen = (
+        cleanDetected.includes('pho tuong') ||
+        cleanDetectedNoSpace.includes('photuong') ||
+        cleanDetected.includes('luyen') ||
+        cleanDetectedNoSpace.includes('luyen') ||
+        (cleanDetected.includes('tuong') && !cleanDetected.includes('tuong mo') && !cleanDetected.includes('anh tuong') && !cleanDetected.includes('tien')) ||
+        (cleanDetectedNoSpace.includes('tuong') && !cleanDetectedNoSpace.includes('tuongmo') && !cleanDetectedNoSpace.includes('anhtuong'))
+      );
+      if (!matchedCustomerId && isDetectedPhoTuongLuyen) {
+        const phoTuongCust = customers.find((c) => {
+          const cClean = removeDiacritics(c.name.toLowerCase());
+          return (cClean.includes('tuong') || cClean.includes('pho tuong')) && cClean.includes('luyen');
+        }) || customers.find((c) => {
+          const cClean = removeDiacritics(c.name.toLowerCase());
+          return cClean.includes('luyen');
+        }) || customers.find((c) => {
+          const cClean = removeDiacritics(c.name.toLowerCase());
+          return cClean.includes('tuong') && !cClean.includes('tuong mo') && !cClean.includes('anh tuong') && !cClean.includes('tien');
+        }) || null;
+
+        if (phoTuongCust) {
+          matchedCustomerId = phoTuongCust.id;
+        }
+      }
+
       // 0a. ĐẶC BIỆT: Khớp ưu tiên khách "Bếp trung kính" nếu AI nhận diện là "Trung kính", "trung kh", "tuy kh", "trungkinh"...
       // BẮT BUỘC ưu tiên tìm khách có chứa "bep trung kinh" / "bep" + "trung" + "kinh" trước,
       // TUYỆT ĐỐI không để Rule 0 (Exact Match) khớp nhầm vào khách "Trungkinh"!
@@ -1901,7 +1943,8 @@ if (!matchedCustomerId) {
           cleanDetected.includes('mih trang') ||
           cleanDetected.includes('minh tuy') ||
           cleanDetected.includes('mih tuy') ||
-          cleanDetected.includes('mih') ||
+          cleanDetected === 'mih' ||
+        cleanDetected === 'minh' ||
           cleanDetectedNoSpace === 'minh' ||
           cleanDetectedNoSpace === 'mih' ||
           cleanDetectedNoSpace.includes('minhtrang') ||
@@ -3345,6 +3388,7 @@ if (!matchedCustomerId) {
 };
 
 module.exports = {
+  isCustomerNameContradictory,
   parseStaffSubmission,
   matchProductByName,
   normalizeCustomerAliasText,
