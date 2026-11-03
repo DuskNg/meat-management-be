@@ -800,8 +800,16 @@ const approveStaffSubmission = async (req, res, next) => {
     }
 
     const finalCustomerId = !isSupplierTarget ? (customerId || submission.matchedCustomerId) : null;
-    if (!isSupplierTarget && !finalCustomerId) {
-      throw new BadRequestError('Vui lòng chọn khách hàng để lên đơn nợ.');
+    if (!isSupplierTarget) {
+      if (!finalCustomerId) {
+        throw new BadRequestError('Vui lòng chọn khách hàng để lên đơn nợ.');
+      }
+      const existingCustomer = await prisma.customer.findFirst({
+        where: { id: finalCustomerId, userId, isActive: true },
+      });
+      if (!existingCustomer) {
+        throw new BadRequestError('Khách hàng không tồn tại trong danh sách hệ thống. Vui lòng chọn khách hàng hợp lệ.');
+      }
     }
 
     // Danh sách mặt hàng áp dụng
