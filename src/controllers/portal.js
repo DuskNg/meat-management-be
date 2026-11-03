@@ -3181,7 +3181,7 @@ const getPortalDebtActionBootstrap = async (req, res, next) => {
     const customerIds = portalLink.customers.map(c => c.customerId);
     const userId = portalLink.userId;
 
-    const [products, customPrices, recentTransactions, recentPayments] = await Promise.all([
+    const [products, customPrices, recentTransactions, recentPayments, suppliers] = await Promise.all([
       prisma.product.findMany({
         where: { userId, isActive: true },
         select: { id: true, name: true, defaultPrice: true, costPrice: true, unit: true },
@@ -3213,6 +3213,11 @@ const getPortalDebtActionBootstrap = async (req, res, next) => {
         },
         orderBy: { paidAt: 'desc' },
         take: 200
+      }),
+      prisma.supplier.findMany({
+        where: { userId, isActive: true },
+        select: { id: true, name: true, phone: true },
+        orderBy: { name: 'asc' }
       })
     ]);
 
@@ -3256,7 +3261,8 @@ const getPortalDebtActionBootstrap = async (req, res, next) => {
         products,
         customPrices,
         recentTransactions,
-        recentPayments
+        recentPayments,
+        suppliers
       }
     });
   } catch (err) {
@@ -3265,11 +3271,11 @@ const getPortalDebtActionBootstrap = async (req, res, next) => {
 };
 
 // [POST] /api/v1/portal/debt-action/collect-debt/:token
-// Thu tiền công nợ khách hàng trực tiếp từ Portal (hỗ trợ cả thu theo số tiền hoặc theo nhiều ngày)
+// Thu tiền công nợ khách hàng trực tiếp từ Portal (hỗ trợ cả thu theo số tiền hoặc theo nhiều ngày, cấn trừ NCC nếu chọn)
 const submitPortalCollectDebt = async (req, res, next) => {
   try {
     const { token } = req.params;
-    const { customerId, amount, paidAt, note, payments } = req.body;
+    const { customerId, amount, paidAt, note, payments, supplierId } = req.body;
 
     const portalLink = await prisma.portalLink.findUnique({
       where: { token },
@@ -3299,25 +3305,92 @@ const submitPortalCollectDebt = async (req, res, next) => {
     });
     if (!customer) throw new NotFoundError('Không tìm thấy khách hàng.');
 
+    // Kiểm tra nhà cung cấp nếu có yêu cầu cấn trừ nợ 2 đầu
+    let supplier = null;
+    if (supplierId) {
+      supplier = await prisma.supplier.findFirst({
+        where: { id: supplierId, userId: portalLink.userId, isActive: true },
+      });
+      if (!supplier) {
+        throw new NotFoundError('Nhà cung cấp được chọn không tồn tại hoặc đã bị khóa.');
+      }
+    }
+
     // ─── TRƯỜNG HỢP 1: THU NỢ THEO NHIỀU NGÀY (BATCH/BY_DAY) ───
     if (Array.isArray(payments) && payments.length > 0) {
       const createdPayments = [];
       let totalCollected = 0;
+      let supplierPayment = null;
+
+      // Tính tổng số tiền hợp lệ
       for (const item of payments) {
         const itemAmt = parseFloat(item.amount);
-        if (isNaN(itemAmt) || itemAmt <= 0) continue;
-        const itemPaidAt = item.paidAt ? new Date(item.paidAt) : new Date();
-        const pRecord = await prisma.payment.create({
-          data: {
-            customerId,
-            createdBy: portalLink.userId,
-            amount: itemAmt,
-            paidAt: itemPaidAt,
-            note: item.note ? item.note.trim() : null,
-          },
+        if (!isNaN(itemAmt) && itemAmt > 0) {
+          totalCollected += itemAmt;
+        }
+      }
+
+      if (totalCollected <= 0) {
+        throw new BadRequestError('Tổng số tiền thanh toán các ngày phải lớn hơn 0.');
+      }
+
+      if (supplier) {
+        // Thực hiện cấn trừ nợ 2 đầu nguyên tử trong transaction
+        const pairId = crypto.randomUUID();
+        await prisma.$transaction(async (tx) => {
+          const supNotePrefix = `[Khách ${customer.name} chuyển (${payments.length} ngày)]`;
+          const initialSupNote = note ? `${supNotePrefix} ${note.trim()}` : supNotePrefix;
+
+          supplierPayment = await tx.supplierPayment.create({
+            data: {
+              supplierId: supplier.id,
+              createdBy: portalLink.userId,
+              amount: totalCollected,
+              paidAt: new Date(),
+              note: `${initialSupNote} [offsetPairId:${pairId}]`,
+              mediaUrls: null,
+            },
+            include: {
+              supplier: { select: { name: true, phone: true } },
+            },
+          });
+
+          for (const item of payments) {
+            const itemAmt = parseFloat(item.amount);
+            if (isNaN(itemAmt) || itemAmt <= 0) continue;
+            const itemPaidAt = item.paidAt ? new Date(item.paidAt) : new Date();
+            const baseItemNote = item.note ? item.note.trim() : '';
+            const itemNotePrefix = `[Chuyển thẳng NCC: ${supplier.name}]`;
+            const initialItemNote = baseItemNote ? `${itemNotePrefix} ${baseItemNote}` : itemNotePrefix;
+
+            const pRecord = await tx.payment.create({
+              data: {
+                customerId,
+                createdBy: portalLink.userId,
+                amount: itemAmt,
+                paidAt: itemPaidAt,
+                note: `${initialItemNote} [offsetSupplierPaymentId:${supplierPayment.id}] [offsetPairId:${pairId}]`,
+              },
+            });
+            createdPayments.push(pRecord);
+          }
         });
-        createdPayments.push(pRecord);
-        totalCollected += itemAmt;
+      } else {
+        for (const item of payments) {
+          const itemAmt = parseFloat(item.amount);
+          if (isNaN(itemAmt) || itemAmt <= 0) continue;
+          const itemPaidAt = item.paidAt ? new Date(item.paidAt) : new Date();
+          const pRecord = await prisma.payment.create({
+            data: {
+              customerId,
+              createdBy: portalLink.userId,
+              amount: itemAmt,
+              paidAt: itemPaidAt,
+              note: item.note ? item.note.trim() : null,
+            },
+          });
+          createdPayments.push(pRecord);
+        }
       }
 
       await prisma.portalLink.update({
@@ -3325,11 +3398,26 @@ const submitPortalCollectDebt = async (req, res, next) => {
         data: { lastPublishedAt: new Date() }
       });
 
+      const formattedTotal = new Intl.NumberFormat('vi-VN').format(totalCollected);
       logActivity(
         portalLink.userId,
         'PORTAL_COLLECT_DEBT',
-        `Thu nợ qua Zalo Portal (${createdPayments.length} ngày): ${customer.name} trả tổng ${new Intl.NumberFormat('vi-VN').format(totalCollected)}đ`
+        supplier
+          ? `Thu nợ qua Zalo Portal cấn trừ NCC ${supplier.name} (${createdPayments.length} ngày): ${customer.name} trả ${formattedTotal}đ`
+          : `Thu nợ qua Zalo Portal (${createdPayments.length} ngày): ${customer.name} trả tổng ${formattedTotal}đ`
       );
+
+      if (supplier && supplierPayment) {
+        logActivity(
+          portalLink.userId,
+          'PORTAL_CREATE_SUPPLIER_PAYMENT',
+          `Ghi nhận thanh toán NCC ${supplier.name} qua Zalo Portal từ tiền khách ${customer.name} trả: ${formattedTotal}đ`
+        );
+        emitWorkspaceEvent(portalLink.userId, 'SUPPLIER_PAYMENT_CREATED', {
+          supplierId: supplier.id,
+          supplierPaymentId: supplierPayment.id,
+        });
+      }
 
       emitWorkspaceEvent(portalLink.userId, 'CUSTOMER_UPDATED', {
         action: 'PORTAL_COLLECT_DEBT',
@@ -3340,8 +3428,11 @@ const submitPortalCollectDebt = async (req, res, next) => {
 
       return res.json({
         success: true,
-        message: `Thu tiền công nợ thành công cho ${createdPayments.length} ngày.`,
+        message: supplier
+          ? `Thu nợ và cấn trừ thanh toán NCC ${supplier.name} thành công (${createdPayments.length} ngày).`
+          : `Thu tiền công nợ thành công cho ${createdPayments.length} ngày.`,
         data: createdPayments,
+        offsetSupplierPayment: supplierPayment,
       });
     }
 
@@ -3356,19 +3447,72 @@ const submitPortalCollectDebt = async (req, res, next) => {
     }
 
     const paymentPaidAt = paidAt ? new Date(paidAt) : new Date();
+    let payment;
+    let supplierPayment = null;
 
-    const payment = await prisma.payment.create({
-      data: {
-        customerId,
-        createdBy: portalLink.userId,
-        amount: payAmount,
-        paidAt: paymentPaidAt,
-        note: note ? note.trim() : null,
-      },
-      include: {
-        customer: { select: { name: true, phone: true } }
-      }
-    });
+    if (supplier) {
+      const pairId = crypto.randomUUID();
+      await prisma.$transaction(async (tx) => {
+        const baseNote = note ? note.trim() : '';
+        const paymentNotePrefix = `[Chuyển thẳng NCC: ${supplier.name}]`;
+        const initialPaymentNote = baseNote ? `${paymentNotePrefix} ${baseNote}` : paymentNotePrefix;
+
+        // 1. Tạo lượt thu tiền nợ từ khách hàng
+        payment = await tx.payment.create({
+          data: {
+            customerId,
+            createdBy: portalLink.userId,
+            amount: payAmount,
+            paidAt: paymentPaidAt,
+            note: `${initialPaymentNote} [offsetPairId:${pairId}]`,
+          },
+          include: {
+            customer: { select: { name: true, phone: true } },
+          },
+        });
+
+        // 2. Tạo lượt thanh toán cho nhà cung cấp
+        const supNotePrefix = `[Khách ${customer.name} chuyển]`;
+        const initialSupNote = baseNote ? `${supNotePrefix} ${baseNote}` : supNotePrefix;
+        supplierPayment = await tx.supplierPayment.create({
+          data: {
+            supplierId: supplier.id,
+            createdBy: portalLink.userId,
+            amount: payAmount,
+            paidAt: paymentPaidAt,
+            note: `${initialSupNote} [offsetPaymentId:${payment.id}] [offsetPairId:${pairId}]`,
+            mediaUrls: null,
+          },
+          include: {
+            supplier: { select: { name: true, phone: true } },
+          },
+        });
+
+        // 3. Cập nhật Payment khách hàng gắn offsetSupplierPaymentId
+        payment = await tx.payment.update({
+          where: { id: payment.id },
+          data: {
+            note: `${initialPaymentNote} [offsetSupplierPaymentId:${supplierPayment.id}] [offsetPairId:${pairId}]`,
+          },
+          include: {
+            customer: { select: { name: true, phone: true } },
+          },
+        });
+      });
+    } else {
+      payment = await prisma.payment.create({
+        data: {
+          customerId,
+          createdBy: portalLink.userId,
+          amount: payAmount,
+          paidAt: paymentPaidAt,
+          note: note ? note.trim() : null,
+        },
+        include: {
+          customer: { select: { name: true, phone: true } },
+        },
+      });
+    }
 
     // Cập nhật lastPublishedAt để portal phản ánh số liệu mới ngay lập tức
     await prisma.portalLink.update({
@@ -3376,24 +3520,42 @@ const submitPortalCollectDebt = async (req, res, next) => {
       data: { lastPublishedAt: new Date() }
     });
 
+    const formattedPay = new Intl.NumberFormat('vi-VN').format(payAmount);
     logActivity(
       portalLink.userId,
       'PORTAL_COLLECT_DEBT',
-      `Thu nợ qua Zalo Portal: ${customer.name} trả ${new Intl.NumberFormat('vi-VN').format(payAmount)}đ`
+      supplier
+        ? `Thu nợ qua Zalo Portal cấn trừ NCC ${supplier.name}: ${customer.name} trả ${formattedPay}đ`
+        : `Thu nợ qua Zalo Portal: ${customer.name} trả ${formattedPay}đ`
     );
+
+    if (supplier && supplierPayment) {
+      logActivity(
+        portalLink.userId,
+        'PORTAL_CREATE_SUPPLIER_PAYMENT',
+        `Ghi nhận thanh toán NCC ${supplier.name} qua Zalo Portal từ tiền khách ${customer.name} trả: ${formattedPay}đ`
+      );
+      emitWorkspaceEvent(portalLink.userId, 'SUPPLIER_PAYMENT_CREATED', {
+        supplierId: supplier.id,
+        supplierPaymentId: supplierPayment.id,
+      });
+    }
 
     emitWorkspaceEvent(portalLink.userId, 'CUSTOMER_UPDATED', {
       action: 'PORTAL_COLLECT_DEBT',
       userId: portalLink.userId,
       customerId,
       paymentId: payment.id,
-      amount: payAmount
+      amount: payAmount,
     });
 
     res.json({
       success: true,
-      message: 'Thu tiền công nợ thành công.',
-      data: payment
+      message: supplier
+        ? `Thu tiền nợ và cấn trừ thanh toán NCC ${supplier.name} thành công.`
+        : 'Thu tiền công nợ thành công.',
+      data: payment,
+      offsetSupplierPayment: supplierPayment,
     });
   } catch (err) {
     next(err);
@@ -3784,7 +3946,7 @@ const submitPortalDeleteDebt = async (req, res, next) => {
 };
 
 // [DELETE] /api/v1/portal/debt-action/delete-payment/:token/:paymentId
-// Xóa khoản thanh toán trực tiếp từ Portal
+// Xóa khoản thanh toán trực tiếp từ Portal (tự động xóa khoản cấn trừ NCC liên kết nếu có)
 const submitPortalDeletePayment = async (req, res, next) => {
   try {
     const { token, paymentId } = req.params;
@@ -3801,6 +3963,36 @@ const submitPortalDeletePayment = async (req, res, next) => {
       include: { customer: true }
     });
     if (!payment) throw new NotFoundError('Không tìm thấy khoản thanh toán.');
+
+    // Tự động kiểm tra và xóa khoản cấn trừ công nợ NCC nếu có liên kết
+    if (payment.note) {
+      const matchSup = payment.note.match(/\[offsetSupplierPaymentId:([a-f0-9\-]+)\]/i);
+      if (matchSup && matchSup[1]) {
+        const linkedSupplierPaymentId = matchSup[1];
+        try {
+          const linkedSup = await prisma.supplierPayment.findUnique({
+            where: { id: linkedSupplierPaymentId },
+            include: { supplier: true }
+          });
+          if (linkedSup) {
+            await prisma.supplierPayment.delete({
+              where: { id: linkedSupplierPaymentId }
+            });
+            logActivity(
+              portalLink.userId,
+              'PORTAL_DELETE_SUPPLIER_PAYMENT',
+              `Tự động xóa khoản cấn trừ nợ NCC ${linkedSup.supplier?.name || ''} do xóa lượt thu tiền khách qua Portal: -${Number(linkedSup.amount).toLocaleString('vi-VN')}đ`
+            );
+            emitWorkspaceEvent(portalLink.userId, 'SUPPLIER_PAYMENT_DELETED', {
+              supplierId: linkedSup.supplierId,
+              supplierPaymentId: linkedSupplierPaymentId,
+            });
+          }
+        } catch (supDelErr) {
+          console.warn('[PORTAL_DELETE_PAYMENT_SYNC_SUPPLIER_ERR]', supDelErr.message);
+        }
+      }
+    }
 
     await prisma.payment.delete({ where: { id: paymentId } });
 

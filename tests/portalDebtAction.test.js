@@ -15,6 +15,7 @@ describe('Luồng Nghiệp Vụ: Thao Tác Chỉnh Sửa & Thu Công Nợ Trực
   let testUser;
   let testCust;
   let testProd;
+  let testSupplier;
   let portalLink;
   let actionToken;
   const CORRECT_PIN = '6868';
@@ -32,6 +33,15 @@ describe('Luồng Nghiệp Vụ: Thao Tác Chỉnh Sửa & Thu Công Nợ Trực
 
     testCust = await createTestCustomer(testUser.id, 'NhaHang_TruongHoang');
     testProd = await createTestProduct(testUser.id, 'ThitBoTai', 250000, 200000);
+
+    testSupplier = await prisma.supplier.create({
+      data: {
+        userId: testUser.id,
+        name: 'NCC_DangTest',
+        phone: '0988776655',
+        isActive: true,
+      },
+    });
 
     // Cài giá riêng cho khách
     await prisma.customerProductPrice.create({
@@ -71,6 +81,10 @@ describe('Luồng Nghiệp Vụ: Thao Tác Chỉnh Sửa & Thu Công Nợ Trực
     }
     if (testProd?.id) {
       await prisma.product.deleteMany({ where: { id: testProd.id } });
+    }
+    if (testSupplier?.id) {
+      await prisma.supplierPayment.deleteMany({ where: { supplierId: testSupplier.id } });
+      await prisma.supplier.deleteMany({ where: { id: testSupplier.id } });
     }
     if (testUser?.id) {
       await cleanupTestUser(testUser.id);
@@ -372,5 +386,62 @@ describe('Luồng Nghiệp Vụ: Thao Tác Chỉnh Sửa & Thu Công Nợ Trực
       });
 
     expect(res.status).toBe(401);
+  });
+
+  test('10. Thu nợ qua Portal cấn trừ trực tiếp cho Nhà cung cấp (Atomic 2 đầu)', async () => {
+    const res = await request(app)
+      .post(`/api/v1/portal/debt-action/collect-debt/${portalLink.token}`)
+      .set('x-portal-action-token', actionToken)
+      .send({
+        customerId: testCust.id,
+        amount: 750000,
+        supplierId: testSupplier.id,
+        note: 'Khách chuyển VCB cho NCC Đăng',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toBeDefined();
+    expect(Number(res.body.data.amount)).toBe(750000);
+    expect(res.body.data.note).toContain(`[Chuyển thẳng NCC: ${testSupplier.name}]`);
+    expect(res.body.data.note).toContain('[offsetSupplierPaymentId:');
+    expect(res.body.offsetSupplierPayment).toBeDefined();
+    expect(Number(res.body.offsetSupplierPayment.amount)).toBe(750000);
+
+    // Kiểm tra DB: SupplierPayment đối ứng đã được tạo
+    const supPayment = await prisma.supplierPayment.findFirst({
+      where: { supplierId: testSupplier.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(supPayment).toBeDefined();
+    expect(Number(supPayment.amount)).toBe(750000);
+    expect(supPayment.note).toContain(`[Khách ${testCust.name} chuyển]`);
+    expect(supPayment.note).toContain(`[offsetPaymentId:${res.body.data.id}]`);
+  });
+
+  test('11. Xóa khoản thanh toán cấn trừ từ Portal -> Tự động xóa cả SupplierPayment', async () => {
+    const payment = await prisma.payment.findFirst({
+      where: { customerId: testCust.id, note: { contains: '[offsetSupplierPaymentId:' } },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(payment).toBeDefined();
+
+    const matchSup = payment.note.match(/\[offsetSupplierPaymentId:([a-f0-9\-]+)\]/i);
+    expect(matchSup).toBeDefined();
+    const supPaymentId = matchSup[1];
+
+    const res = await request(app)
+      .delete(`/api/v1/portal/debt-action/delete-payment/${portalLink.token}/${payment.id}`)
+      .set('x-portal-action-token', actionToken);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+
+    // Kiểm tra DB: Cả Payment lẫn SupplierPayment đều đã bị xóa
+    const deletedPayment = await prisma.payment.findUnique({ where: { id: payment.id } });
+    expect(deletedPayment).toBeNull();
+
+    const deletedSupPayment = await prisma.supplierPayment.findUnique({ where: { id: supPaymentId } });
+    expect(deletedSupPayment).toBeNull();
   });
 });
