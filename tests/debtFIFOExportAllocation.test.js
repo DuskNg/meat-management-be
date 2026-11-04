@@ -85,8 +85,8 @@ describe('Luồng Nghiệp Vụ: Đồng Bộ Phân Bổ Nợ FIFO Cho Module Xu
     expect(exportJul.wholeMonthDebt).toBe(0);
     // Bảng kê hàng ngày không bị chèn các dòng ĐÃ THU lặp lại
     expect(exportJul.sortedDays.every(d => d.entries.every(e => e.type !== 'PAYMENT'))).toBe(true);
-    // Bảng thanh toán mở ngoặc ghi rõ ngày thu nợ
-    expect(exportJul.paymentSummaryText).toBe('Khoản thu ngày 05/08');
+    // Bảng thanh toán mở ngoặc ghi rõ ngày thu nợ (đã bỏ chữ Khoản thu ngày)
+    expect(exportJul.paymentSummaryText).toBe('05/08');
   });
 
   it('2. Trả nợ vượt số dư nợ cũ (trả dư/cuốn chiếu sang tháng mới): Khoản dôi ra được trừ tiếp cho tháng mới', () => {
@@ -162,5 +162,50 @@ describe('Luồng Nghiệp Vụ: Đồng Bộ Phân Bổ Nợ FIFO Cho Module Xu
     expect(remainingDebtMap['t_day2']).toBe(0);
     // Đơn ngày 01/08 vẫn còn nợ
     expect(remainingDebtMap['t_day1']).toBe(5000000);
+  });
+
+  it('4. Không cộng dồn các đợt thanh toán trong cùng một ngày: Liệt kê riêng từng đợt tiền và bỏ chữ ngày', () => {
+    const transactions = [
+      {
+        id: 'trans_oct_31',
+        date: '2026-10-31T08:00:00.000Z',
+        totalAmount: 100000000,
+        items: [{ productName: 'Thịt bò', quantity: 400, price: 250000, amount: 100000000 }],
+      },
+    ];
+
+    // Cùng ngày 31/10 có 2 khoản thanh toán riêng biệt
+    const payments = [
+      {
+        id: 'pay_oct_31_1',
+        paidAt: '2026-10-31T10:00:00.000Z',
+        amount: 50000000,
+      },
+      {
+        id: 'pay_oct_31_2',
+        paidAt: '2026-10-31T15:30:00.000Z',
+        amount: 26407000,
+      },
+    ];
+
+    const fromD = new Date(2026, 9, 1, 0, 0, 0, 0); // Tháng 10
+    const toD = new Date(2026, 9, 31, 23, 59, 59, 999);
+    const exportResult = buildExportDayGroupsWithFIFO({
+      transList: transactions,
+      payList: payments,
+      fromD,
+      toD,
+      monthStr: '10/2026',
+    });
+
+    // Tổng thanh toán vẫn là 76.407.000đ
+    expect(exportResult.totalPaymentAmount).toBe(76407000);
+
+    // Nhưng paymentBreakdown phải tách thành 2 mục riêng biệt, KHÔNG bị gom dồn thành 1 dòng 76.407.000đ
+    expect(exportResult.paymentBreakdown).toHaveLength(2);
+    expect(exportResult.paymentBreakdown[0].amount).toBe(50000000);
+    expect(exportResult.paymentBreakdown[0].displayDate).toBe('31/10');
+    expect(exportResult.paymentBreakdown[1].amount).toBe(26407000);
+    expect(exportResult.paymentBreakdown[1].displayDate).toBe('31/10');
   });
 });
