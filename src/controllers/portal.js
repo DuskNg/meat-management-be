@@ -3089,6 +3089,30 @@ const computeUnpaidDaysForCustomer = (transactions, payments) => {
     pm.remaining -= used;
   };
 
+  // Bước 0: Phân bổ các khoản Trả hàng (Return Goods) trực tiếp vào đơn nợ của chính ngày phát sinh trả hàng
+  // (Đồng bộ chuẩn 100% với logic allocateDebtFIFO của hệ thống, tránh trường hợp trả hàng bị trôi về ngày cũ nhất)
+  cashPayments.forEach((pm) => {
+    if (pm.remaining <= 0) return;
+    const trimNote = (pm.note || '').trim();
+    const isReturn =
+      trimNote.includes('[Trả lại hàng]') ||
+      trimNote.includes('[Trả hàng nhanh]') ||
+      trimNote.includes('[Trả hàng]') ||
+      trimNote.includes('Trả lại hàng') ||
+      trimNote.includes('Trả hàng') ||
+      trimNote.includes('Trả lại') ||
+      trimNote.includes('[Nhập hàng]');
+
+    if (isReturn) {
+      const d = pm.paidAt;
+      const dKey = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+      const targetDay = dayMap[dKey];
+      if (targetDay) {
+        applyPayment(pm, targetDay);
+      }
+    }
+  });
+
   // Bước A: Thanh toán theo ngày cụ thể: "Thanh toán nợ ngày DD/MM/YYYY"
   cashPayments.forEach((pm) => {
     if (pm.remaining <= 0) return;
@@ -3203,16 +3227,14 @@ const getPortalDebtActionBootstrap = async (req, res, next) => {
             }
           }
         },
-        orderBy: { date: 'desc' },
-        take: 200
+        orderBy: { date: 'desc' }
       }),
       prisma.payment.findMany({
         where: { customerId: { in: customerIds } },
         include: {
           customer: { select: { id: true, name: true } }
         },
-        orderBy: { paidAt: 'desc' },
-        take: 200
+        orderBy: { paidAt: 'desc' }
       }),
       prisma.supplier.findMany({
         where: { userId, isActive: true },
@@ -3239,7 +3261,7 @@ const getPortalDebtActionBootstrap = async (req, res, next) => {
       let debt = Math.round(totalPurchase - totalPaid + Number(c.manualDebt || 0));
       if (Math.abs(debt) < 1) debt = 0;
 
-      // Tính danh sách các ngày còn nợ theo chuẩn FIFO & specific matching
+      // Tính danh sách các ngày còn nợ theo chuẩn FIFO & specific matching (lấy toàn bộ lịch sử để FIFO không bị nuốt nợ các ngày mới)
       const custTransactions = recentTransactions.filter((tx) => tx.customerId === c.id);
       const custPayments = recentPayments.filter((p) => p.customerId === c.id);
       const unpaidDays = computeUnpaidDaysForCustomer(custTransactions, custPayments);
@@ -3260,8 +3282,8 @@ const getPortalDebtActionBootstrap = async (req, res, next) => {
         customers: customersWithDebt,
         products,
         customPrices,
-        recentTransactions,
-        recentPayments,
+        recentTransactions: recentTransactions.slice(0, 100),
+        recentPayments: recentPayments.slice(0, 100),
         suppliers
       }
     });

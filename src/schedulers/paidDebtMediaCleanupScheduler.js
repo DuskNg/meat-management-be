@@ -49,6 +49,32 @@ const reconcileDebtTransactions = (transactions = [], payments = []) => {
     }
   };
 
+  // Bước 0: Khấu trừ các khoản Trả hàng (Return Goods) trực tiếp vào đơn nợ của chính ngày phát sinh trả hàng
+  cashPayments.forEach((pm) => {
+    if (pm.remaining <= 0) return;
+    const trimNote = (pm.note || '').trim();
+    const isReturn =
+      trimNote.includes('[Trả lại hàng]') ||
+      trimNote.includes('[Trả hàng nhanh]') ||
+      trimNote.includes('[Trả hàng]') ||
+      trimNote.includes('Trả lại hàng') ||
+      trimNote.includes('Trả hàng') ||
+      trimNote.includes('Trả lại') ||
+      trimNote.includes('[Nhập hàng]');
+
+    if (isReturn) {
+      const pd = pm.paidAt;
+      const sameDayTxs = txList.filter((tx) => {
+        const td = tx.dateObj;
+        return td.getDate() === pd.getDate() && td.getMonth() === pd.getMonth() && td.getFullYear() === pd.getFullYear();
+      });
+      for (const tx of sameDayTxs) {
+        if (pm.remaining <= 0) break;
+        applyPaymentToTx(pm, tx);
+      }
+    }
+  });
+
   // Bước A: Khấu trừ thanh toán có ghi chú theo ngày cụ thể: "Thanh toán nợ ngày DD/MM/YYYY"
   cashPayments.forEach((pm) => {
     if (pm.remaining <= 0) return;

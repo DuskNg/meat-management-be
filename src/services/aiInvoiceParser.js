@@ -265,26 +265,27 @@ const matchCustomerFromAiAliases = (rawDetectedName, aliases, customers) => {
   const norm = normalizeCustomerAliasText(rawDetectedName);
   if (!norm) return null;
 
-  // 0. BẮT BUỘC ƯU TIÊN SỐ 1: Nếu rawDetectedName khớp chính xác 100% với một khách hàng có thật trong DB,
-  // tuyệt đối lấy ngay khách đó, không cho bất kỳ alias lệch nào đè lên!
+  // 0. BẮT BUỘC ƯU TIÊN SỐ 1 ĐẶC BIỆT: Khớp chính xác 100% từ Bảng từ điển AI tự học (CustomerAiAlias)
+  // Nếu người dùng đã dạy alias cho chữ viết tay này (ví dụ: 'Hạnh' -> 'Chị hạnh sân bóng hà trì'), BẮT BUỘC ưu tiên alias đã học!
+  const exactAlias = aliases.find(
+    (a) => a.normalizedAlias === norm.normalizedAlias || (a.compactAlias && a.compactAlias === norm.compactAlias)
+  );
+  if (exactAlias) {
+    const foundCust = customers.find((c) => c.id === exactAlias.customerId && c.isActive !== false);
+    if (foundCust && !isCustomerNameContradictory(rawDetectedName, foundCust.name)) {
+      return { customer: foundCust, alias: exactAlias };
+    }
+  }
+
+  // 0b. Khớp chính xác 100% với tên một khách hàng có thật đang hoạt động trong DB
   const exactCustomer = customers.find((c) => {
+    if (c.isActive === false) return false;
     const cNorm = normalizeCustomerAliasText(c.name);
     if (!cNorm) return false;
     return cNorm.normalizedAlias === norm.normalizedAlias || cNorm.compactAlias === norm.compactAlias;
   });
   if (exactCustomer) {
     return { customer: exactCustomer, alias: null, isExactMatch: true };
-  }
-
-  // 1. Ưu tiên khớp chính xác 100% theo normalizedAlias hoặc compactAlias
-  const exactAlias = aliases.find(
-    (a) => a.normalizedAlias === norm.normalizedAlias || (a.compactAlias && a.compactAlias === norm.compactAlias)
-  );
-  if (exactAlias) {
-    const foundCust = customers.find((c) => c.id === exactAlias.customerId);
-    if (foundCust && !isCustomerNameContradictory(rawDetectedName, foundCust.name)) {
-      return { customer: foundCust, alias: exactAlias };
-    }
   }
 
   // 2. Khớp cụm từ khóa đã học (chỉ áp dụng cho alias có độ dài >= 4 ký tự để tránh khớp nhầm từ ngắn)
@@ -331,7 +332,7 @@ const learnCustomerAiAlias = async (userId, rawDetectedName, customerId, exclude
     // TUYỆT ĐỐI không được phép lưu vào bảng CustomerAiAlias vì sẽ làm hỏng dữ liệu của khách hàng thật đó!
     const allUserCustomers = await prisma.customer.findMany({
       where: { userId, isActive: true },
-      select: { id: true, name: true }
+      select: { id: true, name: true, _count: { select: { transactions: true } } }
     });
     const exactOther = allUserCustomers.find((c) => {
       if (c.id === customer.id) return false;
@@ -340,8 +341,18 @@ const learnCustomerAiAlias = async (userId, rawDetectedName, customerId, exclude
       return cClean === norm.normalizedAlias || cNoSpace === norm.compactAlias;
     });
     if (exactOther) {
-      console.warn(`[AI LEARN BLOCKED] Chặn không lưu alias '${rawDetectedName}' -> '${customer.name}' vì trùng khớp 100% với khách hàng thật '${exactOther.name}'!`);
-      return null;
+      const custClean = removeDiacritics(customer.name.toLowerCase().trim());
+      const isShortNameOfTarget = custClean.includes(norm.normalizedAlias) || custClean.replace(/\s+/g, '').includes(norm.compactAlias);
+      const targetTxCount = (await prisma.transaction.count({ where: { customerId: customer.id } })) || 0;
+      const otherTxCount = exactOther._count?.transactions || 0;
+
+      // Nếu tên bóc tách thực sự là tên gọi tắt của khách hàng đích VÀ khách đích có nhiều giao dịch hơn -> Cho phép học!
+      if (isShortNameOfTarget && targetTxCount >= otherTxCount) {
+        console.log(`[AI LEARN PERMITTED] Cho phép học alias '${rawDetectedName}' -> '${customer.name}' vì là tên gọi tắt hợp lệ của khách hàng thường xuyên (Target: ${targetTxCount} tx vs Other: ${otherTxCount} tx)`);
+      } else {
+        console.warn(`[AI LEARN BLOCKED] Chặn không lưu alias '${rawDetectedName}' -> '${customer.name}' vì trùng khớp 100% với khách hàng thật '${exactOther.name}'!`);
+        return null;
+      }
     }
 
     const savedAlias = await prisma.customerAiAlias.upsert({
