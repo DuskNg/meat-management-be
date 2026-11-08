@@ -3027,27 +3027,45 @@ const verifyPortalDebtActionPin = async (req, res, next) => {
   }
 };
 
+// Helper chuẩn hóa ngày giờ sang các thành phần ngày/tháng/năm theo múi giờ Việt Nam (UTC+7)
+const getVNDateParts = (dateInput) => {
+  if (!dateInput) return null;
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return null;
+  const vnTime = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+  const year = vnTime.getUTCFullYear();
+  const month = String(vnTime.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(vnTime.getUTCDate()).padStart(2, '0');
+  const weekdayIndex = vnTime.getUTCDay();
+  const weekdays = ['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
+  return {
+    day,
+    month,
+    year,
+    dateKey: `${day}/${month}/${year}`,
+    dateStr: `${year}-${month}-${day}`,
+    monthKey: `${month}/${year}`,
+    weekday: weekdays[weekdayIndex],
+    time: d.getTime(),
+  };
+};
+
 // Helper tính toán các ngày còn nợ của một khách hàng phục vụ trả nợ theo ngày
 const computeUnpaidDaysForCustomer = (transactions, payments) => {
   const dayMap = {};
 
-  // 1. Gom nhóm transactions theo ngày DD/MM/YYYY
+  // 1. Gom nhóm transactions theo ngày DD/MM/YYYY chuẩn giờ Việt Nam (UTC+7)
   transactions.forEach((tx) => {
-    const d = new Date(tx.date);
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const year = d.getFullYear();
-    const dateKey = `${day}/${month}/${year}`;
-    const dateStr = `${year}-${month}-${day}`;
+    const vnParts = getVNDateParts(tx.date);
+    if (!vnParts) return;
+    const { dateKey, dateStr, weekday } = vnParts;
 
     if (!dayMap[dateKey]) {
-      const weekdays = ['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'];
-      const weekday = weekdays[d.getDay()];
-
       dayMap[dateKey] = {
         dateKey,
         dateStr,
-        dateObj: d,
+        dateObj: new Date(tx.date),
+        vnParts,
         weekday,
         totalDebt: 0,
         paidAmount: 0,
@@ -3077,6 +3095,7 @@ const computeUnpaidDaysForCustomer = (transactions, payments) => {
     amount: parseFloat(p.amount) || 0,
     remaining: parseFloat(p.amount) || 0,
     paidAt: new Date(p.paidAt),
+    vnParts: getVNDateParts(p.paidAt),
     note: p.note || '',
   })).sort((a, b) => a.paidAt.getTime() - b.paidAt.getTime());
 
@@ -3103,10 +3122,8 @@ const computeUnpaidDaysForCustomer = (transactions, payments) => {
       trimNote.includes('Trả lại') ||
       trimNote.includes('[Nhập hàng]');
 
-    if (isReturn) {
-      const d = pm.paidAt;
-      const dKey = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-      const targetDay = dayMap[dKey];
+    if (isReturn && pm.vnParts) {
+      const targetDay = dayMap[pm.vnParts.dateKey];
       if (targetDay) {
         applyPayment(pm, targetDay);
       }
@@ -3134,11 +3151,7 @@ const computeUnpaidDaysForCustomer = (transactions, payments) => {
     const monthMatch = trimNote.match(/^Thanh toán (?:nợ|hóa đơn)?\s*[Tt]háng (\d{1,2})\/(\d{4})/i);
     if (monthMatch) {
       const targetMKey = `${String(monthMatch[1]).padStart(2, '0')}/${monthMatch[2]}`;
-      const monthDays = sortedDays.filter((d) => {
-        const dm = String(d.dateObj.getMonth() + 1).padStart(2, '0');
-        const dy = d.dateObj.getFullYear();
-        return `${dm}/${dy}` === targetMKey;
-      });
+      const monthDays = sortedDays.filter((d) => d.vnParts && d.vnParts.monthKey === targetMKey);
       for (const day of monthDays) {
         if (pm.remaining <= 0) break;
         applyPayment(pm, day);

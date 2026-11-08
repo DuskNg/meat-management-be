@@ -11,8 +11,26 @@ const { logActivity } = require('../utils/activityLogger');
  * @param {Array} payments - Danh sách các khoản thanh toán của khách hàng (sắp xếp tăng dần theo paidAt)
  * @returns {Array} transactions kèm trường fullyPaidAt (nếu đã thanh toán hết) và isPaid
  */
+// Helper trích xuất ngày/tháng/năm theo múi giờ Việt Nam (UTC+7)
+const getVNDateParts = (dateInput) => {
+  if (!dateInput) return null;
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return null;
+  const vnTime = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+  const year = vnTime.getUTCFullYear();
+  const month = String(vnTime.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(vnTime.getUTCDate()).padStart(2, '0');
+  return {
+    day,
+    month,
+    year,
+    dateKey: `${day}/${month}/${year}`,
+    monthKey: `${month}/${year}`,
+  };
+};
+
 const reconcileDebtTransactions = (transactions = [], payments = []) => {
-  // Chuẩn bị danh sách đơn nợ với số tiền còn nợ
+  // Chuẩn bị danh sách đơn nợ với số tiền còn nợ (chuẩn hóa theo giờ Việt Nam UTC+7)
   const txList = transactions.map((t) => {
     const totalAmt = Math.round(Number(t.totalAmount || 0));
     return {
@@ -22,17 +40,19 @@ const reconcileDebtTransactions = (transactions = [], payments = []) => {
       isPaid: totalAmt <= 0,
       fullyPaidAt: totalAmt <= 0 ? new Date(t.date) : null,
       dateObj: new Date(t.date),
+      vnParts: getVNDateParts(t.date),
     };
   });
 
-  // Chuẩn bị danh sách thanh toán
+  // Chuẩn bị danh sách thanh toán (chuẩn hóa theo giờ Việt Nam UTC+7)
   const cashPayments = payments.map((p) => ({
     id: p.id,
     amount: Math.round(Number(p.amount || 0)),
     remaining: Math.round(Number(p.amount || 0)),
     paidAt: new Date(p.paidAt),
+    vnParts: getVNDateParts(p.paidAt),
     note: p.note || '',
-  }));
+  })).sort((a, b) => a.paidAt.getTime() - b.paidAt.getTime());
 
   // Hàm phụ trợ thanh toán từng phần hoặc toàn bộ đơn nợ
   const applyPaymentToTx = (pm, tx) => {
@@ -62,12 +82,8 @@ const reconcileDebtTransactions = (transactions = [], payments = []) => {
       trimNote.includes('Trả lại') ||
       trimNote.includes('[Nhập hàng]');
 
-    if (isReturn) {
-      const pd = pm.paidAt;
-      const sameDayTxs = txList.filter((tx) => {
-        const td = tx.dateObj;
-        return td.getDate() === pd.getDate() && td.getMonth() === pd.getMonth() && td.getFullYear() === pd.getFullYear();
-      });
+    if (isReturn && pm.vnParts) {
+      const sameDayTxs = txList.filter((tx) => tx.vnParts && tx.vnParts.dateKey === pm.vnParts.dateKey);
       for (const tx of sameDayTxs) {
         if (pm.remaining <= 0) break;
         applyPaymentToTx(pm, tx);
@@ -81,15 +97,10 @@ const reconcileDebtTransactions = (transactions = [], payments = []) => {
     const trimNote = (pm.note || '').trim();
     const dateMatch = trimNote.match(/^Thanh toán (?:nợ\s+)?ngày (\d{1,2})\/(\d{1,2})\/(\d{4})/i);
     if (dateMatch) {
-      const d = parseInt(dateMatch[1], 10);
-      const m = parseInt(dateMatch[2], 10) - 1;
-      const y = parseInt(dateMatch[3], 10);
+      const dKey = `${String(dateMatch[1]).padStart(2, '0')}/${String(dateMatch[2]).padStart(2, '0')}/${dateMatch[3]}`;
 
-      // Tìm các đơn nợ khớp ngày này
-      const sameDayTxs = txList.filter((tx) => {
-        const td = tx.dateObj;
-        return td.getDate() === d && td.getMonth() === m && td.getFullYear() === y;
-      });
+      // Tìm các đơn nợ khớp ngày này (theo giờ VN UTC+7)
+      const sameDayTxs = txList.filter((tx) => tx.vnParts && tx.vnParts.dateKey === dKey);
 
       for (const tx of sameDayTxs) {
         if (pm.remaining <= 0) break;
@@ -102,15 +113,11 @@ const reconcileDebtTransactions = (transactions = [], payments = []) => {
   cashPayments.forEach((pm) => {
     if (pm.remaining <= 0) return;
     const trimNote = (pm.note || '').trim();
-    const monthMatch = trimNote.match(/^Thanh toán (?:nợ|hóa đơn)?\s*[Tt]háng (\d{1,2})\/(\d{4})/i);
+    const monthMatch = trimNote.match(/^Thanh toán (?:nợ\s+)?(?:hóa đơn)?\s*[Tt]háng (\d{1,2})\/(\d{4})/i);
     if (monthMatch) {
-      const m = parseInt(monthMatch[1], 10) - 1;
-      const y = parseInt(monthMatch[2], 10);
+      const targetMKey = `${String(monthMatch[1]).padStart(2, '0')}/${monthMatch[2]}`;
 
-      const sameMonthTxs = txList.filter((tx) => {
-        const td = tx.dateObj;
-        return td.getMonth() === m && td.getFullYear() === y;
-      });
+      const sameMonthTxs = txList.filter((tx) => tx.vnParts && tx.vnParts.monthKey === targetMKey);
 
       for (const tx of sameMonthTxs) {
         if (pm.remaining <= 0) break;
