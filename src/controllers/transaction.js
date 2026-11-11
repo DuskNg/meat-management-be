@@ -210,6 +210,7 @@ const createTransaction = async (req, res, next) => {
       }
 
       // Tự động gắn các ảnh hóa đơn chưa được liên kết của khách này trong cùng ngày vào đơn nợ vừa tạo
+      // (CHỈ gắn các ảnh hóa đơn đơn nợ chưa liên kết, TUYỆT ĐỐI KHÔNG gắn ảnh/video trả hàng của Payment có tag [paymentId:])
       try {
         const txDateVN = new Date(transaction.date.getTime() + 7 * 60 * 60 * 1000);
         const startDayUTC = new Date(Date.UTC(txDateVN.getUTCFullYear(), txDateVN.getUTCMonth(), txDateVN.getUTCDate(), 0, 0, 0, 0) - 7 * 60 * 60 * 1000);
@@ -221,6 +222,10 @@ const createTransaction = async (req, res, next) => {
             customerId,
             transactionId: null,
             date: { gte: startDayUTC, lte: endDayUTC },
+            OR: [
+              { note: null },
+              { NOT: { note: { contains: '[paymentId:' } } },
+            ],
           },
           data: {
             transactionId: transaction.id,
@@ -334,7 +339,14 @@ const getTransactions = async (req, res, next) => {
             },
           },
         },
-        invoices: true, // Bao gồm danh sách ảnh hóa đơn đính kèm đơn nợ
+        invoices: {
+          where: {
+            OR: [
+              { note: null },
+              { NOT: { note: { contains: '[paymentId:' } } },
+            ],
+          },
+        }, // Bao gồm danh sách ảnh hóa đơn đính kèm đơn nợ (loại trừ video/ảnh trả hàng)
       },
       orderBy: {
         date: 'desc', // Đơn hàng mới nhất hiển thị lên đầu
