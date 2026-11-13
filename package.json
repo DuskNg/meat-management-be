@@ -7,7 +7,7 @@
     "test": "cross-env NODE_ENV=test vitest run",
     "test:watch": "cross-env NODE_ENV=test vitest",
     "dev": "cross-env NODE_ENV=development nodemon src/index.js",
-    "dev:prod": "cross-env NODE_ENV=production nodemon src/index.js",
+    "dev:prod": "cross-env NODE_ENV=production PORT=3010 nodemon src/index.js",
     "dev:local": "cross-env NODE_ENV=development nodemon src/index.js",
     "seed": "tsx prisma/seed.mts",
     "prisma:studio:prod": "cross-env NODE_ENV=production npx prisma studio",
