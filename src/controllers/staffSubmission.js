@@ -1848,8 +1848,14 @@ const reparseStaffSubmission = async (req, res, next) => {
 
     emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_ANALYZING', { id });
 
+    // Nếu đơn đã lưu kết quả thô rawAiResponse trước đó và bị lỗi hậu kỳ -> tái sử dụng lại 0đ (trừ khi client truyền forceAi: true)
+    const hasCachedRawAi = Boolean(submission.rawAiResponse && submission.rawAiResponse.trim().length > 0);
+    const shouldForceAi = req.body?.forceAi !== undefined
+      ? Boolean(req.body.forceAi)
+      : !(hasCachedRawAi && Boolean(submission.aiError));
+
     // Gọi hàm phân tích AI
-    parseStaffSubmission(id)
+    parseStaffSubmission(id, { forceAi: shouldForceAi })
       .then((updated) => {
         emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_READY', updated);
       })
@@ -1859,8 +1865,69 @@ const reparseStaffSubmission = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: 'Hệ thống AI đang bắt đầu quét lại hóa đơn / video...',
-      data: { id, status: 'ANALYZING' },
+      message: !shouldForceAi
+        ? 'Đang xử lý lại từ kết quả thô đã lưu (không tốn phí AI)...'
+        : 'Hệ thống AI đang bắt đầu quét lại hóa đơn / video...',
+      data: { id, status: 'ANALYZING', reusedRawAi: !shouldForceAi },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Quét lại hàng loạt các hóa đơn bị lỗi AI (tự động tái sử dụng rawAiResponse 0đ nếu đã lưu trước đó)
+const batchReparseErrorSubmissions = async (req, res, next) => {
+  try {
+    const userId = req.workspaceOwnerId || req.user.id;
+    const { ids } = req.body || {};
+
+    const whereClause = {
+      userId,
+      status: { in: ['READY_FOR_REVIEW', 'PENDING'] },
+      aiError: { not: null },
+    };
+    if (Array.isArray(ids) && ids.length > 0) {
+      whereClause.id = { in: ids };
+    }
+
+    const errorSubs = await prisma.staffSubmission.findMany({
+      where: whereClause,
+      select: { id: true, rawAiResponse: true, fileUrl: true },
+    });
+
+    if (errorSubs.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Không có hóa đơn lỗi nào cần quét lại.',
+        data: { count: 0, ids: [] },
+      });
+    }
+
+    const targetIds = errorSubs.map((s) => s.id);
+    await prisma.staffSubmission.updateMany({
+      where: { id: { in: targetIds } },
+      data: { status: 'ANALYZING', aiError: null },
+    });
+
+    for (const sub of errorSubs) {
+      emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_ANALYZING', { id: sub.id });
+      const hasCachedRaw = Boolean(sub.rawAiResponse && sub.rawAiResponse.trim().length > 0);
+      parseStaffSubmission(sub.id, { forceAi: !hasCachedRaw })
+        .then((updated) => {
+          emitWorkspaceEvent(userId, 'STAFF_SUBMISSION_READY', updated);
+        })
+        .catch((err) => {
+          console.error(`[BATCH_REPARSE_ERROR] Lỗi quét lại submission ${sub.id}:`, err);
+        });
+    }
+
+    const cachedCount = errorSubs.filter((s) => Boolean(s.rawAiResponse && s.rawAiResponse.trim().length > 0)).length;
+    return res.json({
+      success: true,
+      message: cachedCount > 0
+        ? `Đang quét lại ${errorSubs.length} đơn lỗi (${cachedCount} đơn dùng lại dữ liệu thô 0đ)...`
+        : `Đang kích hoạt AI quét lại ${errorSubs.length} đơn lỗi...`,
+      data: { count: errorSubs.length, cachedCount, ids: targetIds },
     });
   } catch (error) {
     next(error);
@@ -2043,6 +2110,7 @@ module.exports = {
   rejectStaffSubmission,
   batchRejectStaffSubmissions,
   reparseStaffSubmission,
+  batchReparseErrorSubmissions,
   syncCloudSubmission,
   getSubmissionLinks,
   createSubmissionLink,

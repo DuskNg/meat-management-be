@@ -1217,7 +1217,7 @@ const fetchFileAsBase64 = async (url) => {
  * Phân tích hóa đơn / video được gửi từ nhân viên bằng Google Gemini AI
  * @param {string} submissionId - ID bản ghi StaffSubmission cần phân tích
  */
-const parseStaffSubmission = async (submissionId) => {
+const parseStaffSubmission = async (submissionId, options = {}) => {
   const submission = await prisma.staffSubmission.findUnique({
     where: { id: submissionId },
     include: {
@@ -1299,13 +1299,22 @@ const parseStaffSubmission = async (submissionId) => {
       .filter(Boolean)
       .join('; ');
 
+    const forceAi = Boolean(options?.forceAi);
+    const hasCachedRawAi = !forceAi && Boolean(submission.rawAiResponse && submission.rawAiResponse.trim().length > 0);
+    let isVideo = submission.fileType === 'VIDEO';
+    let geminiResult = null;
+
+    if (hasCachedRawAi) {
+      console.log(`[AI_PARSER] ♻️ Tái sử dụng rawAiResponse đã lưu cho submission ${submissionId} (0đ chi phí AI).`);
+      geminiResult = { text: submission.rawAiResponse, model: 'cached-raw-ai', usageMetadata: {} };
+    } else {
     // 3. Tải tệp thành Base64
     const filePayload = await fetchFileAsBase64(submission.fileUrl);
     if (!filePayload) {
       throw new Error('Không có dữ liệu tệp hợp lệ để phân tích.');
     }
 
-    const isVideo = submission.fileType === 'VIDEO' || filePayload.mimeType.startsWith('video/');
+      isVideo = submission.fileType === 'VIDEO' || filePayload.mimeType.startsWith('video/');
 
     // Tự động đồng bộ lại DB nếu phát hiện file thực tế là Video nhưng DB đang lưu nhầm IMAGE
     if (isVideo && submission.fileType !== 'VIDEO') {
@@ -1515,7 +1524,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
     }
 
     // Gửi sang Gemini Vision theo chuẩn System Instruction & User Prompt tách biệt
-    const geminiResult = await callGeminiWithRetry({
+      geminiResult = await callGeminiWithRetry({
       apiKey: process.env.GEMINI_API_KEY,
       timeoutMs: isVideo ? 120000 : 60000,
       systemInstruction,
@@ -1568,6 +1577,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
         where: { id: submissionId },
         data: { rawAiResponse: geminiResult.text },
       }).catch(() => {});
+    }
     }
 
     // Phân tích JSON an toàn, tự động khôi phục nếu Gemini trả về chuỗi JSON bị cắt ngang do vượt giới hạn token

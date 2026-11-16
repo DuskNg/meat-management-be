@@ -38,6 +38,9 @@ router.post('/:id/approve', authenticateToken, resolveWorkspace, staffSubmission
 // Xóa/bác bỏ hàng loạt hóa đơn
 router.post('/batch-reject', authenticateToken, resolveWorkspace, staffSubmissionController.batchRejectStaffSubmissions);
 
+// Quét lại hàng loạt các hóa đơn bị lỗi AI
+router.post('/batch-reparse', authenticateToken, resolveWorkspace, staffSubmissionController.batchReparseErrorSubmissions);
+
 // Bác bỏ/xóa hóa đơn
 router.post('/:id/reject', authenticateToken, resolveWorkspace, staffSubmissionController.rejectStaffSubmission);
 
