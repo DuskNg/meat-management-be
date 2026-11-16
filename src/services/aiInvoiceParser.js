@@ -1562,6 +1562,14 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
       },
     });
 
+    // Lưu ngay kết quả thô từ Gemini vào DB trước khi đối chiếu hậu kỳ để không bao giờ mất dữ liệu đã tốn phí API
+    if (geminiResult?.text) {
+      await prisma.staffSubmission.update({
+        where: { id: submissionId },
+        data: { rawAiResponse: geminiResult.text },
+      }).catch(() => {});
+    }
+
     // Phân tích JSON an toàn, tự động khôi phục nếu Gemini trả về chuỗi JSON bị cắt ngang do vượt giới hạn token
     const parsedJson = (() => {
       const rawText = (geminiResult.text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
@@ -2967,25 +2975,6 @@ if (!matchedCustomerId) {
 
     // Lấy bảng giá riêng của khách hàng nếu đã khớp khách
     const customerPriceMap = new Map();
-    let frequentProductIds = new Set();
-    if (matchedCustomer) {
-      try {
-        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-        const topHabitItems = await prisma.transactionItem.groupBy({
-          by: ['productId'],
-          where: {
-            transaction: {
-              customerId: matchedCustomer.id,
-              date: { gte: thirtyDaysAgo },
-            },
-          },
-          _count: { productId: true },
-          orderBy: { _count: { productId: 'desc' } },
-          take: 10,
-        });
-        frequentProductIds = new Set(topHabitItems.map((h) => h.productId));
-      } catch (_) {}
-    }
     if (matchedCustomerId) {
       try {
         const customPrices = await prisma.customerProductPrice.findMany({
@@ -3356,6 +3345,25 @@ if (!matchedCustomerId) {
     const baseItemTime = Date.now();
     // Lấy thông tin khách hàng đã so khớp nếu có
     const matchedCustomer = matchedCustomerId ? customers.find((c) => c.id === matchedCustomerId) : null;
+    let frequentProductIds = new Set();
+    if (matchedCustomer) {
+      try {
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const topHabitItems = await prisma.transactionItem.groupBy({
+          by: ['productId'],
+          where: {
+            transaction: {
+              customerId: matchedCustomer.id,
+              date: { gte: thirtyDaysAgo },
+            },
+          },
+          _count: { productId: true },
+          orderBy: { _count: { productId: 'desc' } },
+          take: 10,
+        });
+        frequentProductIds = new Set(topHabitItems.map((h) => h.productId));
+      } catch (_) {}
+    }
     const itemsToCreate = rawItems.map((item, index) => {
       const rawOriginal = (item.name || '').trim();
       const rawLower = rawOriginal.toLowerCase();
