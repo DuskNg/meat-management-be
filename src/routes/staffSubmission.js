@@ -18,6 +18,11 @@ router.post('/public/submit/:token', staffSubmissionController.submitBatchFromSt
 router.get('/public/history/:token', staffSubmissionController.getPublicSubmissionHistory);
 
 // ─── 2. CÁC ROUTE DÀNH CHO CHỦ BUÔN TRÊN APP (CẦN LOGIN & RESOLVE WORKSPACE) ───
+// Quản lý Từ điển AI tự học (Khách hàng & Món thịt)
+router.get('/ai-aliases', authenticateToken, resolveWorkspace, staffSubmissionController.getAiAliases);
+router.post('/ai-aliases', authenticateToken, resolveWorkspace, staffSubmissionController.createAiAlias);
+router.delete('/ai-aliases/:type/:id', authenticateToken, resolveWorkspace, staffSubmissionController.deleteAiAlias);
+
 // Lấy danh sách hóa đơn nhân viên nộp (lọc theo ngày, trạng thái)
 router.get('/', authenticateToken, resolveWorkspace, staffSubmissionController.getStaffSubmissions);
 

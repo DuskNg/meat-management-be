@@ -182,7 +182,7 @@ const createInventoryProduct = async (req, res, next) => {
       });
     }
 
-    await logActivity(userId, 'CREATE_INVENTORY_PRODUCT', `Thêm sản phẩm kho: ${product.name} (SL: ${qty}, Giá nhập: ${impPrc}đ, Giá bán: ${sellPrc}đ)`);
+    void logActivity(userId, 'CREATE_INVENTORY_PRODUCT', `Thêm sản phẩm kho: ${product.name} (SL: ${qty}, Giá nhập: ${impPrc}đ, Giá bán: ${sellPrc}đ)`);
     notifyInventoryUpdate(userId, 'CREATE_INVENTORY_PRODUCT', { productId: product.id });
 
     res.status(201).json({
@@ -246,7 +246,7 @@ const updateInventoryProduct = async (req, res, next) => {
       },
     });
 
-    await logActivity(userId, 'UPDATE_INVENTORY_PRODUCT', `Cập nhật sản phẩm kho: ${product.name} -> ${updatedProduct.name}`);
+    void logActivity(userId, 'UPDATE_INVENTORY_PRODUCT', `Cập nhật sản phẩm kho: ${product.name} -> ${updatedProduct.name}`);
     notifyInventoryUpdate(userId, 'UPDATE_INVENTORY_PRODUCT', { productId: id });
 
     res.status(200).json({
@@ -362,7 +362,7 @@ const adjustInventoryStock = async (req, res, next) => {
     });
 
     const actionText = type === 'IN' ? `Nhập +${deltaQty}` : type === 'OUT' ? `Xuất -${deltaQty}` : `Kiểm kê (${currentQty} -> ${newQty})`;
-    await logActivity(userId, 'ADJUST_INVENTORY_STOCK', `${actionText} ${product.name} (${product.unit}). Lý do: ${finalReason}`);
+    void logActivity(userId, 'ADJUST_INVENTORY_STOCK', `${actionText} ${product.name} (${product.unit}). Lý do: ${finalReason}`);
     notifyInventoryUpdate(userId, 'ADJUST_INVENTORY_STOCK', { productId: id });
 
     res.status(200).json({
@@ -451,7 +451,7 @@ const deleteInventoryProduct = async (req, res, next) => {
       data: { isActive: false },
     });
 
-    await logActivity(userId, 'DELETE_INVENTORY_PRODUCT', `Xóa sản phẩm khỏi kho: ${product.name}`);
+    void logActivity(userId, 'DELETE_INVENTORY_PRODUCT', `Xóa sản phẩm khỏi kho: ${product.name}`);
     notifyInventoryUpdate(userId, 'DELETE_INVENTORY_PRODUCT', { productId: id });
 
     res.status(200).json({

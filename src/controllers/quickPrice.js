@@ -697,7 +697,7 @@ const applyQuickPriceUpdate = async (req, res, next) => {
     const moreDiffs = priceDiffs.length > 5 ? `... (+${priceDiffs.length - 5} loại)` : '';
     const logDetail = `Cập nhật giá qua Zalo cho "${customer.name}" từ ngày ${formattedDate} (tính lại ${result.recalculatedCount} đơn nợ, ${result.recalculatedPaymentsCount} đơn trả hàng/nhập hàng):\n• ${changesSummary}${moreDiffs}`;
 
-    await logActivity(
+    void logActivity(
       userId,
       'QUICK_PRICE_APPLY',
       logDetail
@@ -813,7 +813,7 @@ const regenerateOwnerQuickPriceLink = async (req, res, next) => {
       });
     }
 
-    await logActivity(userId, 'REGENERATE_QUICK_PRICE_LINK', `Đã tạo mới mã link Zalo cập nhật giá.`);
+    void logActivity(userId, 'REGENERATE_QUICK_PRICE_LINK', `Đã tạo mới mã link Zalo cập nhật giá.`);
 
     res.json({
       success: true,

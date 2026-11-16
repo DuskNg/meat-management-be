@@ -52,7 +52,7 @@ const createWorkspace = async (req, res, next) => {
       },
     });
 
-    await logActivity(userId, 'CREATE_WORKSPACE', `Tạo Workspace: "${workspace.name}" với mã mời ${workspace.inviteCode}`);
+    void logActivity(userId, 'CREATE_WORKSPACE', `Tạo Workspace: "${workspace.name}" với mã mời ${workspace.inviteCode}`);
 
     res.status(201).json({
       success: true,
@@ -373,7 +373,7 @@ const approveJoinRequest = async (req, res, next) => {
       }),
     ]);
 
-    await logActivity(
+    void logActivity(
       ownerId,
       'APPROVE_WORKSPACE_JOIN',
       `Phê duyệt ${request.user.name} (${request.user.phone}) tham gia Workspace "${workspace.name}" với quyền mặc định tối thiểu`
@@ -414,7 +414,7 @@ const rejectJoinRequest = async (req, res, next) => {
       data: { status: 'rejected' },
     });
 
-    await logActivity(
+    void logActivity(
       ownerId,
       'REJECT_WORKSPACE_JOIN',
       `Từ chối ${request.user.name} (${request.user.phone}) tham gia Workspace "${workspace.name}"`
@@ -505,7 +505,7 @@ const updateMemberPermissions = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       ownerId,
       'UPDATE_WORKSPACE_MEMBER_PERMISSIONS',
       `Cập nhật quyền cho ${member.user.name} (${member.user.phone}) trong Workspace`
@@ -572,7 +572,7 @@ const kickMember = async (req, res, next) => {
       kicked: true,
     });
 
-    await logActivity(
+    void logActivity(
       ownerId,
       'KICK_WORKSPACE_MEMBER',
       `Loại ${member.user.name} (${member.user.phone}) khỏi Workspace "${workspace.name}"`
@@ -623,7 +623,7 @@ const leaveWorkspace = async (req, res, next) => {
       }),
     ]);
 
-    await logActivity(
+    void logActivity(
       userId,
       'LEAVE_WORKSPACE',
       `Rời khỏi Workspace "${membership.workspace.name}"`
@@ -663,7 +663,7 @@ const updateWorkspace = async (req, res, next) => {
       },
     });
 
-    await logActivity(userId, 'UPDATE_WORKSPACE_NAME', `Cập nhật tên Workspace thành: "${updatedWorkspace.name}"`);
+    void logActivity(userId, 'UPDATE_WORKSPACE_NAME', `Cập nhật tên Workspace thành: "${updatedWorkspace.name}"`);
 
     res.status(200).json({
       success: true,

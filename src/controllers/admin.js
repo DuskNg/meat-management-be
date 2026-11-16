@@ -123,7 +123,7 @@ const softDeleteUser = async (req, res, next) => {
     });
 
     // Ghi log hoạt động của admin
-    await logActivity(
+    void logActivity(
       req.user.id,
       'SOFT_DELETE_USER',
       `Xóa tạm thời tài khoản ${user.name} (${user.phone})`
@@ -165,7 +165,7 @@ const restoreUser = async (req, res, next) => {
     });
 
     // Ghi log hoạt động của admin
-    await logActivity(
+    void logActivity(
       req.user.id,
       'RESTORE_USER',
       `Khôi phục tài khoản ${user.name} (${user.phone})`
@@ -276,7 +276,7 @@ const updatePermissions = async (req, res, next) => {
     }
 
     // Ghi log hoạt động phân quyền của admin
-    await logActivity(
+    void logActivity(
       req.user.id,
       'UPDATE_USER_PERMISSIONS',
       `Phân quyền cho tài khoản ${user.name} (${user.phone}): Chủ Workspace [${!!updatedUser.isWorkspaceOwner}], Khách hàng [${!!updatedUser.canManageCustomers}], Công nợ [${!!updatedUser.canManageDebt}], Nợ xấu [${!!updatedUser.canManageBadDebt}], Nhân viên [${!!updatedUser.canManageEmployees}], Cửa hàng [${!!updatedUser.canManageStore}], Kho [${!!updatedUser.canManageInventory}], Cửa hàng tính giờ [${!!updatedUser.canManageShop}], Lợi nhuận [${!!updatedUser.canManageProfit}], Giao dịch [${!!updatedUser.canManageTransactions}]`
@@ -456,7 +456,7 @@ const toggleWorkspaceOwner = async (req, res, next) => {
       data: updateData,
     });
 
-    await logActivity(
+    void logActivity(
       req.user.id,
       'TOGGLE_WORKSPACE_OWNER',
       `${isOwnerBool ? 'Cấp' : 'Thu hồi'} quyền Chủ Workspace cho tài khoản ${user.name} (${user.phone})`

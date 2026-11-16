@@ -263,7 +263,7 @@ const createRecurringDebt = async (req, res, next) => {
       return { newRecurringDebt: recDebt, createdTx: transaction };
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'CREATE_RECURRING_DEBT',
       `Tạo mẫu đơn nợ cố định và tự động ghi nợ ngày hôm nay cho khách hàng ${customer.name}: ${calculatedTotal.toLocaleString('vi-VN')}đ`
@@ -503,7 +503,7 @@ const updateRecurringDebt = async (req, res, next) => {
 
     const logDetail = `Cập nhật đơn nợ cố định của khách hàng ${customer.name}:\n• Trước: ${oldTotalStr} [${oldItemsSummary || 'Trống'}]\n• Sau: ${newTotalStr} [${newItemsSummary || 'Trống'}]`;
 
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_RECURRING_DEBT',
       logDetail
@@ -539,7 +539,7 @@ const deleteRecurringDebt = async (req, res, next) => {
       where: { id },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_RECURRING_DEBT',
       `Xóa mẫu đơn nợ cố định hàng ngày của khách hàng ${existingDebt.customer?.name || 'Khách hàng'}`

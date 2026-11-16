@@ -24,40 +24,28 @@ const getSuppliers = async (req, res, next) => {
     const userId = req.effectiveUserId;
 
     // Lấy danh sách nhà cung cấp đang hoạt động của chủ sạp
-    const suppliers = await prisma.supplier.findMany({
-      where: {
-        userId,
-        isActive: true,
-      },
-      include: {
-        transactions: {
-          select: {
-            totalAmount: true,
-          },
-        },
-        payments: {
-          select: {
-            amount: true,
-          },
-        },
-      },
-      orderBy: {
-        name: 'asc', // Sắp xếp A-Z theo tên nhà cung cấp
-      },
-    });
-
-    // Tính dư nợ đối với từng nhà cung cấp
+    const [suppliers, txSums, paySums] = await Promise.all([
+      prisma.supplier.findMany({
+        where: { userId, isActive: true },
+        orderBy: { name: 'asc' },
+      }),
+      prisma.supplierTransaction.groupBy({
+        by: ['supplierId'],
+        where: { supplier: { userId, isActive: true } },
+        _sum: { totalAmount: true },
+      }),
+      prisma.supplierPayment.groupBy({
+        by: ['supplierId'],
+        where: { supplier: { userId, isActive: true } },
+        _sum: { amount: true },
+      }),
+    ]);
+    const txSumMap = new Map(txSums.map((r) => [r.supplierId, parseFloat(r._sum?.totalAmount || 0)]));
+    const paySumMap = new Map(paySums.map((r) => [r.supplierId, parseFloat(r._sum?.amount || 0)]));
     const suppliersWithDebt = suppliers.map((supplier) => {
-      const totalDebt = supplier.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0);
-      const totalPaid = supplier.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
-      const debt = totalDebt - totalPaid;
-
-      // Loại bỏ mảng giao dịch con để giảm tải dung lượng mạng
-      const { transactions, payments, ...rest } = supplier;
-      return {
-        ...rest,
-        debt,
-      };
+      const totalDebt = txSumMap.get(supplier.id) || 0;
+      const totalPaid = paySumMap.get(supplier.id) || 0;
+      return { ...supplier, debt: totalDebt - totalPaid };
     });
 
     res.status(200).json({
@@ -105,7 +93,7 @@ const createSupplier = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'CREATE_SUPPLIER',
       `Thêm nhà cung cấp mới: ${trimmedName}`
@@ -187,7 +175,7 @@ const updateSupplier = async (req, res, next) => {
       ? `Cập nhật nhà cung cấp "${supplierExists.name}":\n• ${changes.join('\n• ')}`
       : `Cập nhật nhà cung cấp "${supplierExists.name}" (Không có thay đổi)`;
 
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_SUPPLIER',
       logDetail
@@ -234,7 +222,7 @@ const deleteSupplier = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_SUPPLIER',
       `Xóa nhà cung cấp: ${supplierExists.name}`
@@ -292,7 +280,7 @@ const createSupplierTransaction = async (req, res, next) => {
 
     const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
     const detailCount = Array.isArray(items) && items.length > 0 ? ` (${items.length} món thịt)` : '';
-    await logActivity(
+    void logActivity(
       userId,
       'CREATE_SUPPLIER_TRANSACTION',
       `Nhập hàng từ nhà cung cấp ${supplier.name}: +${formatCurrency(totalAmount)}${detailCount} (Nợ phát sinh)`
@@ -429,12 +417,12 @@ const createSupplierPayment = async (req, res, next) => {
         }
       }
 
-      await logActivity(
+      void logActivity(
         userId,
         'CREATE_SUPPLIER_PAYMENT',
         `Cấn trừ nợ 2 đầu: Nhà cung cấp ${supplier.name} nhận ${payAmount.toLocaleString('vi-VN')}đ chuyển trực tiếp từ khách ${customer.name}`
       );
-      await logActivity(
+      void logActivity(
         userId,
         'CREATE_PAYMENT',
         `Cấn trừ nợ 2 đầu: Khách ${customer.name} trả ${payAmount.toLocaleString('vi-VN')}đ chuyển thẳng vào TK nhà cung cấp ${supplier.name}`
@@ -468,7 +456,7 @@ const createSupplierPayment = async (req, res, next) => {
     });
 
     const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
-    await logActivity(
+    void logActivity(
       userId,
       'CREATE_SUPPLIER_PAYMENT',
       `Thanh toán tiền hàng cho nhà cung cấp ${supplier.name}: -${formatCurrency(amount)}`
@@ -644,7 +632,7 @@ const updateSupplierTransaction = async (req, res, next) => {
     const dateDisplay = oldDateStr ? ` ngày ${oldDateStr}` : '';
     const logDetail = `Cập nhật đơn nhập hàng${dateDisplay} của nhà cung cấp ${transaction.supplier.name}:\n• ${changes.join('\n• ')}`;
 
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_SUPPLIER_TRANSACTION',
       logDetail
@@ -693,7 +681,7 @@ const deleteSupplierTransaction = async (req, res, next) => {
       : '';
     const dateDisplay = transDateStr ? ` ngày ${transDateStr}` : '';
     const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_SUPPLIER_TRANSACTION',
       `Xóa đơn nhập hàng${dateDisplay} của nhà cung cấp ${transaction.supplier.name}: ${formatCurrency(transaction.totalAmount)}`
@@ -788,7 +776,7 @@ const updateSupplierPayment = async (req, res, next) => {
               paidAt: newDate,
             },
           });
-          await logActivity(
+          void logActivity(
             userId,
             'UPDATE_PAYMENT',
             `Tự động đồng bộ số tiền cấn trừ nợ của khách hàng ${linkedCust.customer?.name || ''}: ${Number(newAmount).toLocaleString('vi-VN')}đ`
@@ -825,7 +813,7 @@ const updateSupplierPayment = async (req, res, next) => {
 
     const logDetail = `Cập nhật thanh toán cho nhà cung cấp ${payment.supplier.name}:\n• ${changes.join('\n• ')}`;
 
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_SUPPLIER_PAYMENT',
       logDetail
@@ -885,7 +873,7 @@ const deleteSupplierPayment = async (req, res, next) => {
             where: { id: linkedPaymentId },
           });
 
-          await logActivity(
+          void logActivity(
             userId,
             'DELETE_PAYMENT',
             `Tự động xóa khoản cấn trừ thu tiền của khách ${linkedCust.customer?.name || ''} do xóa thanh toán NCC: ${Number(linkedCust.amount).toLocaleString('vi-VN')}đ`
@@ -905,7 +893,7 @@ const deleteSupplierPayment = async (req, res, next) => {
     });
 
     const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_SUPPLIER_PAYMENT',
       `Xóa thanh toán cho nhà cung cấp ${payment.supplier.name}: ${formatCurrency(payment.amount)}`
@@ -965,7 +953,7 @@ const uploadSupplierMedia = async (req, res, next) => {
     const savedFileName = `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${fileExt}`;
     const filePath = path.join(uploadsDir, savedFileName);
     const buffer = Buffer.from(cleanBase64, 'base64');
-    fs.writeFileSync(filePath, buffer);
+    await fs.promises.writeFile(filePath, buffer);
 
     let finalUrl = `/uploads/suppliers/${savedFileName}`;
 

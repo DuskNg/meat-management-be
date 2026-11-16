@@ -111,7 +111,7 @@ const createTable = async (req, res, next) => {
         )
       );
 
-      await logActivity(userId, 'CREATE_SHOP_TABLES_BULK', `Tạo hàng loạt ${createdTables.length} bàn cửa hàng`);
+      void logActivity(userId, 'CREATE_SHOP_TABLES_BULK', `Tạo hàng loạt ${createdTables.length} bàn cửa hàng`);
       notifyShopUpdate(userId, 'CREATE_TABLE_BULK');
 
       return res.status(201).json({
@@ -151,7 +151,7 @@ const createTable = async (req, res, next) => {
       },
     });
 
-    await logActivity(userId, 'CREATE_SHOP_TABLE', `Tạo bàn cửa hàng mới: ${table.name} với giá ${price}đ/giờ`);
+    void logActivity(userId, 'CREATE_SHOP_TABLE', `Tạo bàn cửa hàng mới: ${table.name} với giá ${price}đ/giờ`);
     notifyShopUpdate(userId, 'CREATE_TABLE', { tableId: table.id });
 
     res.status(201).json({
@@ -209,7 +209,7 @@ const updateTable = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_SHOP_TABLE',
       `Cập nhật bàn cửa hàng: ${table.name} thành ${updatedTable.name} (giá: ${updatedTable.pricePerHour}đ/giờ)`
@@ -260,7 +260,7 @@ const deleteTable = async (req, res, next) => {
       data: { isActive: false },
     });
 
-    await logActivity(userId, 'DELETE_SHOP_TABLE', `Xóa bàn cửa hàng: ${table.name}`);
+    void logActivity(userId, 'DELETE_SHOP_TABLE', `Xóa bàn cửa hàng: ${table.name}`);
     notifyShopUpdate(userId, 'DELETE_TABLE', { tableId: id });
 
     res.status(200).json({
@@ -427,7 +427,7 @@ const startSession = async (req, res, next) => {
     const logDetails = processedItems.length > 0
       ? `Bắt đầu chơi tại bàn ${table.name} kèm ${processedItems.length} món`
       : `Bắt đầu chơi tại bàn ${table.name}`;
-    await logActivity(userId, 'START_SHOP_SESSION', logDetails);
+    void logActivity(userId, 'START_SHOP_SESSION', logDetails);
     notifyShopUpdate(userId, 'START_SESSION', { tableId, sessionId: newSession.id });
     if (processedItems.length > 0) {
       emitWorkspaceEvent(userId, 'INVENTORY_UPDATED', { action: 'DEDUCT_INVENTORY_FROM_SHOP', sessionId: newSession.id });
@@ -494,7 +494,7 @@ const endSession = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'END_SHOP_SESSION',
       `Kết thúc phiên chơi tại bàn ${session.table.name}. Tổng tiền tạm tính: ${totalAmount}đ`
@@ -564,7 +564,7 @@ const addExtra = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'ADD_SHOP_EXTRA',
       `Cập nhật phụ thu ${amount}đ (${extraNote || 'Không có ghi chú'}) cho bàn ${session.table.name}`
@@ -749,7 +749,7 @@ const addSessionItem = async (req, res, next) => {
     });
 
     const summaryText = processedItems.map((p) => `${p.quantity} ${p.product.unit} ${p.product.name}`).join(', ');
-    await logActivity(
+    void logActivity(
       userId,
       'ADD_SHOP_SESSION_ITEM',
       `Thêm món (${summaryText}) cho bàn ${session.table.name} (Tự động trừ kho)`
@@ -983,7 +983,7 @@ const removeSessionItemInternal = async (req, res, next, session, item) => {
     });
   });
 
-  await logActivity(
+  void logActivity(
     userId,
     'REMOVE_SHOP_SESSION_ITEM',
     `Hủy món ${item.product.name} (SL: ${returnQty}) khỏi bàn ${session.table.name} (Tự động hoàn kho)`
@@ -1088,7 +1088,7 @@ const paySession = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'PAY_SHOP_SESSION',
       `Thanh toán thành công phiên chơi tại bàn ${session.table.name}. Số tiền: ${totalAmount}đ`

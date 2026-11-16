@@ -564,7 +564,7 @@ const createEmployee = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'CREATE_EMPLOYEE',
       `Thêm nhân viên mới: ${employee.name} (Chức vụ: ${employee.role || 'Không'}, Lương: ${employee.baseSalary.toLocaleString('vi-VN')}đ${parsedStartDate ? `, Vào làm: ${parsedStartDate.toISOString().split('T')[0]}` : ''})`
@@ -618,7 +618,7 @@ const updateEmployee = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_EMPLOYEE',
       `Cập nhật nhân viên ${employee.name} -> ${updated.name} (Chức vụ: ${updated.role || 'Không'}, Lương: ${updated.baseSalary.toLocaleString('vi-VN')}đ)`
@@ -652,7 +652,7 @@ const deleteEmployee = async (req, res, next) => {
       data: { isActive: false },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_EMPLOYEE',
       `Xóa nhân viên: ${employee.name}`
@@ -792,7 +792,7 @@ const saveAttendance = async (req, res, next) => {
       }
     }
 
-    await logActivity(
+    void logActivity(
       userId,
       'SAVE_ATTENDANCE',
       `Cập nhật chấm công nhân viên ngày ${date}`
@@ -861,7 +861,7 @@ const createSalaryAdvance = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'CREATE_SALARY_ADVANCE',
       `Tạm ứng lương cho nhân viên ${employee.name}: Số tiền ${newAmount.toLocaleString('vi-VN')}đ`
@@ -1380,7 +1380,7 @@ const paySalary = async (req, res, next) => {
       ? `${new Date(startOfPeriod).toLocaleDateString('vi-VN')} - ${new Date(endOfPeriod).toLocaleDateString('vi-VN')}`
       : `tháng ${resolvedMonthKey}`;
 
-    await logActivity(
+    void logActivity(
       userId,
       'PAY_SALARY',
       `Thanh toán chốt lương (${periodDesc}) cho nhân viên ${employee.name}: Thực lĩnh ${finalAmount.toLocaleString('vi-VN')}đ`
@@ -1561,7 +1561,7 @@ const recordLeave = async (req, res, next) => {
     }
 
     const dateStr = targetDate.toISOString().split('T')[0];
-    await logActivity(
+    void logActivity(
       userId,
       'RECORD_EMPLOYEE_LEAVE',
       `Ghi nhận xin nghỉ: Nhân viên ${emp.name}, ngày ${dateStr}, ca ${shiftVal === 'HALF' ? 'Nửa ngày (0.5 buổi)' : 'Cả ngày (1 buổi)'}${note ? ` - Lý do: ${note}` : ''}`
@@ -1596,7 +1596,7 @@ const deleteLeave = async (req, res, next) => {
       where: { id },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_EMPLOYEE_LEAVE',
       `Xóa bản ghi xin nghỉ của nhân viên ${leave.employee.name} ngày ${leave.date.toISOString().split('T')[0]}`

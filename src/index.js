@@ -12,6 +12,7 @@ const nodeEnv = process.env.NODE_ENV || 'development';
 require('dotenv').config({ path: path.resolve(process.cwd(), `.env.${nodeEnv}`) });
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const winston = require('winston');
@@ -50,6 +51,9 @@ app.use(helmet({
 
 // Middleware CORS - cho phép Mobile và Web Client gọi API
 app.use(cors());
+
+// Nén dữ liệu phản hồi HTTP (Gzip/Deflate) để tăng tốc tải API trên mạng di động
+app.use(compression());
 
 // Phục vụ thư mục static files uploads (ảnh hóa đơn, hình ảnh hệ thống)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -310,6 +314,9 @@ const startCleanupScheduler = () => {
 const http = require('http');
 const { initSocket } = require('./utils/socket');
 const server = http.createServer(app);
+// Đồng bộ keepAliveTimeout cao hơn reverse proxy (Render/Nginx) để tránh lỗi ngắt kết nối sớm (Network Error)
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
 initSocket(server);
 
 // Chỉ chạy các tiến trình Scheduler ngầm và lắng nghe cổng mạng khi không ở môi trường test

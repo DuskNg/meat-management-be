@@ -61,6 +61,7 @@ model User {
   customerAiAliases    CustomerAiAlias[]     // Từ điển AI tự học chữ viết tay khách hàng
   productAiAliases     ProductAiAlias[]      // Từ điển AI tự học chữ viết tay món thịt
   quickNote            QuickNote?            // Ghi chú cần nhớ của chủ buôn
+  confirmedDuplicateKeys ConfirmedDuplicateKey[] // Danh sách đơn trùng đã xác nhận hợp lệ (đồng bộ liên thiết bị)
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
   workspaceMemberships WorkspaceMember[]      @relation("WorkspaceMembers")        // Các workspace mà user này là thành viên
@@ -173,6 +174,8 @@ model Transaction {
   @@index([userId])
   @@index([customerId])
   @@index([date]) // Tối ưu hóa lọc lịch sử giao dịch theo ngày
+  @@index([userId, customerId, date(sort: Desc)]) // Tối ưu lọc và sắp xếp lịch sử giao dịch theo khách hàng
+  @@index([userId, date(sort: Desc)]) // Tối ưu lọc giao dịch theo ngày trên toàn workspace
   @@map("transactions") // Đặt tên bảng trong PostgreSQL là "transactions"
 }
 
@@ -214,6 +217,7 @@ model Payment {
   // Công nợ của 1 khách = tổng totalAmount của tất cả Transaction của khách trừ tổng amount của tất cả Payment của khách, KHÔNG phân bổ theo từng đơn cụ thể.
 
   @@index([customerId])
+  @@index([customerId, paidAt(sort: Desc)]) // Tối ưu truy vấn và sắp xếp lịch sử thanh toán theo khách hàng
   @@map("payments") // Đặt tên bảng trong PostgreSQL là "payments"
 }
 
@@ -377,6 +381,7 @@ model ActivityLog {
 
   @@index([userId])
   @@index([createdAt])
+  @@index([userId, createdAt(sort: Desc)]) // Tối ưu sắp xếp nhật ký hoạt động theo người dùng
   @@map("activity_logs")
 }
 
@@ -706,6 +711,7 @@ model TransactionInvoice {
   @@index([transactionId])
   @@index([customerId])
   @@index([date])
+  @@index([userId, customerId, date]) // Tối ưu truy vấn ảnh hóa đơn theo khách hàng và ngày
   @@map("transaction_invoices")
 }
 
@@ -773,6 +779,8 @@ model StaffSubmission {
   @@index([linkId])
   @@index([status])
   @@index([date])
+  @@index([transactionId]) // Tối ưu liên kết ảnh/video từ đơn đã duyệt
+  @@index([userId, date(sort: Desc), createdAt(sort: Desc)]) // Tối ưu sắp xếp danh sách nộp hóa đơn
   @@map("staff_submissions")
 }
 
@@ -855,6 +863,7 @@ model BankTransaction {
 
   @@index([userId])
   @@index([transactionDate])
+  @@index([userId, transactionDate(sort: Desc)]) // Tối ưu sắp xếp giao dịch ngân hàng theo người dùng
   @@index([accountNumber])
   @@index([status])
   @@index([matchedCustomerId])
@@ -933,6 +942,19 @@ model ProductAiAlias {
   @@index([productId])
   @@index([userId, compactAlias])
   @@map("product_ai_aliases")
+}
+
+// ─── DANH SÁCH ĐƠN TRÙNG ĐÃ XÁC NHẬN HỢP LỆ ("BẰNG CÂN NHƯNG ĐÚNG") ───
+model ConfirmedDuplicateKey {
+  id           String   @id @default(uuid())
+  userId       String   // ID chủ buôn / Workspace owner
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  duplicateKey String   // Key định danh nhóm đơn trùng đã xác nhận đúng
+  createdAt    DateTime @default(now())
+
+  @@unique([userId, duplicateKey])
+  @@index([userId])
+  @@map("confirmed_duplicate_keys")
 }
 
 

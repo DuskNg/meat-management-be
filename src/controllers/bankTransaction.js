@@ -283,10 +283,29 @@ const getBankTransactions = async (req, res, next) => {
     const take = Math.min(parseInt(limit, 10) || 100, 200);
     const skip = ((parseInt(page, 10) || 1) - 1) * take;
 
-    const [transactions, totalCount] = await Promise.all([
+    const [transactions, totalCount, typeSums, unprocessedCount] = await Promise.all([
       prisma.bankTransaction.findMany({
         where: whereClause,
-        include: {
+        select: {
+          id: true,
+          userId: true,
+          sepayId: true,
+          gateway: true,
+          transactionDate: true,
+          accountNumber: true,
+          subAccount: true,
+          transferType: true,
+          transferAmount: true,
+          accumulated: true,
+          code: true,
+          content: true,
+          referenceCode: true,
+          description: true,
+          status: true,
+          matchedCustomerId: true,
+          paymentId: true,
+          createdAt: true,
+          updatedAt: true,
           customer: {
             select: { id: true, name: true, phone: true },
           },
@@ -301,27 +320,27 @@ const getBankTransactions = async (req, res, next) => {
         skip,
       }),
       prisma.bankTransaction.count({ where: whereClause }),
+      prisma.bankTransaction.groupBy({
+        by: ['transferType'],
+        where: whereClause,
+        _sum: { transferAmount: true },
+      }),
+      prisma.bankTransaction.count({
+        where: {
+          ...whereClause,
+          status: 'UNPROCESSED',
+        },
+      }),
     ]);
-
-    // Thống kê tổng số tiền vào/ra
-    const allMatching = await prisma.bankTransaction.findMany({
-      where: whereClause,
-      select: { transferAmount: true, transferType: true, status: true },
-    });
 
     let totalIn = 0;
     let totalOut = 0;
-    let unprocessedCount = 0;
-
-    for (const item of allMatching) {
-      const amt = parseFloat(item.transferAmount || 0);
-      if (item.transferType === 'in') {
+    for (const row of typeSums) {
+      const amt = parseFloat(row._sum?.transferAmount || 0);
+      if (row.transferType === 'in') {
         totalIn += amt;
       } else {
         totalOut += amt;
-      }
-      if (item.status === 'UNPROCESSED') {
-        unprocessedCount++;
       }
     }
 
@@ -405,7 +424,7 @@ const assignCustomerAndDeductDebt = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'ASSIGN_BANK_TRANSACTION',
       `Gán giao dịch ngân hàng ${amount.toLocaleString('vi-VN')}đ cho khách hàng ${customer.name} (Tạo phiếu thu nợ)`

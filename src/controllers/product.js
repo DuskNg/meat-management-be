@@ -201,7 +201,7 @@ const createProduct = async (req, res, next) => {
     });
 
     // Ghi log hoạt động
-    await logActivity(
+    void logActivity(
       userId,
       'CREATE_PRODUCT',
       `Tạo sản phẩm mới: ${product.name} (Giá bán: ${Number(product.defaultPrice).toLocaleString('vi-VN')}đ, Giá nhập: ${Number(product.costPrice).toLocaleString('vi-VN')}đ/${product.unit})`
@@ -247,7 +247,7 @@ const updateProduct = async (req, res, next) => {
     });
 
     // Ghi log hoạt động
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_PRODUCT',
       `Cập nhật sản phẩm: ${productExists.name} (Giá bán: ${Number(productExists.defaultPrice).toLocaleString('vi-VN')}đ, Giá nhập: ${Number(productExists.costPrice).toLocaleString('vi-VN')}đ) -> ${updatedProduct.name} (Giá bán: ${Number(updatedProduct.defaultPrice).toLocaleString('vi-VN')}đ, Giá nhập: ${Number(updatedProduct.costPrice).toLocaleString('vi-VN')}đ)`
@@ -297,7 +297,7 @@ const deleteProduct = async (req, res, next) => {
     });
 
     // Ghi log hoạt động
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_PRODUCT',
       `Ẩn sản phẩm: ${productExists.name} (Giá mặc định: ${Number(productExists.defaultPrice).toLocaleString('vi-VN')}đ/${productExists.unit})`
@@ -809,7 +809,7 @@ const updateCustomerProductPrice = async (req, res, next) => {
 
     // Ghi log hoạt động
     const recalcNote = result.recalculatedCount > 0 ? ` (Tự động tính lại ${result.recalculatedCount} đơn nợ)` : '';
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_CUSTOMER_PRICE',
       `Cập nhật giá riêng cho khách "${customer.name}": Thịt "${product.name}" (Trước: ${oldPriceStr} ➔ Sau: ${newPriceStr}/${product.unit})${recalcNote}`
@@ -879,7 +879,7 @@ const batchUpdateProductPrices = async (req, res, next) => {
     });
 
     if (logDetails.length > 0) {
-      await logActivity(
+      void logActivity(
         userId,
         'BATCH_UPDATE_PRODUCT_PRICES',
         `Cập nhật giá đồng loạt cho ${logDetails.length} loại thịt: ${logDetails.slice(0, 5).join('; ')}${logDetails.length > 5 ? ` và ${logDetails.length - 5} loại khác` : ''}`
@@ -1046,7 +1046,7 @@ const batchUpdateCustomerProductPrices = async (req, res, next) => {
       logDetail = `Cập nhật giá riêng cho ${validCustomers.length} khách (${customerNames}${moreCust}):\n• ${sampleDiffs}${moreDiffs}`;
     }
 
-    await logActivity(
+    void logActivity(
       userId,
       'BATCH_UPDATE_CUSTOMER_PRICES',
       logDetail

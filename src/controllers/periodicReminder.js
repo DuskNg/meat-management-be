@@ -186,7 +186,7 @@ const upsertPeriodicReminder = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_PERIODIC_REMINDER',
       `Cấu hình lịch gửi công nợ cho khách hàng "${customer.name}": Nhắc ngày [${validDays}], Nhóm: "${validGroupName}"`
@@ -269,7 +269,7 @@ const deletePeriodicReminder = async (req, res, next) => {
       where: { id },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_PERIODIC_REMINDER',
       `Gỡ khách hàng "${existing.customer?.name || 'ẩn'}" khỏi danh sách gửi công nợ định kỳ`

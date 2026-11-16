@@ -295,6 +295,7 @@ const fetchInvoicesForPayments = async (paymentIds, userId) => {
   const invoicesByPaymentId = {};
   if (!paymentIds || paymentIds.length === 0) return invoicesByPaymentId;
 
+  const paymentIdSet = new Set(paymentIds);
   const [staffSubs, transInvs] = await Promise.all([
     prisma.staffSubmission.findMany({
       where: {
@@ -313,7 +314,7 @@ const fetchInvoicesForPayments = async (paymentIds, userId) => {
     prisma.transactionInvoice.findMany({
       where: {
         userId,
-        OR: paymentIds.map((pid) => ({ note: { contains: `[paymentId:${pid}]` } })),
+        note: { contains: '[paymentId:' },
       },
       select: {
         id: true,
@@ -340,7 +341,7 @@ const fetchInvoicesForPayments = async (paymentIds, userId) => {
   transInvs.forEach((inv) => {
     const match = inv.note?.match(/\[paymentId:([a-f0-9\-]+)\]/i);
     const pid = match ? match[1] : null;
-    if (pid && paymentIds.includes(pid)) {
+    if (pid && paymentIdSet.has(pid)) {
       if (!invoicesByPaymentId[pid]) {
         invoicesByPaymentId[pid] = [];
       }
@@ -461,7 +462,57 @@ const getPublicPortalData = async (req, res, next) => {
       const isViewingAll = hasMultipleBranches && (customerId === 'all' || !customerId);
 
       if (isViewingAll) {
-        // Lấy dữ liệu tổng hợp toàn chuỗi
+        // Lấy dữ liệu tổng hợp toàn chuỗi song song thay vì lặp từng chi nhánh tuần tự
+        const [txSums, paySums, recentTxs, chainPayments] = await Promise.all([
+          prisma.transaction.groupBy({
+            by: ['customerId'],
+            where: {
+              customerId: { in: allowedCustomerIds },
+              ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+            },
+            _sum: { totalAmount: true }
+          }),
+          prisma.payment.groupBy({
+            by: ['customerId'],
+            where: {
+              customerId: { in: allowedCustomerIds },
+              ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+            },
+            _sum: { amount: true }
+          }),
+          prisma.transaction.findMany({
+            where: {
+              customerId: { in: allowedCustomerIds },
+              ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
+              ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+            },
+            include: {
+              customer: { select: { id: true, name: true } },
+              items: {
+                include: {
+                  product: { select: { id: true, name: true, unit: true } }
+                }
+              },
+              invoices: true, // Bao gồm ảnh hóa đơn đính kèm đơn nợ
+            },
+            orderBy: { date: 'desc' },
+          }),
+          prisma.payment.findMany({
+            where: {
+              customerId: { in: allowedCustomerIds },
+              ...(Object.keys(dateFilter).length > 0 ? { paidAt: dateFilter } : {}),
+              ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
+            },
+            include: {
+              customer: { select: { id: true, name: true } }
+            },
+            orderBy: { paidAt: 'desc' }
+          })
+        ]);
+
+        const txSumMap = new Map(txSums.map(r => [r.customerId, Number(r._sum?.totalAmount || 0)]));
+        const paySumMap = new Map(paySums.map(r => [r.customerId, Number(r._sum?.amount || 0)]));
+
         const allCustomersData = [];
         let grandTotalPurchase = 0;
         let grandTotalPaid = 0;
@@ -469,25 +520,8 @@ const getPublicPortalData = async (req, res, next) => {
 
         for (const item of portalLink.customers) {
           const c = item.customer;
-          const [purchases, payments] = await Promise.all([
-            prisma.transaction.aggregate({
-              where: {
-                customerId: c.id,
-                ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
-              },
-              _sum: { totalAmount: true }
-            }),
-            prisma.payment.aggregate({
-              where: {
-                customerId: c.id,
-                ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
-              },
-              _sum: { amount: true }
-            })
-          ]);
-
-          const totalPurchase = Math.round(Number(purchases._sum.totalAmount || 0));
-          const totalPaid = Math.round(Number(payments._sum.amount || 0));
+          const totalPurchase = Math.round(txSumMap.get(c.id) || 0);
+          const totalPaid = Math.round(paySumMap.get(c.id) || 0);
           let debt = Math.round(totalPurchase - totalPaid + Number(c.manualDebt || 0));
           if (Math.abs(debt) < 1) debt = 0;
 
@@ -505,38 +539,6 @@ const getPublicPortalData = async (req, res, next) => {
             debt
           });
         }
-
-        // Lấy toàn bộ giao dịch của toàn chuỗi (không giới hạn 50 đơn để hiển thị đầy đủ theo thời gian lọc)
-        const recentTxs = await prisma.transaction.findMany({
-          where: {
-            customerId: { in: allowedCustomerIds },
-            ...(Object.keys(dateFilter).length > 0 ? { date: dateFilter } : {}),
-            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
-          },
-          include: {
-            customer: { select: { id: true, name: true } },
-            items: {
-              include: {
-                product: { select: { id: true, name: true, unit: true } }
-              }
-            },
-            invoices: true, // Bao gồm ảnh hóa đơn đính kèm đơn nợ
-          },
-          orderBy: { date: 'desc' },
-        });
-
-        // Lấy danh sách thanh toán / trả hàng của toàn chuỗi để đối soát chi tiết
-        const chainPayments = await prisma.payment.findMany({
-          where: {
-            customerId: { in: allowedCustomerIds },
-            ...(Object.keys(dateFilter).length > 0 ? { paidAt: dateFilter } : {}),
-            ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
-          },
-          include: {
-            customer: { select: { id: true, name: true } }
-          },
-          orderBy: { paidAt: 'desc' }
-        });
 
         // Định dạng dữ liệu an toàn (Zero-leakage: không costPrice, không profit)
         const safeTxs = recentTxs.map(tx => ({

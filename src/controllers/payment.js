@@ -280,12 +280,12 @@ const createPayment = async (req, res, next) => {
     }
 
     if (supplier) {
-      await logActivity(
+      void logActivity(
         userId,
         'CREATE_PAYMENT',
         `Cấn trừ nợ 2 đầu: Khách ${customer.name} trả ${payAmount.toLocaleString('vi-VN')}đ chuyển thẳng vào TK nhà cung cấp ${supplier.name}`
       );
-      await logActivity(
+      void logActivity(
         userId,
         'CREATE_SUPPLIER_PAYMENT',
         `Cấn trừ nợ 2 đầu: Nhà cung cấp ${supplier.name} nhận ${payAmount.toLocaleString('vi-VN')}đ chuyển trực tiếp từ khách ${customer.name}`
@@ -295,7 +295,7 @@ const createPayment = async (req, res, next) => {
         supplierPaymentId: supplierPayment.id,
       });
     } else {
-      await logActivity(
+      void logActivity(
         userId,
         'CREATE_PAYMENT',
         `Thu tiền trả nợ / trả hàng từ khách hàng ${customer.name}: Số tiền ${payAmount.toLocaleString('vi-VN')}đ`
@@ -410,7 +410,8 @@ const getPayments = async (req, res, next) => {
       const transInvs = await prisma.transactionInvoice.findMany({
         where: {
           userId,
-          OR: paymentIds.map((pid) => ({ note: { contains: `[paymentId:${pid}]` } })),
+          customerId: customerId || { in: [...new Set(payments.map((p) => p.customerId))] },
+          note: { contains: '[paymentId:' },
         },
         select: {
           id: true,
@@ -423,7 +424,7 @@ const getPayments = async (req, res, next) => {
       transInvs.forEach((inv) => {
         const match = inv.note?.match(/\[paymentId:([a-f0-9\-]+)\]/i);
         const pid = match ? match[1] : null;
-        if (pid && paymentIds.includes(pid)) {
+        if (pid && new Set(paymentIds).has(pid)) {
           if (!invoicesByPaymentId[pid]) {
             invoicesByPaymentId[pid] = [];
           }
@@ -524,7 +525,7 @@ const updatePayment = async (req, res, next) => {
               paidAt: newPaidAt,
             },
           });
-          await logActivity(
+          void logActivity(
             userId,
             'UPDATE_SUPPLIER_PAYMENT',
             `Tự động đồng bộ số tiền cấn trừ nợ NCC ${linkedSup.supplier?.name || ''}: ${Number(payAmount).toLocaleString('vi-VN')}đ`
@@ -619,7 +620,7 @@ const updatePayment = async (req, res, next) => {
 
     const logDetail = `Cập nhật lượt thu tiền của khách hàng ${updated.customer.name}:\n• ${changes.join('\n• ')}`;
 
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_PAYMENT',
       logDetail
@@ -674,7 +675,7 @@ const deletePayment = async (req, res, next) => {
           await prisma.supplierPayment.delete({
             where: { id: linkedSupplierPaymentId },
           });
-          await logActivity(
+          void logActivity(
             userId,
             'DELETE_SUPPLIER_PAYMENT',
             `Tự động xóa khoản cấn trừ nợ NCC ${linkedSup.supplier?.name || ''} do xóa lượt thu tiền khách: -${Number(linkedSup.amount).toLocaleString('vi-VN')}đ`
@@ -698,7 +699,7 @@ const deletePayment = async (req, res, next) => {
       where: { id: existing.customerId }
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_PAYMENT',
       `Xóa lượt thu tiền của khách hàng ${customer?.name || 'ẩn'}: Số tiền ${existing.amount.toLocaleString('vi-VN')}đ`

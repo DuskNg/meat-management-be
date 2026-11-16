@@ -3,6 +3,74 @@ const jwt = require('jsonwebtoken');
 const { UnauthorizedError, ForbiddenError } = require('../utils/errors');
 const prisma = require('../utils/db');
 
+// Bộ nhớ đệm ngắn hạn (5 giây) cho thông tin User & Workspace nhằm giảm tải round-trip DB trên mỗi API call
+const AUTH_CACHE_TTL_MS = process.env.NODE_ENV === 'test' ? 0 : 5000;
+const userCache = new Map(); // userId -> { data, expiresAt }
+const workspaceCache = new Map(); // actorId -> { data, expiresAt }
+
+const getCachedUser = async (userId) => {
+  if (AUTH_CACHE_TTL_MS > 0) {
+    const cached = userCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+  }
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (AUTH_CACHE_TTL_MS > 0 && user) {
+    userCache.set(userId, { data: user, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
+  }
+  return user;
+};
+
+const getCachedMembership = async (actorId) => {
+  if (AUTH_CACHE_TTL_MS > 0) {
+    const cached = workspaceCache.get(actorId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+  }
+  const membership = await prisma.workspaceMember.findFirst({
+    where: { userId: actorId },
+    include: {
+      workspace: {
+        include: {
+          owner: {
+            select: {
+              id: true,
+              isAdmin: true,
+              isActive: true,
+              canManageCustomers: true,
+              canManageDebt: true,
+              canManageBadDebt: true,
+              canManageEmployees: true,
+              canManageStore: true,
+              canManageInventory: true,
+              canManageShop: true,
+              canManageProfit: true,
+              canManageTransactions: true,
+            },
+          },
+        },
+      },
+    },
+  });
+  if (AUTH_CACHE_TTL_MS > 0) {
+    workspaceCache.set(actorId, { data: membership, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
+  }
+  return membership;
+};
+
+// Xóa cache xác thực khi có thay đổi quyền hoặc thành viên workspace
+const invalidateAuthCache = (userId) => {
+  if (userId) {
+    userCache.delete(userId);
+    workspaceCache.delete(userId);
+  } else {
+    userCache.clear();
+    workspaceCache.clear();
+  }
+};
+
 // Middleware xác thực Access Token từ Header
 const authenticateToken = (req, res, next) => {
   try {
@@ -51,9 +119,7 @@ const requireAdmin = async (req, res, next) => {
       throw new UnauthorizedError('Yêu cầu phải xác thực tài khoản.');
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-    });
+    const user = await getCachedUser(req.user.id);
 
     if (!user || !user.isAdmin || !user.isActive) {
       throw new ForbiddenError('Bạn không có quyền quản trị viên hoặc tài khoản đã bị khóa/xóa.');
@@ -72,12 +138,15 @@ const requirePermission = (permissionField) => async (req, res, next) => {
       throw new UnauthorizedError('Yêu cầu phải xác thực tài khoản.');
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-    });
+    const user = await getCachedUser(req.user.id);
 
     if (!user || !user.isActive) {
       throw new UnauthorizedError('Tài khoản không tồn tại hoặc đã bị khóa/xóa.');
+    }
+
+    req.authUser = user;
+    if (!req.effectiveUser) {
+      req.effectiveUser = user;
     }
 
     // Admin có toàn bộ quyền
@@ -123,35 +192,14 @@ const resolveWorkspace = async (req, res, next) => {
     const actorId = req.user.id;
 
     // Tìm membership của user trong bất kỳ workspace nào, kèm theo quyền của chủ workspace để kiểm tra chéo
-    const membership = await prisma.workspaceMember.findFirst({
-      where: { userId: actorId },
-      include: {
-        workspace: {
-          include: {
-            owner: {
-              select: {
-                id: true,
-                canManageCustomers: true,
-                canManageDebt: true,
-                canManageBadDebt: true,
-                canManageEmployees: true,
-                canManageStore: true,
-                canManageInventory: true,
-                canManageShop: true,
-                canManageProfit: true,
-                canManageTransactions: true,
-              },
-            },
-          },
-        },
-      },
-    });
+    const membership = await getCachedMembership(actorId);
 
     if (membership && membership.workspace && membership.workspace.isActive) {
       // Thành viên workspace → dùng data của chủ workspace nhưng log theo actorId
       req.effectiveUserId = membership.workspace.ownerId;
       req.actorId = actorId;
       req.workspaceMember = membership; // Chứa permissions để kiểm tra quyền
+      req.effectiveUser = membership.workspace.owner;
     } else {
       // User thường — hoàn toàn như cũ
       req.effectiveUserId = actorId;
@@ -170,5 +218,6 @@ module.exports = {
   requireAdmin,
   requirePermission,
   resolveWorkspace,
+  invalidateAuthCache,
 };
 

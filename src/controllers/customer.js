@@ -44,7 +44,7 @@ const getCustomers = async (req, res, next) => {
       }
     }
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = req.effectiveUser || (await prisma.user.findUnique({ where: { id: userId } }));
     if (!user) {
       throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
     }
@@ -73,32 +73,71 @@ const getCustomers = async (req, res, next) => {
       whereFilter.isBadDebt = false; // Mặc định chỉ lấy khách hàng hoạt động bình thường
     }
 
-    const customers = await prisma.customer.findMany({
-      where: whereFilter,
-      include: {
-        transactions: {
-          select: {
-            totalAmount: true,
-            date: true,
-          },
+    const isMonthFilter = Boolean(targetMonth && targetYear && startOfMonth && endOfMonth);
+
+    // Chạy song song truy vấn danh sách khách và tổng hợp công nợ bằng SQL SUM/GROUP BY thay vì kéo toàn bộ bảng về Node.js
+    const [customers, txSums, paySums, monthTxSums, monthPayments] = await Promise.all([
+      prisma.customer.findMany({
+        where: whereFilter,
+        orderBy: {
+          name: 'asc', // Sắp xếp theo thứ tự bảng chữ cái tên khách hàng
         },
-        payments: {
-          select: {
-            amount: true,
-            paidAt: true,
-            note: true,
-          },
-        },
-      },
-      orderBy: {
-        name: 'asc', // Sắp xếp theo thứ tự bảng chữ cái tên khách hàng
-      },
-    });
+      }),
+      prisma.transaction.groupBy({
+        by: ['customerId'],
+        where: { userId, customer: whereFilter },
+        _sum: { totalAmount: true },
+      }),
+      prisma.payment.groupBy({
+        by: ['customerId'],
+        where: { customer: whereFilter },
+        _sum: { amount: true },
+      }),
+      isMonthFilter
+        ? prisma.transaction.groupBy({
+            by: ['customerId'],
+            where: {
+              userId,
+              customer: whereFilter,
+              date: { gte: startOfMonth, lte: endOfMonth },
+            },
+            _sum: { totalAmount: true },
+          })
+        : Promise.resolve([]),
+      isMonthFilter
+        ? prisma.payment.findMany({
+            where: {
+              customer: whereFilter,
+              OR: [
+                { paidAt: { gte: startOfMonth, lte: endOfMonth } },
+                { note: { contains: 'tháng', mode: 'insensitive' } },
+              ],
+            },
+            select: {
+              customerId: true,
+              amount: true,
+              paidAt: true,
+              note: true,
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const txSumMap = new Map(txSums.map((r) => [r.customerId, parseFloat(r._sum?.totalAmount || 0)]));
+    const paySumMap = new Map(paySums.map((r) => [r.customerId, parseFloat(r._sum?.amount || 0)]));
+    const monthTxSumMap = new Map(monthTxSums.map((r) => [r.customerId, parseFloat(r._sum?.totalAmount || 0)]));
+    const monthPaymentsByCustomer = new Map();
+    for (const pm of monthPayments) {
+      if (!monthPaymentsByCustomer.has(pm.customerId)) {
+        monthPaymentsByCustomer.set(pm.customerId, []);
+      }
+      monthPaymentsByCustomer.get(pm.customerId).push(pm);
+    }
 
     // Tính toán công nợ thực tế cho từng khách hàng (làm tròn số nguyên chuẩn VNĐ)
     const dataWithDebt = customers.map((c) => {
-      const totalPurchase = Math.round(c.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0));
-      const totalPaid = Math.round(c.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0));
+      const totalPurchase = Math.round(txSumMap.get(c.id) || 0);
+      const totalPaid = Math.round(paySumMap.get(c.id) || 0);
       // Bao gồm cả manualDebt (số nợ thủ công ban đầu cho khách nợ xấu không có lịch sử giao dịch)
       let debt = Math.round(totalPurchase - totalPaid + parseFloat(c.manualDebt || 0));
       if (Math.abs(debt) < 1) {
@@ -110,18 +149,13 @@ const getCustomers = async (req, res, next) => {
       let monthPaid = totalPaid;
 
       // Nếu có yêu cầu lọc nợ theo tháng mục tiêu cụ thể
-      if (targetMonth && targetYear && startOfMonth && endOfMonth) {
-        // Tiền hàng phát sinh trong tháng
-        const monthTx = c.transactions.filter((t) => {
-          if (!t.date) return false;
-          const d = new Date(t.date);
-          return d >= startOfMonth && d <= endOfMonth;
-        });
-        monthPurchase = Math.round(monthTx.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0));
+      if (isMonthFilter) {
+        monthPurchase = Math.round(monthTxSumMap.get(c.id) || 0);
 
         // Tiền đã thanh toán được ghi nhận cho tháng đó (theo ghi chú hoặc ngày thanh toán)
         let paidForMonth = 0;
-        for (const pm of c.payments) {
+        const custPayments = monthPaymentsByCustomer.get(c.id) || [];
+        for (const pm of custPayments) {
           const amt = parseFloat(pm.amount) || 0;
           const note = (pm.note || '').trim();
           const monthMatch = note.match(/Thanh toán (?:nợ|hóa đơn)?\s*[Tt]háng (\d{2})\/(\d{4})/i);
@@ -148,10 +182,8 @@ const getCustomers = async (req, res, next) => {
         monthDebt = Math.min(rawMonthDebt, Math.max(0, debt));
       }
 
-      // Loại bỏ danh sách giao dịch con để giảm tải dung lượng mạng
-      const { transactions, payments, ...rest } = c;
       return {
-        ...rest,
+        ...c,
         debt,
         monthDebt,
         monthPurchase,
@@ -174,30 +206,29 @@ const getCustomerById = async (req, res, next) => {
     const { id } = req.params;
     const userId = req.effectiveUserId;
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = req.effectiveUser || (await prisma.user.findUnique({ where: { id: userId } }));
     if (!user) {
       throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
     }
 
-    const customer = await prisma.customer.findFirst({
-      where: {
-        id,
-        userId,
-        isActive: true,
-      },
-      include: {
-        transactions: {
-          select: {
-            totalAmount: true,
-          },
+    // Truy vấn song song thông tin khách hàng và tổng nợ bằng SQL aggregate
+    const [customer, txAgg, payAgg] = await Promise.all([
+      prisma.customer.findFirst({
+        where: {
+          id,
+          userId,
+          isActive: true,
         },
-        payments: {
-          select: {
-            amount: true,
-          },
-        },
-      },
-    });
+      }),
+      prisma.transaction.aggregate({
+        where: { customerId: id, userId },
+        _sum: { totalAmount: true },
+      }),
+      prisma.payment.aggregate({
+        where: { customerId: id },
+        _sum: { amount: true },
+      }),
+    ]);
 
     if (!customer) {
       throw new NotFoundError('Không tìm thấy khách hàng hoặc bạn không có quyền truy cập.');
@@ -216,20 +247,18 @@ const getCustomerById = async (req, res, next) => {
       }
     }
 
-    const totalPurchase = Math.round(customer.transactions.reduce((sum, t) => sum + parseFloat(t.totalAmount || 0), 0));
-    const totalPaid = Math.round(customer.payments.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0));
+    const totalPurchase = Math.round(parseFloat(txAgg._sum?.totalAmount || 0));
+    const totalPaid = Math.round(parseFloat(payAgg._sum?.amount || 0));
     // Bao gồm cả manualDebt (số nợ thủ công ban đầu cho khách nợ xấu không có lịch sử giao dịch)
     let debt = Math.round(totalPurchase - totalPaid + parseFloat(customer.manualDebt || 0));
     if (Math.abs(debt) < 1) {
       debt = 0;
     }
 
-    const { transactions, payments, ...rest } = customer;
-
     res.status(200).json({
       success: true,
       data: {
-        ...rest,
+        ...customer,
         debt,
       },
     });
@@ -248,7 +277,7 @@ const createCustomer = async (req, res, next) => {
       throw new BadRequestError('Tên khách hàng là thông tin bắt buộc.');
     }
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = req.effectiveUser || (await prisma.user.findUnique({ where: { id: userId } }));
     if (!user) {
       throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
     }
@@ -321,7 +350,7 @@ const createCustomer = async (req, res, next) => {
     });
 
     // Ghi log hoạt động
-    await logActivity(
+    void logActivity(
       userId,
       isBadDebtBool ? 'CREATE_BAD_DEBT_CUSTOMER' : 'CREATE_CUSTOMER',
       `Tạo khách hàng mới: ${customer.name} (SĐT: ${customer.phone || 'Không'}, Nợ xấu: ${customer.isBadDebt})`
@@ -357,7 +386,7 @@ const updateCustomer = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy khách hàng hoặc bạn không có quyền chỉnh sửa.');
     }
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = req.effectiveUser || (await prisma.user.findUnique({ where: { id: userId } }));
     if (!user) {
       throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
     }
@@ -447,7 +476,7 @@ const updateCustomer = async (req, res, next) => {
       ? `Cập nhật khách hàng "${customerExists.name}":\n• ${changes.join('\n• ')}`
       : `Cập nhật khách hàng "${customerExists.name}" (Không có thay đổi)`;
 
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_CUSTOMER',
       logDetail
@@ -489,7 +518,7 @@ const deleteCustomer = async (req, res, next) => {
       throw new ForbiddenError('Tài khoản của bạn không có quyền xóa dữ liệu do người khác tạo.');
     }
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = req.effectiveUser || (await prisma.user.findUnique({ where: { id: userId } }));
     if (!user) {
       throw new NotFoundError('Không tìm thấy tài khoản người dùng.');
     }
@@ -526,7 +555,7 @@ const deleteCustomer = async (req, res, next) => {
     });
 
     // Ghi log hoạt động
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_CUSTOMER',
       `Xóa mềm khách hàng: ${customerExists.name} (SĐT: ${customerExists.phone || 'Không'}, Nợ xấu: ${customerExists.isBadDebt})`

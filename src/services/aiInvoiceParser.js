@@ -2,8 +2,28 @@
 const fs = require('fs');
 const path = require('path');
 const prisma = require('../utils/db');
-const { callGeminiWithRetry } = require('../utils/geminiHelper');
+const { callGeminiWithRetry, uploadBufferToGeminiFileApi } = require('../utils/geminiHelper');
 const { emitWorkspaceEvent } = require('../utils/socket');
+let sharp = null;
+try { sharp = require('sharp'); } catch {}
+
+// Helper thu gọn ảnh > 350KB trước khi gửi Gemini Vision giúp giảm băng thông và tăng tốc OCR 2-4x
+const optimizeImageBufferForGemini = async (buffer, mimeType) => {
+  if (!sharp || !buffer || !mimeType || mimeType.startsWith('video/') || buffer.length <= 350 * 1024) {
+    return { buffer, mimeType };
+  }
+  try {
+    const compressed = await sharp(buffer)
+      .rotate()
+      .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    if (compressed && compressed.length > 0 && compressed.length < buffer.length) {
+      return { buffer: compressed, mimeType: 'image/jpeg' };
+    }
+  } catch (_) {}
+  return { buffer, mimeType };
+};
 
 // Helper loại bỏ dấu tiếng Việt để so khớp tên khách hàng và tên sản phẩm thịt
 const removeDiacritics = (str) => {
@@ -334,6 +354,21 @@ const learnCustomerAiAlias = async (userId, rawDetectedName, customerId, exclude
       where: { userId, isActive: true },
       select: { id: true, name: true, _count: { select: { transactions: true } } }
     });
+    // Chặn học nhầm tên chuỗi chung (ví dụ chỉ ghi 'Trường Hoàng' khi có >= 2 cơ sở cùng mang tên chuỗi đó)
+    const chainMatches = allUserCustomers.filter((c) => {
+      const cNorm = removeDiacritics(c.name.toLowerCase().trim()).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      return cNorm === norm.normalizedAlias || cNorm.includes(norm.normalizedAlias);
+    });
+    if (chainMatches.length >= 2 && norm.normalizedAlias.split(' ').length <= 3) {
+      const hasExactSingleMatch = allUserCustomers.some((c) => {
+        const cNorm = removeDiacritics(c.name.toLowerCase().trim()).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        return cNorm === norm.normalizedAlias;
+      });
+      if (!hasExactSingleMatch) {
+        console.warn(`[AI LEARN BLOCKED] Bỏ qua alias chung '${rawDetectedName}' vì khớp nhiều chi nhánh (${chainMatches.length} cơ sở).`);
+        return null;
+      }
+    }
     const exactOther = allUserCustomers.find((c) => {
       if (c.id === customer.id) return false;
       const cClean = removeDiacritics(c.name.toLowerCase().trim());
@@ -682,6 +717,142 @@ const learnProductAiAlias = async (userId, rawDetectedMeatName, productId, exclu
 };
 
 // Helper chuẩn hóa khối lượng cân thịt (xử lý trường hợp đọc liên tiếp các số cân điện tử: 1 9 5 -> 1.95, 1 6 9 2 -> 16.92)
+/**
+ * Phiên bản tối ưu hàng loạt cho learnProductAiAlias: chỉ query DB 1 lần cho toàn bộ món trong đơn
+ */
+const learnProductAiAliasesBatch = async (userId, entries = [], excludeSubmissionId = null) => {
+  try {
+    if (!userId || !Array.isArray(entries) || entries.length === 0) return [];
+
+    const normalizedEntries = [];
+    const seenPair = new Set();
+    for (const entry of entries) {
+      if (!entry || !entry.rawName || !entry.productId) continue;
+      const norm = normalizeProductAliasText(entry.rawName);
+      if (!norm) continue;
+      const pairKey = `${norm.normalizedAlias}::${entry.productId}`;
+      if (seenPair.has(pairKey)) continue;
+      seenPair.add(pairKey);
+      normalizedEntries.push({ rawName: entry.rawName, productId: entry.productId, norm });
+    }
+    if (normalizedEntries.length === 0) return [];
+
+    const targetProductIds = [...new Set(normalizedEntries.map((e) => e.productId))];
+    const [activeProducts, pendingSubmissions, customPricesForProducts] = await Promise.all([
+      prisma.product.findMany({
+        where: { userId, isActive: true },
+        select: { id: true, name: true, defaultPrice: true, unit: true },
+      }),
+      prisma.staffSubmission.findMany({
+        where: {
+          userId,
+          status: { in: ['READY_FOR_REVIEW', 'PENDING'] },
+          ...(excludeSubmissionId ? { id: { not: excludeSubmissionId } } : {}),
+        },
+        include: { items: { orderBy: { createdAt: 'asc' } } },
+      }),
+      prisma.customerProductPrice.findMany({
+        where: { productId: { in: targetProductIds } },
+        select: { customerId: true, productId: true, price: true },
+      }),
+    ]);
+
+    const productById = new Map(activeProducts.map((p) => [p.id, p]));
+    const customPriceMap = new Map(
+      customPricesForProducts.map((cp) => [`${cp.customerId}_${cp.productId}`, parseFloat(cp.price)])
+    );
+
+    const validEntries = [];
+    for (const entry of normalizedEntries) {
+      const product = productById.get(entry.productId);
+      if (!product) continue;
+      const prodLower = removeDiacritics(product.name.toLowerCase().trim());
+      if (prodLower === 'tien hang' || prodLower.startsWith('tien ')) continue;
+      const exactOther = activeProducts.find((p) => {
+        if (p.id === product.id) return false;
+        const otherNorm = normalizeProductAliasText(p.name);
+        return otherNorm && (otherNorm.normalizedAlias === entry.norm.normalizedAlias || otherNorm.compactAlias === entry.norm.compactAlias);
+      });
+      if (exactOther) continue;
+      validEntries.push({ ...entry, product });
+    }
+    if (validEntries.length === 0) return [];
+
+    const savedAliases = await Promise.all(
+      validEntries.map((e) =>
+        prisma.productAiAlias.upsert({
+          where: { userId_normalizedAlias: { userId, normalizedAlias: e.norm.normalizedAlias } },
+          update: { productId: e.product.id, rawAlias: e.norm.cleanRaw, compactAlias: e.norm.compactAlias, usageCount: { increment: 1 } },
+          create: { userId, productId: e.product.id, rawAlias: e.norm.cleanRaw, normalizedAlias: e.norm.normalizedAlias, compactAlias: e.norm.compactAlias, usageCount: 1 },
+        })
+      )
+    );
+
+    const entryByNorm = new Map();
+    validEntries.forEach((e, idx) => {
+      entryByNorm.set(e.norm.normalizedAlias, { ...e, alias: savedAliases[idx] });
+      entryByNorm.set(e.norm.compactAlias, { ...e, alias: savedAliases[idx] });
+    });
+
+    const autoUpdatedByProduct = new Map();
+    const itemUpdates = [];
+    for (const sub of pendingSubmissions) {
+      let parsedAiItems = [];
+      try {
+        if (sub.rawAiResponse) {
+          const parsed = JSON.parse(sub.rawAiResponse);
+          if (Array.isArray(parsed.items)) parsedAiItems = parsed.items;
+        }
+      } catch {}
+
+      for (let idx = 0; idx < (sub.items || []).length; idx++) {
+        const subItem = sub.items[idx];
+        const aiRawItemName = parsedAiItems[idx]?.name || '';
+        const n1 = normalizeProductAliasText(subItem.rawName);
+        const n2 = normalizeProductAliasText(aiRawItemName);
+        const matched = (n1 && (entryByNorm.get(n1.normalizedAlias) || entryByNorm.get(n1.compactAlias))) ||
+          (n2 && (entryByNorm.get(n2.normalizedAlias) || entryByNorm.get(n2.compactAlias)));
+        if (!matched) continue;
+
+        const { product } = matched;
+        const qty = subItem.quantity != null ? parseFloat(subItem.quantity) : null;
+        const custCustomPrice = sub.matchedCustomerId ? customPriceMap.get(`${sub.matchedCustomerId}_${product.id}`) : null;
+        let newPrice = subItem.price != null ? parseFloat(subItem.price) : null;
+        let newAmount = subItem.amount != null ? parseFloat(subItem.amount) : null;
+        if (custCustomPrice != null && custCustomPrice > 0) {
+          newPrice = custCustomPrice;
+          if (qty != null && qty > 0) newAmount = Math.round(qty * custCustomPrice);
+        } else if ((newPrice == null || newPrice <= 0) && product.defaultPrice != null && parseFloat(product.defaultPrice) > 0) {
+          newPrice = parseFloat(product.defaultPrice);
+          if (qty != null && qty > 0) newAmount = Math.round(qty * newPrice);
+        }
+
+        itemUpdates.push(
+          prisma.staffSubmissionItem.update({
+            where: { id: subItem.id },
+            data: { matchedProductId: product.id, rawName: product.name, price: newPrice, amount: newAmount },
+          })
+        );
+        if (!autoUpdatedByProduct.has(product.id)) autoUpdatedByProduct.set(product.id, new Set());
+        autoUpdatedByProduct.get(product.id).add(sub.id);
+      }
+    }
+
+    if (itemUpdates.length > 0) {
+      await Promise.all(itemUpdates);
+    }
+
+    return validEntries.map((e, idx) => ({
+      alias: savedAliases[idx],
+      product: e.product,
+      autoUpdatedSubmissionIds: Array.from(autoUpdatedByProduct.get(e.product.id) || []),
+    }));
+  } catch (err) {
+    console.warn('[AI_PRODUCT_ALIAS_BATCH_WARN]', err.message);
+    return [];
+  }
+};
+
 const normalizeWeightQuantity = (val) => {
   if (val == null) return null;
   let str = String(val).trim();
@@ -738,7 +909,7 @@ const normalizeWeightQuantity = (val) => {
  * So khớp sản phẩm với danh mục sản phẩm của chủ buôn theo từ khóa chuẩn xác,
  * ngăn chặn triệt để tình trạng nhận nhầm chéo (ví dụ: Diềm bò thành Thăn bò, Lá vai thành Lạc vai).
  */
-const matchProductByName = (cleanItemName, products, customerPriceMap = new Map(), productAiAliases = []) => {
+const matchProductByName = (cleanItemName, products, customerPriceMap = new Map(), productAiAliases = [], frequentProductIds = null) => {
   if (!cleanItemName || !Array.isArray(products) || products.length === 0) return null;
 
   // 0. Ưu tiên tuyệt đối số 0: So khớp từ Bảng Từ Điển Món Thịt AI Tự Học (ProductAiAlias) do chủ buôn đã dạy
@@ -903,6 +1074,16 @@ const matchProductByName = (cleanItemName, products, customerPriceMap = new Map(
     if (customProd) return customProd;
   }
 
+  // 13b. Tự học thói quen khách hàng: Ưu tiên các món khách này hay lấy trong 30 ngày gần nhất nếu khớp một phần
+  if (frequentProductIds && frequentProductIds.size > 0) {
+    const habitProd = products.find((p) => {
+      if (!frequentProductIds.has(p.id)) return false;
+      const pClean = removeDiacritics(p.name.toLowerCase().trim());
+      return pClean.includes(cleanLower) || cleanLower.includes(pClean);
+    });
+    if (habitProd) return habitProd;
+  }
+
   // 14. Fallback chung cuối cùng: So khớp bao hàm chuỗi
   return products.find((p) => {
     const pClean = removeDiacritics(p.name.toLowerCase().trim());
@@ -963,10 +1144,12 @@ const fetchFileAsBase64 = async (url) => {
           }
         }
 
-        const mimeType = isVideo ? 'video/mp4' : (url.endsWith('.png') ? 'image/png' : 'image/jpeg');
+        const rawMime = isVideo ? 'video/mp4' : (url.endsWith('.png') ? 'image/png' : 'image/jpeg');
+        const opt = await optimizeImageBufferForGemini(buffer, rawMime);
         return {
-          mimeType,
-          base64Data: buffer.toString('base64'),
+          mimeType: opt.mimeType,
+          buffer: opt.buffer,
+          base64Data: opt.buffer.toString('base64'),
         };
       }
     } catch (fsErr) {
@@ -986,7 +1169,9 @@ const fetchFileAsBase64 = async (url) => {
   let lastFetchError = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      response = await fetch(url);
+      const fetchCtrl = new AbortController();
+      const fetchTimer = setTimeout(() => fetchCtrl.abort(), 15000);
+      try { response = await fetch(url, { signal: fetchCtrl.signal }); } finally { clearTimeout(fetchTimer); }
       if (response.ok) break;
       lastFetchError = new Error(`Không thể tải file từ URL: ${url} (Mã lỗi: ${response.status})`);
       if (response.status === 404) throw lastFetchError;
@@ -1020,9 +1205,11 @@ const fetchFileAsBase64 = async (url) => {
     }
   }
 
+  const opt = await optimizeImageBufferForGemini(buffer, mimeType);
   return {
-    mimeType,
-    base64Data: buffer.toString('base64'),
+    mimeType: opt.mimeType,
+    buffer: opt.buffer,
+    base64Data: opt.buffer.toString('base64'),
   };
 };
 
@@ -1082,7 +1269,17 @@ const parseStaffSubmission = async (submissionId) => {
     const productNamesList = products.map((p) => p.name).join(', ');
     const supplierNamesList = suppliers.map((s) => s.name).join(', ');
     const customerMapById = new Map(customers.map((c) => [c.id, c]));
-    const learnedAliasesPromptList = (customerAiAliases || [])
+    const pickBalancedAliases = (list) => {
+      const arr = Array.isArray(list) ? list : [];
+      const topUsed = arr.slice(0, 50);
+      const seen = new Set(topUsed.map((a) => a.id));
+      const recent = [...arr]
+        .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
+        .filter((a) => !seen.has(a.id))
+        .slice(0, 30);
+      return [...topUsed, ...recent];
+    };
+    const learnedAliasesPromptList = pickBalancedAliases(customerAiAliases)
       .map((a) => {
         if (!a || !a.rawAlias) return null;
         const cust = customerMapById.get(a.customerId);
@@ -1090,10 +1287,9 @@ const parseStaffSubmission = async (submissionId) => {
         return `"${a.rawAlias}" => "${cust.name}"`;
       })
       .filter(Boolean)
-      .slice(0, 80)
       .join('; ');
     const productMapById = new Map(products.map((p) => [p.id, p]));
-    const learnedProductAliasesPromptList = (productAiAliases || [])
+    const learnedProductAliasesPromptList = pickBalancedAliases(productAiAliases)
       .map((a) => {
         if (!a || !a.rawAlias) return null;
         const prod = productMapById.get(a.productId);
@@ -1101,7 +1297,6 @@ const parseStaffSubmission = async (submissionId) => {
         return `"${a.rawAlias}" => "${prod.name}"`;
       })
       .filter(Boolean)
-      .slice(0, 80)
       .join('; ');
 
     // 3. Tải tệp thành Base64
@@ -1300,20 +1495,35 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
   + Nhà cung cấp / Lò mổ: "is_import": true, "is_return": false, "note": "Nhập hàng", bóc tách tên nhà cung cấp vào customer_name.`;
     }
 
-    // 5. Gửi sang Gemini Vision theo chuẩn System Instruction & User Prompt tách biệt
+    // 5. Chuẩn bị media part: video > 4MB ưu tiên tải qua Gemini File API để nhẹ RAM và ổn định hơn
+    let mediaPart = {
+      inlineData: {
+        mimeType: filePayload.mimeType,
+        data: filePayload.base64Data,
+      },
+    };
+    if (isVideo && filePayload.buffer && filePayload.buffer.length > 4 * 1024 * 1024) {
+      const uploadedFile = await uploadBufferToGeminiFileApi(filePayload.buffer, filePayload.mimeType, process.env.GEMINI_API_KEY);
+      if (uploadedFile && uploadedFile.fileUri) {
+        mediaPart = {
+          fileData: {
+            mimeType: uploadedFile.mimeType,
+            fileUri: uploadedFile.fileUri,
+          },
+        };
+      }
+    }
+
+    // Gửi sang Gemini Vision theo chuẩn System Instruction & User Prompt tách biệt
     const geminiResult = await callGeminiWithRetry({
       apiKey: process.env.GEMINI_API_KEY,
+      timeoutMs: isVideo ? 120000 : 60000,
       systemInstruction,
       contents: [
         {
           parts: [
             { text: userPrompt },
-            {
-              inlineData: {
-                mimeType: filePayload.mimeType,
-                data: filePayload.base64Data,
-              },
-            },
+            mediaPart,
           ],
         },
       ],
@@ -2757,6 +2967,25 @@ if (!matchedCustomerId) {
 
     // Lấy bảng giá riêng của khách hàng nếu đã khớp khách
     const customerPriceMap = new Map();
+    let frequentProductIds = new Set();
+    if (matchedCustomer) {
+      try {
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const topHabitItems = await prisma.transactionItem.groupBy({
+          by: ['productId'],
+          where: {
+            transaction: {
+              customerId: matchedCustomer.id,
+              date: { gte: thirtyDaysAgo },
+            },
+          },
+          _count: { productId: true },
+          orderBy: { _count: { productId: 'desc' } },
+          take: 10,
+        });
+        frequentProductIds = new Set(topHabitItems.map((h) => h.productId));
+      } catch (_) {}
+    }
     if (matchedCustomerId) {
       try {
         const customPrices = await prisma.customerProductPrice.findMany({
@@ -3229,7 +3458,7 @@ if (!matchedCustomerId) {
 
       // So khớp với danh mục sản phẩm của chủ buôn (ưu tiên số 1 từ điển AI tự học, sau đó đến matchProductByName)
       const matchedProd = (learnedProductMatch && learnedProductMatch.product) ||
-        matchProductByName(cleanItemName, products, customerPriceMap, productAiAliases);
+        matchProductByName(cleanItemName, products, customerPriceMap, productAiAliases, frequentProductIds);
       const customPriceVal = matchedProd ? customerPriceMap.get(matchedProd.id) : null;
 
       // QUY TẮC BẢO VỆ ĐẶC BIỆT CHO XG BÒ (XƯƠNG BÒ):
@@ -3420,5 +3649,6 @@ module.exports = {
   normalizeProductAliasText,
   matchProductFromAiAliases,
   learnProductAiAlias,
+  learnProductAiAliasesBatch,
 };
 

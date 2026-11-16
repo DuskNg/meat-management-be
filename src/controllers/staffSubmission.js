@@ -11,6 +11,7 @@ const {
   learnCustomerAiAlias,
   matchCustomerFromAiAliases,
   learnProductAiAlias,
+  learnProductAiAliasesBatch,
   matchProductFromAiAliases,
 } = require('../services/aiInvoiceParser');
 const { logActivity } = require('../utils/activityLogger');
@@ -696,6 +697,7 @@ const updateStaffSubmission = async (req, res, next) => {
         } catch { }
       }
       const origItemsForLearn = submission.items || [];
+      const aliasEntries = [];
       for (let idx = 0; idx < items.length; idx++) {
         const it = items[idx];
         const targetProdId = it.matchedProductId || it.productId;
@@ -706,8 +708,11 @@ const updateStaffSubmission = async (req, res, next) => {
         const aiJsonRawName = parsedAiItemsForLearn.length === items.length ? parsedAiItemsForLearn[idx]?.name : null;
         const rawCandidates = [...new Set([it.aiRawName, aiJsonRawName, origDbItem?.rawName].filter(Boolean))];
         for (const rawCand of rawCandidates) {
-          await learnProductAiAlias(userId, rawCand, targetProdId, id);
+          aliasEntries.push({ rawName: rawCand, productId: targetProdId });
         }
+      }
+      if (aliasEntries.length > 0) {
+        await learnProductAiAliasesBatch(userId, aliasEntries, id);
       }
 
       await prisma.staffSubmissionItem.deleteMany({
@@ -1028,7 +1033,7 @@ const approveStaffSubmission = async (req, res, next) => {
         }
 
         const formatCurrency = (val) => new Intl.NumberFormat('vi-VN').format(val) + ' đ';
-        await logActivity(
+        void logActivity(
           userId,
           'CREATE_SUPPLIER_TRANSACTION',
           `[Nhân viên gửi] Nhập hàng từ nhà cung cấp ${supplier.name}: +${formatCurrency(totalAmount)} (${itemsPayload.length} món thịt) (Nợ phát sinh)`
@@ -1457,6 +1462,7 @@ const approveStaffSubmission = async (req, res, next) => {
       const learnedProducts = [];
       const allAutoUpdatedSubIds = new Set();
 
+      const approveAliasEntries = [];
       for (let idx = 0; idx < finalItems.length; idx++) {
         const it = finalItems[idx];
         const targetProdId = it.matchedProductId || it.productId;
@@ -1467,9 +1473,13 @@ const approveStaffSubmission = async (req, res, next) => {
           (origItems.length === finalItems.length ? origItems[idx] : null);
         const aiJsonRawName = parsedAiItems.length === finalItems.length ? parsedAiItems[idx]?.name : null;
         const rawCandidates = [...new Set([it.aiRawName, aiJsonRawName, origDbItem?.rawName].filter(Boolean))];
-
         for (const rawCand of rawCandidates) {
-          const learnedProdInfo = await learnProductAiAlias(userId, rawCand, targetProdId, id);
+          approveAliasEntries.push({ rawName: rawCand, productId: targetProdId });
+        }
+      }
+      if (approveAliasEntries.length > 0) {
+        const batchResults = await learnProductAiAliasesBatch(userId, approveAliasEntries, id);
+        for (const learnedProdInfo of batchResults) {
           if (learnedProdInfo && learnedProdInfo.alias) {
             learnedProducts.push({
               rawAlias: learnedProdInfo.alias?.rawAlias || '',
@@ -1494,7 +1504,7 @@ const approveStaffSubmission = async (req, res, next) => {
     const senderInfo = submission.senderName ? ` do ${submission.senderName} nộp` : '';
 
     if (result.isReturn) {
-      await logActivity(
+      void logActivity(
         userId,
         'APPROVE_STAFF_SUBMISSION_RETURN',
         `Duyệt hóa đơn trả hàng${senderInfo} cho khách ${custName}: Số tiền ${parseFloat(result.payment?.amount || 0).toLocaleString('vi-VN')}đ`
@@ -1510,7 +1520,7 @@ const approveStaffSubmission = async (req, res, next) => {
       });
     }
 
-    await logActivity(
+    void logActivity(
       userId,
       'APPROVE_STAFF_SUBMISSION',
       `Duyệt hóa đơn nộp${senderInfo} lên đơn nợ cho khách ${custName}: Tổng tiền ${parseFloat(result.transaction?.totalAmount || 0).toLocaleString('vi-VN')}đ`
@@ -1553,7 +1563,7 @@ const rejectStaffSubmission = async (req, res, next) => {
 
     const senderInfo = submission.senderName ? ` của ${submission.senderName}` : '';
     const custInfo = submission.matchedCustomer?.name ? ` (khách ${submission.matchedCustomer.name})` : '';
-    await logActivity(
+    void logActivity(
       userId,
       'REJECT_STAFF_SUBMISSION',
       `Xóa/bác bỏ hóa đơn nộp${senderInfo}${custInfo}`
@@ -1590,7 +1600,7 @@ const batchRejectStaffSubmissions = async (req, res, next) => {
       },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'REJECT_STAFF_SUBMISSION',
       `Xóa hàng loạt ${ids.length} hóa đơn nộp của nhân viên.`
@@ -1934,6 +1944,93 @@ const syncCloudSubmission = async (req, res, next) => {
   }
 };
 
+// Lấy danh sách Từ điển AI tự học (Khách hàng & Món thịt)
+const getAiAliases = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId || req.workspaceOwnerId || req.user.id;
+    const [customerAliases, productAliases] = await Promise.all([
+      prisma.customerAiAlias.findMany({
+        where: { userId },
+        include: { customer: { select: { id: true, name: true } } },
+        orderBy: [{ usageCount: 'desc' }, { updatedAt: 'desc' }],
+      }),
+      prisma.productAiAlias.findMany({
+        where: { userId },
+        include: { product: { select: { id: true, name: true } } },
+        orderBy: [{ usageCount: 'desc' }, { updatedAt: 'desc' }],
+      }),
+    ]);
+    return res.json({
+      success: true,
+      data: { customerAliases, productAliases },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Chủ động thêm mới 1 từ khóa vào Từ điển AI tự học (Khách hàng hoặc Món thịt)
+const createAiAlias = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId || req.workspaceOwnerId || req.user.id;
+    const { type, rawAlias, targetId } = req.body;
+    if (!rawAlias || typeof rawAlias !== 'string' || !rawAlias.trim()) {
+      throw new BadRequestError('Vui lòng nhập chữ viết tay / từ viết tắt cần dạy AI.');
+    }
+    if (!targetId) {
+      throw new BadRequestError('Vui lòng chọn khách hàng hoặc món thịt chuẩn tương ứng.');
+    }
+
+    if (type === 'customer') {
+      const learned = await learnCustomerAiAlias(userId, rawAlias.trim(), targetId);
+      if (!learned || !learned.alias) {
+        throw new BadRequestError('Từ khóa không hợp lệ, quá chung chung (hoặc trùng tên chuỗi/khách hàng khác).');
+      }
+      return res.status(201).json({
+        success: true,
+        data: { ...learned.alias, customer: { id: learned.customer.id, name: learned.customer.name } },
+      });
+    }
+
+    if (type === 'product') {
+      const learned = await learnProductAiAlias(userId, rawAlias.trim(), targetId);
+      if (!learned || !learned.alias) {
+        throw new BadRequestError('Từ khóa không hợp lệ hoặc trùng tên chính thức của món thịt khác.');
+      }
+      return res.status(201).json({
+        success: true,
+        data: { ...learned.alias, product: { id: learned.product.id, name: learned.product.name } },
+      });
+    }
+
+    throw new BadRequestError('Loại từ điển AI không hợp lệ.');
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Xóa 1 mục khỏi Từ điển AI tự học (khi lỡ học nhầm)
+const deleteAiAlias = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId || req.workspaceOwnerId || req.user.id;
+    const { type, id } = req.params;
+    if (type === 'customer') {
+      const existing = await prisma.customerAiAlias.findFirst({ where: { id, userId } });
+      if (!existing) throw new NotFoundError('Không tìm thấy từ khóa khách hàng trong từ điển AI.');
+      await prisma.customerAiAlias.delete({ where: { id } });
+    } else if (type === 'product') {
+      const existing = await prisma.productAiAlias.findFirst({ where: { id, userId } });
+      if (!existing) throw new NotFoundError('Không tìm thấy từ khóa món thịt trong từ điển AI.');
+      await prisma.productAiAlias.delete({ where: { id } });
+    } else {
+      throw new BadRequestError('Loại từ điển AI không hợp lệ.');
+    }
+    return res.json({ success: true, message: 'Đã xóa khỏi từ điển AI.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getPublicLinkInfo,
   verifyLinkPin,
@@ -1952,4 +2049,7 @@ module.exports = {
   updateSubmissionLink,
   regenerateSubmissionToken,
   deleteSubmissionLink,
+  getAiAliases,
+  createAiAlias,
+  deleteAiAlias,
 };

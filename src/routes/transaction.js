@@ -43,5 +43,9 @@ router.post('/check-debt-existence', transactionController.checkDebtExistence);
 // Kích hoạt dọn dẹp ảnh và video của các đơn công nợ đã được thu nợ sau 15 ngày
 router.post('/cleanup-paid-media', transactionController.cleanupPaidDebtMediaAction);
 
+// Lấy và lưu danh sách key đơn trùng đã xác nhận hợp lệ ("Bằng cân nhưng đúng") đồng bộ liên thiết bị
+router.get('/confirmed-duplicates', transactionController.getConfirmedDuplicates);
+router.post('/confirmed-duplicates', transactionController.saveConfirmedDuplicates);
+
 module.exports = router;
 

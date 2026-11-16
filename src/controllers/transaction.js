@@ -39,17 +39,11 @@ const createTransaction = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy khách hàng hoặc khách hàng đã bị xóa.');
     }
 
-    // Lấy toàn bộ sản phẩm thịt liên quan để xác thực
-    const productIds = items.filter((i) => i.productId).map((i) => i.productId);
-    const products = await prisma.product.findMany({
-      where: { id: { in: productIds }, userId, isActive: true },
-    });
-    const productMap = new Map(products.map((p) => [p.id, p]));
-
-    // Lấy danh mục sản phẩm đầy đủ của chủ buôn này để so khớp khi sửa tên
+    // Lấy danh mục sản phẩm đầy đủ của chủ buôn này (dùng chung cho cả xác thực ID và so khớp khi sửa tên)
     const allUserProducts = await prisma.product.findMany({
       where: { userId, isActive: true },
     });
+    const productMap = new Map(allUserProducts.map((p) => [p.id, p]));
 
     // Kiểm tra tính hợp lệ và tính tổng tiền, tổng vốn, tổng lãi của từng dòng mặt hàng
     let calculatedTotal = 0;
@@ -187,26 +181,32 @@ const createTransaction = async (req, res, next) => {
 
       // Cập nhật hoặc lưu mới đơn giá thịt của loại thịt này cho khách hàng này nếu được phép (mặc định true, nếu updateCustomPrice === false thì chỉ áp dụng cho lần nợ này)
       if (updateCustomPrice !== false) {
+        const uniquePriceByProduct = new Map();
         for (const item of formattedItems) {
-          await tx.customerProductPrice.upsert({
-            where: {
-              customerId_productId: {
+          uniquePriceByProduct.set(item.productId, item);
+        }
+        await Promise.all(
+          Array.from(uniquePriceByProduct.values()).map((item) =>
+            tx.customerProductPrice.upsert({
+              where: {
+                customerId_productId: {
+                  customerId,
+                  productId: item.productId,
+                },
+              },
+              update: {
+                price: item.price,
+                ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
+              },
+              create: {
                 customerId,
                 productId: item.productId,
+                price: item.price,
+                changeReason: priceChangeReason?.trim() || null,
               },
-            },
-            update: {
-              price: item.price,
-              ...(priceChangeReason !== undefined ? { changeReason: priceChangeReason?.trim() || null } : {}),
-            },
-            create: {
-              customerId,
-              productId: item.productId,
-              price: item.price,
-              changeReason: priceChangeReason?.trim() || null,
-            },
-          });
-        }
+            })
+          )
+        );
       }
 
       // Tự động gắn các ảnh hóa đơn chưa được liên kết của khách này trong cùng ngày vào đơn nợ vừa tạo
@@ -252,7 +252,7 @@ const createTransaction = async (req, res, next) => {
     const transDate = date ? new Date(date) : new Date();
     const dateStr = new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }).format(transDate);
 
-    await logActivity(
+    void logActivity(
       userId,
       'CREATE_TRANSACTION',
       `${methodTag} Ghi nợ đơn hàng ngày ${dateStr} cho khách ${customer.name}: Tổng tiền ${calculatedTotal.toLocaleString('vi-VN')}đ`
@@ -436,17 +436,11 @@ const updateTransaction = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy đơn hàng hoặc bạn không có quyền chỉnh sửa.');
     }
 
-    // Lấy toàn bộ sản phẩm thịt liên quan để xác thực
-    const productIds = items.filter((i) => i.productId).map((i) => i.productId);
-    const products = await prisma.product.findMany({
-      where: { id: { in: productIds }, userId, isActive: true },
-    });
-    const productMap = new Map(products.map((p) => [p.id, p]));
-
-    // Lấy danh mục sản phẩm đầy đủ của chủ buôn này để so khớp khi sửa tên
+    // Lấy danh mục sản phẩm đầy đủ của chủ buôn này (dùng chung cho cả xác thực ID và so khớp khi sửa tên)
     const allUserProducts = await prisma.product.findMany({
       where: { userId, isActive: true },
     });
+    const productMap = new Map(allUserProducts.map((p) => [p.id, p]));
 
     let calculatedTotal = 0;
     let calculatedTotalCost = 0;
@@ -696,7 +690,7 @@ const updateTransaction = async (req, res, next) => {
     const dateDisplay = oldDateStr ? ` ngày ${oldDateStr}` : '';
     const logDetail = `Cập nhật đơn nợ${dateDisplay} của khách hàng ${customerName}${extraInfoStr}:\n• Trước: ${oldTotalStr} [${oldItemsSummary || 'Trống'}]\n• Sau: ${newTotalStr} [${newItemsSummary || 'Trống'}]`;
 
-    await logActivity(
+    void logActivity(
       userId,
       'UPDATE_TRANSACTION',
       logDetail
@@ -755,7 +749,7 @@ const deleteTransaction = async (req, res, next) => {
       .join(', ');
     const itemsStr = itemsSummary ? ` [${itemsSummary}]` : '';
 
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_TRANSACTION',
       `Xóa đơn nợ${dateDisplay} của khách hàng ${customer?.name || 'ẩn'}: Số tiền ${Number(existing.totalAmount).toLocaleString('vi-VN')}đ${itemsStr}`
@@ -818,7 +812,7 @@ const deleteTransactionsBulk = async (req, res, next) => {
     const totalDeletedAmount = existingTransactions.reduce((sum, tx) => sum + Number(tx.totalAmount || 0), 0);
     const customerNames = [...new Set(existingTransactions.map((tx) => tx.customer?.name).filter(Boolean))].join(', ');
 
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_TRANSACTIONS_BULK',
       `Xóa hàng loạt ${validIds.length} đơn nợ (Tổng tiền: ${Number(totalDeletedAmount).toLocaleString('vi-VN')}đ) của khách: ${customerNames || 'ẩn'}`
@@ -923,7 +917,7 @@ const uploadBatchInvoices = async (req, res, next) => {
       const fileName = `${prefix}_${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${fileExt}`;
       const filePath = path.join(uploadsDir, fileName);
       const buffer = Buffer.from(cleanBase64, 'base64');
-      fs.writeFileSync(filePath, buffer);
+      await fs.promises.writeFile(filePath, buffer);
 
       let imageUrl = `/uploads/invoices/${fileName}`;
 
@@ -1042,7 +1036,7 @@ const uploadBatchInvoices = async (req, res, next) => {
     });
 
     // Ghi log nhật ký hoạt động
-    await logActivity(
+    void logActivity(
       userId,
       'UPLOAD_INVOICE_IMAGES',
       `Tải lên ${savedInvoices.length} ảnh hóa đơn đính kèm đơn nợ khách hàng.`
@@ -1084,7 +1078,7 @@ const deleteInvoiceImage = async (req, res, next) => {
     try {
       const filePath = path.join(__dirname, '../../', invoice.imageUrl);
       if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+        await fs.promises.unlink(filePath);
       }
     } catch (_) {}
 
@@ -1109,7 +1103,7 @@ const deleteInvoiceImage = async (req, res, next) => {
       where: { id },
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'DELETE_INVOICE_IMAGE',
       `Xóa ảnh hóa đơn của khách hàng ${invoice.customer?.name || 'ẩn'}`
@@ -1425,6 +1419,59 @@ const cleanupPaidDebtMediaAction = async (req, res, next) => {
   }
 };
 
+// Lấy danh sách các key đơn trùng đã được xác nhận hợp lệ ("Bằng cân nhưng đúng") của workspace
+const getConfirmedDuplicates = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const rows = await prisma.confirmedDuplicateKey.findMany({
+      where: { userId },
+      select: { duplicateKey: true },
+    });
+    return res.status(200).json({
+      success: true,
+      data: rows.map((r) => r.duplicateKey),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Lưu bổ sung danh sách key đơn trùng đã xác nhận hợp lệ ("Bằng cân nhưng đúng") đồng bộ liên thiết bị
+const saveConfirmedDuplicates = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { keys } = req.body;
+    if (!Array.isArray(keys)) {
+      throw new BadRequestError('Danh sách keys không hợp lệ.');
+    }
+
+    const cleanKeys = [...new Set(
+      keys
+        .filter((k) => typeof k === 'string' && k.trim().length > 0)
+        .map((k) => k.trim().slice(0, 255))
+    )];
+
+    if (cleanKeys.length > 0) {
+      await prisma.confirmedDuplicateKey.createMany({
+        data: cleanKeys.map((duplicateKey) => ({
+          userId,
+          duplicateKey,
+        })),
+        skipDuplicates: true,
+      });
+
+      notifyCustomerUpdate(userId, 'CONFIRM_DUPLICATES', { count: cleanKeys.length });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: cleanKeys,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createTransaction,
   getTransactions,
@@ -1437,4 +1484,6 @@ module.exports = {
   checkDebtExistence,
   syncCloudInvoice,
   cleanupPaidDebtMediaAction,
+  getConfirmedDuplicates,
+  saveConfirmedDuplicates,
 };

@@ -134,7 +134,7 @@ const createTablesBulk = async (req, res, next) => {
       data: filteredTablesData,
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'CREATE_TABLES_BULK',
       `Tạo hàng loạt ${filteredTablesData.length} bàn ăn mới với tiền tố "${prefix}"`
@@ -338,7 +338,7 @@ const createTable = async (req, res, next) => {
       },
     });
 
-    await logActivity(userId, 'CREATE_TABLE', `Tạo bàn ăn mới: ${table.name}`);
+    void logActivity(userId, 'CREATE_TABLE', `Tạo bàn ăn mới: ${table.name}`);
     notifyStoreUpdate(userId, 'CREATE_TABLE', { tableId: table.id });
 
     res.status(201).json({
@@ -395,7 +395,7 @@ const updateTable = async (req, res, next) => {
       },
     });
 
-    await logActivity(userId, 'UPDATE_TABLE', `Cập nhật bàn ăn: ${table.name} thành ${updatedTable.name}`);
+    void logActivity(userId, 'UPDATE_TABLE', `Cập nhật bàn ăn: ${table.name} thành ${updatedTable.name}`);
     notifyStoreUpdate(userId, 'UPDATE_TABLE', { tableId: id });
 
     res.status(200).json({
@@ -438,7 +438,7 @@ const deleteTable = async (req, res, next) => {
       data: { isActive: false },
     });
 
-    await logActivity(userId, 'DELETE_TABLE', `Xóa bàn ăn: ${table.name}`);
+    void logActivity(userId, 'DELETE_TABLE', `Xóa bàn ăn: ${table.name}`);
     notifyStoreUpdate(userId, 'DELETE_TABLE', { tableId: id });
 
     res.status(200).json({
@@ -501,7 +501,7 @@ const createProduct = async (req, res, next) => {
       },
     });
 
-    await logActivity(userId, 'CREATE_STORE_PRODUCT', `Thêm món ăn: ${product.name}`);
+    void logActivity(userId, 'CREATE_STORE_PRODUCT', `Thêm món ăn: ${product.name}`);
     notifyStoreUpdate(userId, 'CREATE_STORE_PRODUCT', { productId: product.id });
 
     res.status(201).json({
@@ -547,7 +547,7 @@ const updateProduct = async (req, res, next) => {
       },
     });
 
-    await logActivity(userId, 'UPDATE_STORE_PRODUCT', `Cập nhật món ăn: ${product.name}`);
+    void logActivity(userId, 'UPDATE_STORE_PRODUCT', `Cập nhật món ăn: ${product.name}`);
     notifyStoreUpdate(userId, 'UPDATE_STORE_PRODUCT', { productId: id });
 
     res.status(200).json({
@@ -589,7 +589,7 @@ const deleteProduct = async (req, res, next) => {
       data: { isActive: false },
     });
 
-    await logActivity(userId, 'DELETE_STORE_PRODUCT', `Xóa món ăn: ${product.name}`);
+    void logActivity(userId, 'DELETE_STORE_PRODUCT', `Xóa món ăn: ${product.name}`);
     notifyStoreUpdate(userId, 'DELETE_STORE_PRODUCT', { productId: id });
 
     res.status(200).json({
@@ -772,7 +772,7 @@ const createTransaction = async (req, res, next) => {
       });
     });
 
-    await logActivity(
+    void logActivity(
       userId,
       'CREATE_STORE_TRANSACTION',
       `Ghi hóa đơn gọi món cho ${table.name} tổng số tiền: ${calculatedTotal}đ`
@@ -822,7 +822,7 @@ const deleteTransaction = async (req, res, next) => {
       }),
     ]);
 
-    await logActivity(userId, 'DELETE_STORE_TRANSACTION', `Hủy hóa đơn gọi món giá trị ${transaction.totalAmount}đ`);
+    void logActivity(userId, 'DELETE_STORE_TRANSACTION', `Hủy hóa đơn gọi món giá trị ${transaction.totalAmount}đ`);
     notifyStoreUpdate(userId, 'DELETE_STORE_TRANSACTION', { tableId: transaction.customerId, transactionId: id });
 
     res.status(200).json({
@@ -909,7 +909,7 @@ const createPayment = async (req, res, next) => {
       },
     });
 
-    await logActivity(userId, 'CREATE_STORE_PAYMENT', `Thanh toán hóa đơn cho ${table.name} số tiền: ${amount}đ`);
+    void logActivity(userId, 'CREATE_STORE_PAYMENT', `Thanh toán hóa đơn cho ${table.name} số tiền: ${amount}đ`);
     notifyStoreUpdate(userId, 'CREATE_STORE_PAYMENT', { tableId: customerId, paymentId: payment.id });
 
     res.status(201).json({
