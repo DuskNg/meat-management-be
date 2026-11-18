@@ -1099,25 +1099,61 @@ const getPortalLinks = async (req, res, next) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    const formatted = await Promise.all(links.map(async (l) => {
+    // Gom toàn bộ customerId và mốc thời gian công bố sớm nhất để chỉ query DB 2 lần thay vì 2*N lần
+    const customerLinks = links.filter(l => l.type === 'customer' && l.customers.length > 0);
+    const allCustomerIds = [...new Set(customerLinks.flatMap(l => l.customers.map(c => c.customer.id)))];
+    const hasNullPublished = customerLinks.some(l => !l.lastPublishedAt);
+    const minLastPublishedAt = (!hasNullPublished && customerLinks.length > 0)
+      ? new Date(Math.min(...customerLinks.map(l => new Date(l.lastPublishedAt).getTime())))
+      : null;
+
+    let recentTxsByCust = new Map();
+    let recentPaysByCust = new Map();
+    if (allCustomerIds.length > 0) {
+      const [recentTxs, recentPays] = await Promise.all([
+        prisma.transaction.findMany({
+          where: {
+            userId,
+            customerId: { in: allCustomerIds },
+            ...(minLastPublishedAt ? { createdAt: { gt: minLastPublishedAt } } : {})
+          },
+          select: { customerId: true, createdAt: true }
+        }),
+        prisma.payment.findMany({
+          where: {
+            customerId: { in: allCustomerIds },
+            ...(minLastPublishedAt ? { createdAt: { gt: minLastPublishedAt } } : {})
+          },
+          select: { customerId: true, createdAt: true }
+        })
+      ]);
+      for (const t of recentTxs) {
+        if (!recentTxsByCust.has(t.customerId)) recentTxsByCust.set(t.customerId, []);
+        recentTxsByCust.get(t.customerId).push(t.createdAt.getTime());
+      }
+      for (const pm of recentPays) {
+        if (!recentPaysByCust.has(pm.customerId)) recentPaysByCust.set(pm.customerId, []);
+        recentPaysByCust.get(pm.customerId).push(pm.createdAt.getTime());
+      }
+    }
+
+    const formatted = links.map((l) => {
       let unpublishedCount = 0;
       if (l.type === 'customer' && l.customers.length > 0) {
-        const cIds = l.customers.map(c => c.customer.id);
-        const [txCount, payCount] = await Promise.all([
-          prisma.transaction.count({
-            where: {
-              customerId: { in: cIds },
-              ...(l.lastPublishedAt ? { createdAt: { gt: l.lastPublishedAt } } : {})
-            }
-          }),
-          prisma.payment.count({
-            where: {
-              customerId: { in: cIds },
-              ...(l.lastPublishedAt ? { createdAt: { gt: l.lastPublishedAt } } : {})
-            }
-          })
-        ]);
-        unpublishedCount = txCount + payCount;
+        const cutoffMs = l.lastPublishedAt ? new Date(l.lastPublishedAt).getTime() : null;
+        for (const c of l.customers) {
+          const cid = c.customer.id;
+          const tList = recentTxsByCust.get(cid);
+          if (tList) {
+            if (cutoffMs === null) unpublishedCount += tList.length;
+            else for (const ts of tList) { if (ts > cutoffMs) unpublishedCount++; }
+          }
+          const pList = recentPaysByCust.get(cid);
+          if (pList) {
+            if (cutoffMs === null) unpublishedCount += pList.length;
+            else for (const ts of pList) { if (ts > cutoffMs) unpublishedCount++; }
+          }
+        }
       }
       return {
         id: l.id,
@@ -1136,7 +1172,7 @@ const getPortalLinks = async (req, res, next) => {
         supplier: l.supplier,
         pendingFeedbacksCount: l._count.feedbacks
       };
-    }));
+    });
 
     res.status(200).json({
       success: true,
