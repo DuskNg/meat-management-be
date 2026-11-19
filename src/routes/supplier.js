@@ -33,6 +33,9 @@ router.get('/:id/history', supplierController.getSupplierHistory);
 // Lấy bảng giá riêng theo nhà cung cấp
 router.get('/:id/prices', supplierController.getSupplierPrices);
 
+// Cập nhật bảng giá nhập riêng theo nhà cung cấp
+router.put('/:id/prices', supplierController.updateSupplierPrices);
+
 // Tạo giao dịch nhập hàng (ghi nhận thêm nợ của chủ sạp đối với nhà cung cấp)
 router.post('/transactions', supplierController.createSupplierTransaction);
 

@@ -6,6 +6,7 @@ const { BadRequestError, NotFoundError, ForbiddenError } = require('../utils/err
 const { logActivity } = require('../utils/activityLogger');
 const { isCloudinaryConfigured, uploadToCloudinary } = require('../utils/cloudinary');
 const { emitWorkspaceEvent } = require('../utils/socket');
+const { getProductsWithSupplierPrices } = require('../utils/supplierPriceHelper');
 
 // Helper gửi socket event thông báo thanh toán / nợ khách hàng thay đổi
 const notifyCustomerUpdate = (userId, action, payload = {}) => {
@@ -998,64 +999,82 @@ const getSupplierPrices = async (req, res, next) => {
       throw new NotFoundError('Không tìm thấy nhà cung cấp.');
     }
 
-    const products = await prisma.product.findMany({
-      where: { userId, isActive: true },
-      orderBy: { name: 'asc' },
-    });
-
-    const supTxs = await prisma.supplierTransaction.findMany({
-      where: { supplierId: id },
-      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
-      select: { items: true },
-    });
-
-    const supplierPriceMap = new Map();
-    for (const stx of supTxs) {
-      if (!stx.items) continue;
-      try {
-        const parsedItems = JSON.parse(stx.items);
-        if (Array.isArray(parsedItems)) {
-          for (const it of parsedItems) {
-            const itPrice = it.price != null && !isNaN(Number(it.price)) && Number(it.price) > 0 ? Number(it.price) : null;
-            if (itPrice !== null) {
-              if (it.productId && !supplierPriceMap.has(it.productId)) {
-                supplierPriceMap.set(it.productId, itPrice);
-              }
-              const nameKey = (it.productName || it.rawName || '').toLowerCase().trim();
-              if (nameKey && !supplierPriceMap.has(nameKey)) {
-                supplierPriceMap.set(nameKey, itPrice);
-              }
-            }
-          }
-        }
-      } catch { }
-    }
-
-    const supplierProducts = products.map((p) => {
-      const pNameKey = p.name.toLowerCase().trim();
-      let supPrice = null;
-      if (supplierPriceMap.has(p.id)) {
-        supPrice = supplierPriceMap.get(p.id);
-      } else if (supplierPriceMap.has(pNameKey)) {
-        supPrice = supplierPriceMap.get(pNameKey);
-      }
-
-      const hasCustomPrice = supPrice !== null && supPrice > 0;
-      const effectivePrice = hasCustomPrice ? supPrice : (p.costPrice > 0 ? Number(p.costPrice) : Number(p.defaultPrice));
-
-      return {
-        ...p,
-        baseDefaultPrice: p.defaultPrice,
-        hasCustomPrice,
-        customPrice: supPrice,
-        defaultPrice: effectivePrice,
-        costPrice: effectivePrice,
-      };
-    });
+    const supplierProducts = await getProductsWithSupplierPrices(userId, id);
 
     res.status(200).json({
       success: true,
       data: supplierProducts,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 13b. Cập nhật bảng giá nhập riêng theo từng loại thịt cho một nhà cung cấp
+const updateSupplierPrices = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.effectiveUserId;
+    const { items } = req.body;
+
+    if (!Array.isArray(items)) {
+      throw new BadRequestError('Danh sách giá nhập không hợp lệ.');
+    }
+
+    const supplierExists = await prisma.supplier.findFirst({
+      where: { id, userId, isActive: true },
+    });
+    if (!supplierExists) {
+      throw new NotFoundError('Không tìm thấy nhà cung cấp.');
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const validItems = items.filter((item) => item?.productId);
+      const toDeleteIds = [];
+      const toUpsert = [];
+
+      for (const item of validItems) {
+        const numericPrice = Number(item.price);
+        if (item.price === null || item.price === undefined || Number.isNaN(numericPrice) || numericPrice <= 0) {
+          toDeleteIds.push(item.productId);
+        } else {
+          toUpsert.push({ productId: item.productId, price: numericPrice });
+        }
+      }
+
+      if (toDeleteIds.length > 0) {
+        await tx.supplierProductPrice.deleteMany({
+          where: { supplierId: id, productId: { in: toDeleteIds } },
+        });
+      }
+
+      if (toUpsert.length > 0) {
+        await Promise.all(
+          toUpsert.map((item) =>
+            tx.supplierProductPrice.upsert({
+              where: {
+                supplierId_productId: {
+                  supplierId: id,
+                  productId: item.productId,
+                },
+              },
+              update: { price: item.price },
+              create: {
+                supplierId: id,
+                productId: item.productId,
+                price: item.price,
+              },
+            })
+          )
+        );
+      }
+    });
+
+    const updatedProducts = await getProductsWithSupplierPrices(userId, id);
+    res.status(200).json({
+      success: true,
+      message: `Đã cập nhật bảng giá nhập cho ${supplierExists.name}.`,
+      data: updatedProducts,
     });
   } catch (error) {
     next(error);
@@ -1393,6 +1412,7 @@ module.exports = {
   getSupplierHistory,
   uploadSupplierMedia,
   getSupplierPrices,
+  updateSupplierPrices,
   getProfitReport,
 };
 
