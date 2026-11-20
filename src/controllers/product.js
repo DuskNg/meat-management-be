@@ -36,6 +36,7 @@ const getProducts = async (req, res, next) => {
       where: {
         userId,
         isActive: true, // Chỉ lấy các sản phẩm đang hoạt động
+        type: { not: 'supplier' }, // Không trộn danh mục thịt riêng của nhà cung cấp vào danh sách bán cho khách hàng
       },
       orderBy: {
         name: 'asc', // Sắp xếp theo tên sản phẩm A-Z
@@ -1049,9 +1050,9 @@ const analyzeGroupPrices = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Không tìm thấy cửa hàng hợp lệ.' });
     }
 
-    // Lấy danh sách sản phẩm đang hoạt động
+    // Lấy danh sách sản phẩm đang hoạt động (tách biệt danh mục riêng của nhà cung cấp)
     const products = await prisma.product.findMany({
-      where: { userId, isActive: true },
+      where: { userId, isActive: true, type: { not: 'supplier' } },
       orderBy: { name: 'asc' },
     });
 

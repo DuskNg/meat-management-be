@@ -59,32 +59,39 @@ async function getProductsWithSupplierPrices(userId, supplierId) {
     }
   }
 
-  return products.map((p) => {
-    const pNameKey = p.name.toLowerCase().trim();
-    let supPrice = null;
+  return products
+    .map((p) => {
+      const pNameKey = p.name.toLowerCase().trim();
+      let supPrice = null;
 
-    if (explicitPriceMap.has(p.id)) {
-      supPrice = explicitPriceMap.get(p.id);
-    } else if (historyPriceMap.has(p.id)) {
-      supPrice = historyPriceMap.get(p.id);
-    } else if (historyPriceMap.has(pNameKey)) {
-      supPrice = historyPriceMap.get(pNameKey);
-    }
+      if (explicitPriceMap.has(p.id)) {
+        supPrice = explicitPriceMap.get(p.id);
+      } else if (historyPriceMap.has(p.id)) {
+        supPrice = historyPriceMap.get(p.id);
+      } else if (historyPriceMap.has(pNameKey)) {
+        supPrice = historyPriceMap.get(pNameKey);
+      }
 
-    const hasCustomPrice = supPrice !== null && supPrice > 0;
-    const effectivePrice = hasCustomPrice
-      ? supPrice
-      : (p.costPrice > 0 ? Number(p.costPrice) : Number(p.defaultPrice));
+      const hasCustomPrice = supPrice !== null && supPrice > 0;
+      // Các mặt hàng dành riêng cho nhà cung cấp (type === 'supplier') chỉ hiển thị với NCC có bảng giá/lịch sử nhập mặt hàng đó
+      if (p.type === 'supplier' && !hasCustomPrice) {
+        return null;
+      }
 
-    return {
-      ...p,
-      baseDefaultPrice: p.defaultPrice,
-      hasCustomPrice,
-      customPrice: supPrice,
-      defaultPrice: effectivePrice,
-      costPrice: effectivePrice,
-    };
-  });
+      const effectivePrice = hasCustomPrice
+        ? supPrice
+        : (p.costPrice > 0 ? Number(p.costPrice) : Number(p.defaultPrice));
+
+      return {
+        ...p,
+        baseDefaultPrice: p.defaultPrice,
+        hasCustomPrice,
+        customPrice: supPrice,
+        defaultPrice: effectivePrice,
+        costPrice: effectivePrice,
+      };
+    })
+    .filter(Boolean);
 }
 
 module.exports = {

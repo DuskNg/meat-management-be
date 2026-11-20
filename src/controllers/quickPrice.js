@@ -72,7 +72,7 @@ const getPublicLinkInfo = async (req, res, next) => {
         orderBy: { name: 'asc' },
       }),
       prisma.product.findMany({
-        where: { userId, isActive: true },
+        where: { userId, isActive: true, type: { not: 'supplier' } },
         select: { id: true, name: true, defaultPrice: true, costPrice: true, unit: true },
         orderBy: { name: 'asc' },
       }),

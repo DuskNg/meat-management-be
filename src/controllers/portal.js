@@ -3258,7 +3258,7 @@ const getPortalDebtActionBootstrap = async (req, res, next) => {
 
     const [products, customPrices, recentTransactions, recentPayments, suppliers] = await Promise.all([
       prisma.product.findMany({
-        where: { userId, isActive: true },
+        where: { userId, isActive: true, type: { not: 'supplier' } },
         select: { id: true, name: true, defaultPrice: true, costPrice: true, unit: true },
         orderBy: { name: 'asc' }
       }),
