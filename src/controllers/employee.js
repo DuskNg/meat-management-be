@@ -355,12 +355,12 @@ const getEmployees = async (req, res, next) => {
     const result = await Promise.all(employees.map(async (emp) => {
       const totalAdvances = emp.advances ? emp.advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0) : 0;
       
-      // Tính tổng số tiền lương đã chi trả cho nhân viên trong tháng này
-      const totalPaidSalary = emp.payments
-        ? emp.payments
-            .filter((p) => p.status === 'PAID')
-            .reduce((sum, p) => sum + parseFloat(p.finalAmount || 0), 0)
-        : 0;
+      // Tính tổng số tiền lương và tổng số công đã chi trả cho nhân viên trong tháng này
+      const paidPayments = (emp.payments || []).filter((p) => p.status === 'PAID');
+      const totalPaidSalary = paidPayments.reduce((sum, p) => sum + parseFloat(p.finalAmount || 0), 0);
+      const paidWorkingDays = Math.round(
+        paidPayments.reduce((sum, p) => sum + parseFloat(p.workingDays || 0), 0) * 100
+      ) / 100;
 
       const baseSalary = parseFloat(emp.baseSalary);
       const dailySalary = Math.round(baseSalary / totalDaysInMonth);
@@ -408,6 +408,9 @@ const getEmployees = async (req, res, next) => {
         currentEligibleDays = Math.max(0, currentDayCutoff - startDayInMonth + 1);
       }
       const currentWorkingDays = Math.max(0, currentEligibleDays - currentLeaveDays);
+      // Số công còn lại chưa thanh toán sau khi trừ các đợt lương đã trả trong tháng
+      const remainingWorkingDays = Math.max(0, Math.round((workingDays - paidWorkingDays) * 100) / 100);
+      const remainingCurrentWorkingDays = Math.max(0, Math.round((currentWorkingDays - paidWorkingDays) * 100) / 100);
       let currentSalary = 0;
       if (currentEligibleDays > 0) {
         currentSalary = Math.max(0, Math.round((baseSalary / totalDaysInMonth) * currentWorkingDays));
@@ -493,6 +496,8 @@ const getEmployees = async (req, res, next) => {
         totalDaysInMonth,
         eligibleDays,
         workingDays,
+        paidWorkingDays,
+        remainingWorkingDays,
         joinedMidMonth,
         startDayInMonth,
         startDayText: joinedMidMonth && startDayInMonth > 1
@@ -504,6 +509,7 @@ const getEmployees = async (req, res, next) => {
         currentEligibleDays,
         currentLeaveDays,
         currentWorkingDays,
+        remainingCurrentWorkingDays,
         currentSalary,
         currentAdvances,
         currentRemainingSalary,
