@@ -511,7 +511,18 @@ const getSupplierHistory = async (req, res, next) => {
       ...transactions.map((t) => {
         let parsedItems = null;
         if (t.items) {
-          try { parsedItems = JSON.parse(t.items); } catch (e) { parsedItems = null; }
+          try {
+            const rawParsed = JSON.parse(t.items);
+            // Chuẩn hóa tên mặt hàng tương thích cả đơn nhập tay (productName) và đơn duyệt từ AI (rawName)
+            parsedItems = Array.isArray(rawParsed)
+              ? rawParsed.map((it) => ({
+                  ...it,
+                  productName: it?.productName || it?.rawName || it?.product?.name || it?.name || 'Thịt',
+                }))
+              : rawParsed;
+          } catch (e) {
+            parsedItems = null;
+          }
         }
         let parsedMedia = [];
         if (t.mediaUrls) {

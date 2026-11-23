@@ -355,15 +355,41 @@ const getEmployees = async (req, res, next) => {
     const result = await Promise.all(employees.map(async (emp) => {
       const totalAdvances = emp.advances ? emp.advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0) : 0;
       
-      // Tính tổng số tiền lương và tổng số công đã chi trả cho nhân viên trong tháng này
+      const baseSalary = parseFloat(emp.baseSalary);
+      const dailySalary = Math.round(baseSalary / totalDaysInMonth);
+      const exactDailyRate = totalDaysInMonth > 0 ? baseSalary / totalDaysInMonth : 0;
+
+      // Tính tổng số tiền lương và tổng số công thực tế đã chi trả cho nhân viên trong tháng này
+      // Nếu người dùng tự sửa số tiền chi trả khác với lương tính theo khoảng ngày, quy đổi số công theo số tiền thực trả
       const paidPayments = (emp.payments || []).filter((p) => p.status === 'PAID');
       const totalPaidSalary = paidPayments.reduce((sum, p) => sum + parseFloat(p.finalAmount || 0), 0);
       const paidWorkingDays = Math.round(
-        paidPayments.reduce((sum, p) => sum + parseFloat(p.workingDays || 0), 0) * 100
-      ) / 100;
+        paidPayments.reduce((sum, p) => {
+          const savedDays = parseFloat(p.workingDays || 0);
+          const pFinal = parseFloat(p.finalAmount || 0);
+          if (exactDailyRate <= 0) return sum + savedDays;
 
-      const baseSalary = parseFloat(emp.baseSalary);
-      const dailySalary = Math.round(baseSalary / totalDaysInMonth);
+          const pAdv = parseFloat(p.advancesDeducted || 0);
+          const pBonus = parseFloat(p.bonus || 0);
+          const pDed = parseFloat(p.deductions || 0);
+
+          if (savedDays > 0) {
+            const grossBySavedDays = Math.round(exactDailyRate * savedDays);
+            const expectedNetWithAdv = Math.max(0, grossBySavedDays - pAdv + pBonus - pDed);
+            const expectedGrossNoAdv = Math.max(0, grossBySavedDays + pBonus - pDed);
+            const tolerance = Math.max(50000, Math.round(exactDailyRate * 0.25));
+            if (
+              Math.abs(pFinal - expectedNetWithAdv) <= tolerance ||
+              Math.abs(pFinal - expectedGrossNoAdv) <= tolerance
+            ) {
+              return sum + savedDays;
+            }
+          }
+
+          const effectiveDays = Math.max(0, Math.round((pFinal / exactDailyRate) * 10) / 10);
+          return sum + effectiveDays;
+        }, 0) * 100
+      ) / 100;
 
       // Tính số ngày công hợp lệ dựa vào startDate
       const { eligibleDays, joinedMidMonth, startDayInMonth, isBeforeJoined } = getEligibleDaysForEmployee(
@@ -1359,9 +1385,22 @@ const paySalary = async (req, res, next) => {
     }
 
     let finalAmount = Math.max(0, calculatedSalary - totalAdvances + bonusVal - deductionsVal);
+    let effectiveWorkingDays = workingDays;
     // Nếu có truyền trực tiếp số tiền chi trả lương mong muốn, ưu tiên lấy theo số tiền này
     if (amount !== undefined && amount !== null && !isNaN(parseFloat(amount))) {
       finalAmount = Math.max(0, parseFloat(amount));
+      // Nếu số tiền người dùng tự nhập khác với lương theo khoảng ngày (có hoặc không trừ ứng), quy đổi lại số công tương ứng
+      if (dailySalary > 0) {
+        const expectedNetWithAdv = Math.max(0, calculatedSalary - totalAdvances + bonusVal - deductionsVal);
+        const expectedGrossNoAdv = Math.max(0, calculatedSalary + bonusVal - deductionsVal);
+        const tolerance = Math.max(50000, Math.round(dailySalary * 0.25));
+        if (
+          Math.abs(finalAmount - expectedNetWithAdv) > tolerance &&
+          Math.abs(finalAmount - expectedGrossNoAdv) > tolerance
+        ) {
+          effectiveWorkingDays = Math.max(0, Math.round((finalAmount / dailySalary) * 10) / 10);
+        }
+      }
     }
 
     const payment = await prisma.salaryPayment.create({
@@ -1369,7 +1408,7 @@ const paySalary = async (req, res, next) => {
         employeeId,
         monthKey: resolvedMonthKey,
         baseSalary,
-        workingDays,
+        workingDays: effectiveWorkingDays,
         advancesDeducted: totalAdvances,
         bonus: bonusVal,
         deductions: deductionsVal,

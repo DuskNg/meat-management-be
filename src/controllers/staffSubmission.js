@@ -938,12 +938,18 @@ const approveStaffSubmission = async (req, res, next) => {
       if (isSupplierTarget) {
         // ─── XỬ LÝ DUYỆT ĐƠN NHẬP HÀNG NHÀ CUNG CẤP ───
         let supTx = null;
-        const itemsPayload = finalItems.map((it) => ({
-          rawName: it.rawName || it.name || 'Thịt',
-          quantity: it.quantity != null && it.quantity !== '' ? parseFloat(it.quantity) : null,
-          price: it.price != null && it.price !== '' ? parseFloat(it.price) : null,
-          amount: it.amount != null && it.amount !== '' ? parseFloat(it.amount) : Math.round((parseFloat(it.quantity) || 0) * (parseFloat(it.price) || 0)),
-        }));
+        const itemsPayload = finalItems.map((it) => {
+          const resolvedName = (it.productName || it.rawName || it.name || 'Thịt').trim() || 'Thịt';
+          return {
+            productId: it.productId || null,
+            productName: resolvedName,
+            rawName: resolvedName,
+            unit: it.unit || 'kg',
+            quantity: it.quantity != null && it.quantity !== '' ? parseFloat(it.quantity) : null,
+            price: it.price != null && it.price !== '' ? parseFloat(it.price) : null,
+            amount: it.amount != null && it.amount !== '' ? parseFloat(it.amount) : Math.round((parseFloat(it.quantity) || 0) * (parseFloat(it.price) || 0)),
+          };
+        });
         const itemsStr = JSON.stringify(itemsPayload);
         const mediaUrls = approvedFileUrl ? [approvedFileUrl] : (submission.fileUrl ? [submission.fileUrl] : []);
         const mediaUrlsStr = JSON.stringify(mediaUrls);
