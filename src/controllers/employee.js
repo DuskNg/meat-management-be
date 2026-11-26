@@ -359,37 +359,13 @@ const getEmployees = async (req, res, next) => {
       const dailySalary = Math.round(baseSalary / totalDaysInMonth);
       const exactDailyRate = totalDaysInMonth > 0 ? baseSalary / totalDaysInMonth : 0;
 
-      // Tính tổng số tiền lương và tổng số công thực tế đã chi trả cho nhân viên trong tháng này
-      // Nếu người dùng tự sửa số tiền chi trả khác với lương tính theo khoảng ngày, quy đổi số công theo số tiền thực trả
+      // Tính tổng số tiền lương và tổng số công đã chi trả cho nhân viên trong tháng này
+      // Quy đổi trực tiếp số công theo công thức: Tổng tiền lương đã trả / Đơn giá công 1 ngày (không phụ thuộc khoảng ngày nhập)
       const paidPayments = (emp.payments || []).filter((p) => p.status === 'PAID');
       const totalPaidSalary = paidPayments.reduce((sum, p) => sum + parseFloat(p.finalAmount || 0), 0);
-      const paidWorkingDays = Math.round(
-        paidPayments.reduce((sum, p) => {
-          const savedDays = parseFloat(p.workingDays || 0);
-          const pFinal = parseFloat(p.finalAmount || 0);
-          if (exactDailyRate <= 0) return sum + savedDays;
-
-          const pAdv = parseFloat(p.advancesDeducted || 0);
-          const pBonus = parseFloat(p.bonus || 0);
-          const pDed = parseFloat(p.deductions || 0);
-
-          if (savedDays > 0) {
-            const grossBySavedDays = Math.round(exactDailyRate * savedDays);
-            const expectedNetWithAdv = Math.max(0, grossBySavedDays - pAdv + pBonus - pDed);
-            const expectedGrossNoAdv = Math.max(0, grossBySavedDays + pBonus - pDed);
-            const tolerance = Math.max(50000, Math.round(exactDailyRate * 0.25));
-            if (
-              Math.abs(pFinal - expectedNetWithAdv) <= tolerance ||
-              Math.abs(pFinal - expectedGrossNoAdv) <= tolerance
-            ) {
-              return sum + savedDays;
-            }
-          }
-
-          const effectiveDays = Math.max(0, Math.round((pFinal / exactDailyRate) * 10) / 10);
-          return sum + effectiveDays;
-        }, 0) * 100
-      ) / 100;
+      const paidWorkingDays = exactDailyRate > 0
+        ? Math.max(0, Math.round((totalPaidSalary / exactDailyRate) * 10) / 10)
+        : 0;
 
       // Tính số ngày công hợp lệ dựa vào startDate
       const { eligibleDays, joinedMidMonth, startDayInMonth, isBeforeJoined } = getEligibleDaysForEmployee(
@@ -1145,28 +1121,15 @@ const previewSalary = async (req, res, next) => {
     });
     const totalAdvances = advances.reduce((sum, adv) => sum + parseFloat(adv.amount), 0);
 
-    // Kiểm tra các khoản lương đã thanh toán để cảnh báo trùng lặp khoảng ngày
-    const paidPayments = await prisma.salaryPayment.findMany({
+    // Lấy các đợt lương đã trả trong tháng để tính phần tiền còn lại (không chặn/cảnh báo trùng khoảng ngày)
+    const paidPaymentsInMonth = await prisma.salaryPayment.findMany({
       where: {
         employeeId,
+        monthKey: resolvedMonthKey,
         status: 'PAID',
       },
     });
-
-    let overlappedPayment = null;
-    for (const p of paidPayments) {
-      if (p.fromDate && p.toDate) {
-        const pFrom = new Date(p.fromDate);
-        const pTo = new Date(p.toDate);
-        if (startOfFromDate <= pTo && endOfToDate >= pFrom) {
-          overlappedPayment = p;
-          break;
-        }
-      } else if (p.monthKey === resolvedMonthKey && !p.fromDate) {
-        overlappedPayment = p;
-        break;
-      }
-    }
+    const totalPaidInMonth = paidPaymentsInMonth.reduce((sum, p) => sum + parseFloat(p.finalAmount || 0), 0);
 
     res.status(200).json({
       success: true,
@@ -1185,6 +1148,7 @@ const previewSalary = async (req, res, next) => {
         joinedMidPeriod,
         calculatedSalary,
         totalAdvances,
+        totalPaidInMonth,
         advancesList: advances.map((a) => ({
           id: a.id,
           amount: parseFloat(a.amount),
@@ -1192,13 +1156,9 @@ const previewSalary = async (req, res, next) => {
           note: a.note || '',
         })),
         leavesList,
-        suggestedFinalAmount: Math.max(0, calculatedSalary - totalAdvances),
-        isOverlapped: !!overlappedPayment,
-        overlappedPeriod: overlappedPayment
-          ? (overlappedPayment.fromDate
-              ? `${new Date(overlappedPayment.fromDate).toLocaleDateString('vi-VN')} - ${new Date(overlappedPayment.toDate).toLocaleDateString('vi-VN')}`
-              : `Tháng ${overlappedPayment.monthKey}`)
-          : null,
+        suggestedFinalAmount: Math.max(0, calculatedSalary - totalAdvances - totalPaidInMonth),
+        isOverlapped: false,
+        overlappedPeriod: null,
       },
     });
   } catch (error) {
@@ -1250,23 +1210,6 @@ const paySalary = async (req, res, next) => {
       totalDaysInMonth = getDaysInMonth(pYear, pMonth);
       resolvedMonthKey = monthKey || `${pMonth.toString().padStart(2, '0')}/${pYear}`;
       dailySalary = baseSalary / totalDaysInMonth;
-
-      // Kiểm tra trùng lặp với các đợt lương đã chi trả
-      const existingPayments = await prisma.salaryPayment.findMany({
-        where: { employeeId, status: 'PAID' },
-      });
-
-      for (const ep of existingPayments) {
-        if (ep.fromDate && ep.toDate) {
-          const epFrom = new Date(ep.fromDate);
-          const epTo = new Date(ep.toDate);
-          if (startOfPeriod <= epTo && endOfPeriod >= epFrom) {
-            const epFromStr = `${epFrom.getDate().toString().padStart(2, '0')}/${(epFrom.getMonth() + 1).toString().padStart(2, '0')}/${epFrom.getFullYear()}`;
-            const epToStr = `${epTo.getDate().toString().padStart(2, '0')}/${(epTo.getMonth() + 1).toString().padStart(2, '0')}/${epTo.getFullYear()}`;
-            throw new BadRequestError(`Khoảng ngày này bị trùng lặp với đợt lương đã chi trả trước đó (${epFromStr} - ${epToStr}).`);
-          }
-        }
-      }
 
       let effectiveStartDate = new Date(startOfPeriod.getTime());
       if (employee.startDate) {
@@ -1385,23 +1328,13 @@ const paySalary = async (req, res, next) => {
     }
 
     let finalAmount = Math.max(0, calculatedSalary - totalAdvances + bonusVal - deductionsVal);
-    let effectiveWorkingDays = workingDays;
-    // Nếu có truyền trực tiếp số tiền chi trả lương mong muốn, ưu tiên lấy theo số tiền này
     if (amount !== undefined && amount !== null && !isNaN(parseFloat(amount))) {
       finalAmount = Math.max(0, parseFloat(amount));
-      // Nếu số tiền người dùng tự nhập khác với lương theo khoảng ngày (có hoặc không trừ ứng), quy đổi lại số công tương ứng
-      if (dailySalary > 0) {
-        const expectedNetWithAdv = Math.max(0, calculatedSalary - totalAdvances + bonusVal - deductionsVal);
-        const expectedGrossNoAdv = Math.max(0, calculatedSalary + bonusVal - deductionsVal);
-        const tolerance = Math.max(50000, Math.round(dailySalary * 0.25));
-        if (
-          Math.abs(finalAmount - expectedNetWithAdv) > tolerance &&
-          Math.abs(finalAmount - expectedGrossNoAdv) > tolerance
-        ) {
-          effectiveWorkingDays = Math.max(0, Math.round((finalAmount / dailySalary) * 10) / 10);
-        }
-      }
     }
+    // Số công đợt trả luôn tính trực tiếp theo: Số tiền lương trả / Đơn giá công 1 ngày
+    const effectiveWorkingDays = dailySalary > 0
+      ? Math.max(0, Math.round((finalAmount / dailySalary) * 10) / 10)
+      : workingDays;
 
     const payment = await prisma.salaryPayment.create({
       data: {

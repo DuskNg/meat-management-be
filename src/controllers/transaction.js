@@ -180,10 +180,22 @@ const createTransaction = async (req, res, next) => {
       });
 
       // Cập nhật hoặc lưu mới đơn giá thịt của loại thịt này cho khách hàng này nếu được phép (mặc định true, nếu updateCustomPrice === false thì chỉ áp dụng cho lần nợ này)
+      // Tuyệt đối KHÔNG lưu "Tiền hàng" / "Trả hàng nhanh" vào bảng giá riêng CustomerProductPrice
       if (updateCustomPrice !== false) {
+        const isQuickItemName = (name) => {
+          const n = (name || '').trim().toLowerCase();
+          return n === 'tiền hàng' || n.startsWith('tiền') || n === 'trả hàng nhanh' || n === 'ghi nợ nhanh';
+        };
+        const quickProductIds = new Set(
+          (transaction.items || [])
+            .filter((it) => isQuickItemName(it.product?.name))
+            .map((it) => it.productId)
+        );
         const uniquePriceByProduct = new Map();
         for (const item of formattedItems) {
-          uniquePriceByProduct.set(item.productId, item);
+          if (!quickProductIds.has(item.productId)) {
+            uniquePriceByProduct.set(item.productId, item);
+          }
         }
         await Promise.all(
           Array.from(uniquePriceByProduct.values()).map((item) =>
@@ -631,9 +643,16 @@ const updateTransaction = async (req, res, next) => {
       }
 
       // Cập nhật hoặc lưu mới đơn giá bán thực tế của loại thịt cho khách hàng này (kèm lý do đổi giá nếu có, nếu updateCustomPrice === false thì chỉ áp dụng cho đơn nợ này)
+      // Tuyệt đối KHÔNG lưu "Tiền hàng" / "Trả hàng nhanh" vào bảng giá riêng CustomerProductPrice
       if (updateCustomPrice !== false) {
+        const isQuickItemName = (name) => {
+          const n = (name || '').trim().toLowerCase();
+          return n === 'tiền hàng' || n.startsWith('tiền') || n === 'trả hàng nhanh' || n === 'ghi nợ nhanh';
+        };
         const customerId = existingTransaction.customerId;
         for (const item of formattedItems) {
+          const matchedProd = productMap.get(item.productId);
+          if (isQuickItemName(matchedProd?.name)) continue;
           await tx.customerProductPrice.upsert({
             where: {
               customerId_productId: {

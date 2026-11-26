@@ -61,6 +61,7 @@ model User {
   customerAiAliases    CustomerAiAlias[]     // Từ điển AI tự học chữ viết tay khách hàng
   productAiAliases     ProductAiAlias[]      // Từ điển AI tự học chữ viết tay món thịt
   quickNote            QuickNote?            // Ghi chú cần nhớ của chủ buôn
+  scheduledNotifications ScheduledNotification[] // Danh sách thông báo hẹn ngày do chủ buôn tạo
   confirmedDuplicateKeys ConfirmedDuplicateKey[] // Danh sách đơn trùng đã xác nhận hợp lệ (đồng bộ liên thiết bị)
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
@@ -973,6 +974,21 @@ model ConfirmedDuplicateKey {
   @@unique([userId, duplicateKey])
   @@index([userId])
   @@map("confirmed_duplicate_keys")
+}
+
+// ─── THÔNG BÁO HẸN NGÀY (NHẮC VIỆC THEO NGÀY ĐÃ CHỌN) ───
+model ScheduledNotification {
+  id          String   @id @default(uuid())
+  userId      String   // ID chủ buôn tạo thông báo
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetDate  String   // Ngày hiển thị thông báo theo chuẩn YYYY-MM-DD (giờ Việt Nam)
+  content     String   @db.Text // Nội dung thông báo cần nhắc
+  isDismissed Boolean  @default(false) // Đã bấm xác nhận/ẩn thông báo hay chưa
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, targetDate])
+  @@map("scheduled_notifications")
 }
 
 

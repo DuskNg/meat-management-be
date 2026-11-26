@@ -38,6 +38,13 @@ const parseStartOfDayVN = (dateStr) => {
   return new Date(`${rawDate}T00:00:00+07:00`);
 };
 
+// Helper kiểm tra sản phẩm giả lập dùng cho ghi nợ nhanh / trả hàng nhanh (không phải tên thịt thật)
+const isQuickDebtProductName = (name) => {
+  if (!name || typeof name !== 'string') return false;
+  const n = name.trim().toLowerCase();
+  return n === 'tiền hàng' || n.startsWith('tiền') || n === 'trả hàng nhanh' || n === 'ghi nợ nhanh';
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // 1. CÁC API PUBLIC TRUY CẬP QUA LINK ZALO (KHÔNG CẦN LOGIN APP)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -106,13 +113,15 @@ const getPublicLinkInfo = async (req, res, next) => {
         hasPin: Boolean(link.pin),
         customers,
         groups,
-        products: products.map((p) => ({
-          id: p.id,
-          name: p.name,
-          defaultPrice: parseFloat(p.defaultPrice),
-          costPrice: parseFloat(p.costPrice || 0),
-          unit: p.unit || 'kg',
-        })),
+        products: products
+          .filter((p) => !isQuickDebtProductName(p.name))
+          .map((p) => ({
+            id: p.id,
+            name: p.name,
+            defaultPrice: parseFloat(p.defaultPrice),
+            costPrice: parseFloat(p.costPrice || 0),
+            unit: p.unit || 'kg',
+          })),
       },
     });
   } catch (error) {
@@ -168,19 +177,26 @@ const getCustomerPrices = async (req, res, next) => {
       throw new NotFoundError('Đường dẫn cập nhật giá không tồn tại hoặc đã bị khóa.');
     }
 
-    // Lấy bảng giá riêng của khách hàng này
+    // Lấy bảng giá riêng của khách hàng này (loại bỏ các mặt hàng giả lập như Tiền hàng / Trả hàng nhanh)
     const customPrices = await prisma.customerProductPrice.findMany({
       where: { customerId },
-      select: { productId: true, price: true, costPrice: true },
+      select: {
+        productId: true,
+        price: true,
+        costPrice: true,
+        product: { select: { name: true } },
+      },
     });
 
     res.json({
       success: true,
-      data: customPrices.map((cp) => ({
-        productId: cp.productId,
-        price: parseFloat(cp.price),
-        costPrice: cp.costPrice ? parseFloat(cp.costPrice) : null,
-      })),
+      data: customPrices
+        .filter((cp) => !isQuickDebtProductName(cp.product?.name))
+        .map((cp) => ({
+          productId: cp.productId,
+          price: parseFloat(cp.price),
+          costPrice: cp.costPrice ? parseFloat(cp.costPrice) : null,
+        })),
     });
   } catch (error) {
     next(error);
