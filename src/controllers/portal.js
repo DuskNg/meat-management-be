@@ -641,8 +641,7 @@ const getPublicPortalData = async (req, res, next) => {
             ...(Object.keys(dateFilter).length > 0 ? { paidAt: dateFilter } : {}),
             ...(cutoffDate ? { createdAt: { lte: cutoffDate } } : {})
           },
-          orderBy: { paidAt: 'desc' },
-          take: 100
+          orderBy: { paidAt: 'desc' }
         }),
         prisma.customerProductPrice.findMany({
           where: { customerId: targetCustomerId },

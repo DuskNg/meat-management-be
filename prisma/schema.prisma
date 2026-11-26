@@ -62,6 +62,7 @@ model User {
   productAiAliases     ProductAiAlias[]      // Từ điển AI tự học chữ viết tay món thịt
   quickNote            QuickNote?            // Ghi chú cần nhớ của chủ buôn
   scheduledNotifications ScheduledNotification[] // Danh sách thông báo hẹn ngày do chủ buôn tạo
+  scheduledPriceUpdates  ScheduledPriceUpdate[]  // Danh sách lịch hẹn tự động cập nhật giá thịt
   confirmedDuplicateKeys ConfirmedDuplicateKey[] // Danh sách đơn trùng đã xác nhận hợp lệ (đồng bộ liên thiết bị)
   // Quan hệ Workspace
   ownedWorkspace       Workspace?             @relation("WorkspaceOwner")         // Workspace mà user này làm chủ
@@ -989,6 +990,27 @@ model ScheduledNotification {
 
   @@index([userId, targetDate])
   @@map("scheduled_notifications")
+}
+
+// ─── LỊCH HẸN TỰ ĐỘNG CẬP NHẬT GIÁ THỊT THEO NGÀY ───
+model ScheduledPriceUpdate {
+  id           String    @id @default(uuid())
+  userId       String    // ID chủ buôn tạo lịch
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  targetDate   String    // Ngày tự động áp dụng giá mới (YYYY-MM-DD theo giờ Việt Nam)
+  scope        String    @default("DEFAULT") // "DEFAULT" (giá chung sạp) | "CUSTOMER" (giá riêng khách hàng)
+  customerIds  String?   @db.Text // JSON array các customerId nếu scope = "CUSTOMER"
+  items        String    @db.Text // JSON array [{ productId, productName, newPrice }]
+  note         String?   // Ghi chú lý do đổi giá
+  status       String    @default("PENDING") // "PENDING" | "APPLIED" | "FAILED"
+  appliedAt    DateTime? // Thời điểm đã tự động cập nhật xong
+  errorMessage String?   // Chi tiết lỗi nếu thất bại
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([userId, targetDate, status])
+  @@index([status, targetDate])
+  @@map("scheduled_price_updates")
 }
 
 

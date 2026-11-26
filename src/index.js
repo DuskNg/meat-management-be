@@ -103,6 +103,7 @@ const bankTransactionRoutes = require('./routes/bankTransaction');
 const periodicReminderRoutes = require('./routes/periodicReminder');
 const quickNoteRoutes = require('./routes/quickNote');
 const scheduledNotificationRoutes = require('./routes/scheduledNotification');
+const scheduledPriceUpdateRoutes = require('./routes/scheduledPriceUpdate');
 const mediaRoutes = require('./routes/media');
 
 app.use('/api/v1/auth', authRoutes);
@@ -125,6 +126,7 @@ app.use('/api/v1/bank-transactions', bankTransactionRoutes);
 app.use('/api/v1/periodic-reminders', periodicReminderRoutes);
 app.use('/api/v1/quick-note', quickNoteRoutes);
 app.use('/api/v1/scheduled-notifications', scheduledNotificationRoutes);
+app.use('/api/v1/scheduled-price-updates', scheduledPriceUpdateRoutes);
 app.use('/api/v1/media', mediaRoutes);
 
 // Route kiểm tra trạng thái hoạt động (Health Check)
@@ -340,6 +342,10 @@ if (process.env.NODE_ENV !== 'test') {
   // Khởi chạy tiến trình tự động xóa ảnh và video đơn đã thu nợ sau 15 ngày lúc 02:00 sáng
   const { initPaidDebtMediaCleanupScheduler } = require('./schedulers/paidDebtMediaCleanupScheduler');
   initPaidDebtMediaCleanupScheduler();
+
+  // Khởi chạy tiến trình tự động cập nhật giá thịt theo lịch hẹn ngày
+  const { initScheduledPriceUpdateScheduler } = require('./schedulers/scheduledPriceUpdateScheduler');
+  initScheduledPriceUpdateScheduler();
 
   // Bắt đầu lắng nghe cổng mạng (Tải lại máy chủ khi lưu cấu hình và prompt mới)
   server.listen(PORT, () => {

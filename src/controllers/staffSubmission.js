@@ -1440,7 +1440,7 @@ const approveStaffSubmission = async (req, res, next) => {
         submission: fullSub,
         isReturn: isReturnOrder,
       };
-    });
+    }, { timeout: 20000 });
 
     // Tự động dạy AI nhớ cặp từ khóa chữ viết tay khách hàng (detectedCustomerName => finalCustomerId) vĩnh viễn cho các lần sau
     if (!isSupplierTarget && finalCustomerId && submission.detectedCustomerName) {

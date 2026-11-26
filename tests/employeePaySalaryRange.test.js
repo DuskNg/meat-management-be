@@ -118,7 +118,7 @@ describe('Luồng Nghiệp Vụ: Xem Trước & Chi Trả Lương Theo Khoảng 
     expect(payment.toDate).toBeDefined();
   });
 
-  it('3. Thử thanh toán khoảng ngày bị trùng lặp (10/10/2026 - 20/10/2026) -> Báo lỗi trùng lặp đợt chi trả', async () => {
+  it('3. Thanh toán nhiều đợt trong cùng tháng (không chặn trùng khoảng ngày) -> Quy đổi số công theo tiền trả / công 1 ngày', async () => {
     const res = await request(app)
       .post('/api/v1/employees/salary/pay')
       .set('Authorization', `Bearer ${testToken}`)
@@ -127,11 +127,19 @@ describe('Luồng Nghiệp Vụ: Xem Trước & Chi Trả Lương Theo Khoảng 
         fromDate: '2026-10-10',
         toDate: '2026-10-20',
         monthKey: '10/2026',
+        amount: 5000000, // 5.000.000đ / 1.000.000đ mỗi công = 5 công
+        note: 'Chi trả thêm đợt phụ',
       });
 
-    expect(res.status).toBe(400);
-    expect(res.body.success).toBe(false);
-    expect(res.body.message).toContain('trùng lặp');
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+    expect(parseFloat(res.body.data.finalAmount)).toBe(5000000);
+    expect(parseFloat(res.body.data.workingDays)).toBe(5);
+
+    // Dọn dẹp bản ghi đợt phụ để không ảnh hưởng test 4
+    if (res.body.data?.id) {
+      await prisma.salaryPayment.delete({ where: { id: res.body.data.id } });
+    }
   });
 
   it('4. Thanh toán đợt 2 (16/10/2026 - 31/10/2026) -> Thành công trong cùng tháng', async () => {
