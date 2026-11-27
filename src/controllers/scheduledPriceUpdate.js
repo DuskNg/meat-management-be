@@ -72,7 +72,7 @@ const getScheduledPriceUpdates = async (req, res, next) => {
 const createScheduledPriceUpdate = async (req, res, next) => {
   try {
     const userId = req.effectiveUserId || req.user.id;
-    const { targetDate, scope = 'DEFAULT', customerIds = [], items = [], note = '' } = req.body;
+    const { targetDate, scope = 'CUSTOMER', customerIds = [], items = [], note = '' } = req.body;
 
     const normalizedDate = normalizeTargetDate(targetDate);
     if (!normalizedDate) {
