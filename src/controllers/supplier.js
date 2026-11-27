@@ -1409,6 +1409,106 @@ const getProfitReport = async (req, res, next) => {
   }
 };
 
+// Lấy tổng hợp các giao dịch nhập hàng và thanh toán nhà cung cấp trong một ngày (phục vụ xuất ảnh báo cáo ngày)
+const getDailySupplierImports = async (req, res, next) => {
+  try {
+    const userId = req.effectiveUserId;
+    const { date } = req.query;
+
+    // Chuẩn hóa ngày lọc theo múi giờ Việt Nam (UTC+7)
+    let targetYMD = '';
+    if (date && typeof date === 'string') {
+      const trimmed = date.trim();
+      const dmy = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      const ymd = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+      if (dmy) {
+        targetYMD = `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+      } else if (ymd) {
+        targetYMD = `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+      }
+    }
+    if (!targetYMD) {
+      const vnNow = new Date(Date.now() + 7 * 60 * 60 * 1000);
+      targetYMD = `${vnNow.getUTCFullYear()}-${String(vnNow.getUTCMonth() + 1).padStart(2, '0')}-${String(vnNow.getUTCDate()).padStart(2, '0')}`;
+    }
+
+    const startOfDay = new Date(`${targetYMD}T00:00:00+07:00`);
+    const endOfDay = new Date(`${targetYMD}T23:59:59.999+07:00`);
+
+    const [supTxs, supPayments] = await Promise.all([
+      prisma.supplierTransaction.findMany({
+        where: {
+          supplier: { userId, isActive: true },
+          date: { gte: startOfDay, lte: endOfDay },
+        },
+        include: {
+          supplier: { select: { id: true, name: true, phone: true } },
+        },
+        orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+      }),
+      prisma.supplierPayment.findMany({
+        where: {
+          supplier: { userId, isActive: true },
+          paidAt: { gte: startOfDay, lte: endOfDay },
+        },
+        include: {
+          supplier: { select: { id: true, name: true, phone: true } },
+        },
+        orderBy: [{ paidAt: 'asc' }, { createdAt: 'asc' }],
+      }),
+    ]);
+
+    const formattedTxs = supTxs.map((t) => {
+      let parsedItems = [];
+      if (t.items) {
+        try {
+          const rawParsed = JSON.parse(t.items);
+          if (Array.isArray(rawParsed)) {
+            parsedItems = rawParsed.map((it) => ({
+              ...it,
+              productName: it?.productName || it?.rawName || it?.product?.name || it?.name || 'Thịt',
+            }));
+          }
+        } catch {}
+      }
+      return {
+        id: t.id,
+        supplierId: t.supplierId,
+        supplierName: t.supplier?.name || 'Nhà cung cấp',
+        totalAmount: parseFloat(t.totalAmount || 0),
+        date: t.date,
+        note: t.note || '',
+        items: parsedItems,
+      };
+    });
+
+    const formattedPayments = supPayments.map((p) => ({
+      id: p.id,
+      supplierId: p.supplierId,
+      supplierName: p.supplier?.name || 'Nhà cung cấp',
+      amount: parseFloat(p.amount || 0),
+      paidAt: p.paidAt,
+      note: p.note || '',
+    }));
+
+    const totalImportAmount = formattedTxs.reduce((sum, t) => sum + t.totalAmount, 0);
+    const totalPaidAmount = formattedPayments.reduce((sum, p) => sum + p.amount, 0);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        date: targetYMD,
+        transactions: formattedTxs,
+        payments: formattedPayments,
+        totalImportAmount,
+        totalPaidAmount,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getSuppliers,
   createSupplier,
@@ -1425,5 +1525,6 @@ module.exports = {
   getSupplierPrices,
   updateSupplierPrices,
   getProfitReport,
+  getDailySupplierImports,
 };
 

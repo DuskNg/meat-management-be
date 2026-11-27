@@ -86,7 +86,16 @@ const uploadBufferToGeminiFileApi = async (buffer, mimeType, apiKey = process.en
     while (fileInfo.state === 'PROCESSING' && pollAttempts < 15) {
       await new Promise((r) => setTimeout(r, 2000));
       pollAttempts++;
-      const statusRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${activeKey}`);
+      const pollCtrl = new AbortController();
+      const pollTimer = setTimeout(() => pollCtrl.abort(), 10000);
+      let statusRes;
+      try {
+        statusRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileName}?key=${activeKey}`, {
+          signal: pollCtrl.signal,
+        });
+      } finally {
+        clearTimeout(pollTimer);
+      }
       if (statusRes.ok) {
         fileInfo = await statusRes.json();
       } else {
@@ -116,7 +125,7 @@ const callGeminiWithRetry = async ({
   models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'],
   apiKey = process.env.GEMINI_API_KEY,
   maxRetries = 3,
-  timeoutMs = 90000,
+  timeoutMs = 60000,
 }) => {
   const activeKey = apiKey || process.env.GEMINI_API_KEY;
   if (!activeKey) {
@@ -193,7 +202,9 @@ const callGeminiWithRetry = async ({
           const isTimeout = err?.name === 'AbortError';
           lastError = isTimeout ? new Error(`Gemini API quá thời gian chờ (${Math.round(timeoutMs / 1000)}s) trên model ${model}.`) : err;
           if (isTimeout) {
-            console.warn(`[GEMINI ${model}] Quá thời gian chờ (${timeoutMs}ms), thử lại hoặc chuyển model...`);
+            // Ngắt ngay khi quá thời gian chờ để tránh gửi lại ảnh/video nhiều lần gây tốn token và nghẽn hàng đợi
+            console.warn(`[GEMINI ${model}] Quá thời gian chờ (${timeoutMs}ms), dừng thử lại để tiết kiệm token.`);
+            throw lastError;
           }
           if (attempt < maxRetries) {
             await new Promise((res) => setTimeout(res, 1000));

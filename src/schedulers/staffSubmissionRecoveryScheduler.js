@@ -16,18 +16,29 @@ const recoverStuckSubmissions = async () => {
 
   try {
     const now = new Date();
-    // 1. Phục hồi các bản ghi bị kẹt ở trạng thái ANALYZING quá 3 phút (thường do server restart hoặc mất mạng giữa chừng)
+    // 1. Phục hồi các bản ghi bị kẹt ở trạng thái ANALYZING quá 3 phút hoặc PENDING quá 2 phút (do server restart mất hàng đợi RAM)
     const threeMinutesAgo = new Date(now.getTime() - 3 * 60 * 1000);
-    const stuckAnalyzing = await prisma.staffSubmission.findMany({
+    const twoMinutesAgo = new Date(now.getTime() - 2 * 60 * 1000);
+    const stuckSubmissions = await prisma.staffSubmission.findMany({
       where: {
-        status: 'ANALYZING',
-        updatedAt: { lt: threeMinutesAgo },
+        OR: [
+          {
+            status: 'ANALYZING',
+            updatedAt: { lt: threeMinutesAgo },
+          },
+          {
+            status: 'PENDING',
+            updatedAt: { lt: twoMinutesAgo },
+            NOT: { fileUrl: { startsWith: '/uploads/' } },
+          },
+        ],
       },
-      take: 10,
+      orderBy: { createdAt: 'asc' },
+      take: 20,
     });
 
-    for (const sub of stuckAnalyzing) {
-      console.log(`[AUTO_RECOVERY] Đang phục hồi quét AI cho submission bị kẹt: ${sub.id}`);
+    for (const sub of stuckSubmissions) {
+      console.log(`[AUTO_RECOVERY] Đang phục hồi quét AI cho submission bị kẹt (${sub.status}): ${sub.id}`);
       try {
         await parseStaffSubmission(sub.id);
       } catch (err) {

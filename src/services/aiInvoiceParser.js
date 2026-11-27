@@ -1526,7 +1526,7 @@ DANH BẠ THAM CHIẾU CỬA HÀNG:
     // Gửi sang Gemini Vision theo chuẩn System Instruction & User Prompt tách biệt
       geminiResult = await callGeminiWithRetry({
       apiKey: process.env.GEMINI_API_KEY,
-      timeoutMs: isVideo ? 120000 : 60000,
+      timeoutMs: isVideo ? 90000 : 45000,
       systemInstruction,
       contents: [
         {

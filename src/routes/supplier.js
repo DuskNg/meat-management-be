@@ -14,6 +14,9 @@ router.get('/profit-report', requirePermission('canManageProfit'), supplierContr
 // Các chức năng nhà cung cấp và công nợ còn lại yêu cầu quyền canManageDebt
 router.use(requirePermission('canManageDebt'));
 
+// Lấy danh sách nhập hàng nhà cung cấp trong ngày (phục vụ xuất ảnh báo cáo ngày)
+router.get('/daily-imports', supplierController.getDailySupplierImports);
+
 // Lấy danh sách toàn bộ nhà cung cấp kèm công nợ
 router.get('/', supplierController.getSuppliers);
 
